@@ -4,6 +4,7 @@
 # Swift / SwiftPM
 .build/
 .swiftpm/
+.codex-cache/
 Package.resolved
 *.xcworkspace
 xcuserdata/

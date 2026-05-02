@@ -1,3 +1,4 @@
+#if canImport(Android)
 import Foundation
 import AppCore
 
@@ -127,3 +128,4 @@ private func swiftString(from jstr: jstring, env: UnsafeMutablePointer<JNIEnv>) 
     // Use `GetStringUTFChars` / `ReleaseStringUTFChars` per swift-java-jni-core.
     fatalError("Implement using swift-java-jni-core")
 }
+#endif
