@@ -40,11 +40,31 @@ Per spec §12 plus what verification surfaced:
 
 ## Non-obvious project rules
 
+- **Never use `@unchecked Sendable` or `nonisolated(unsafe)` in
+  `AppCore/Sources/`.** The architecture is built around proper isolation
+  (actors, value types, single-instance singletons), and a hand-rolled
+  unsafe escape hatch usually means the design is wrong. The single
+  exception is `Sources/AppCoreAndroid/JavaInterop.swift`, which adopts
+  `@unchecked Sendable` for the jextract-generated `JavaSnapshotSink`
+  wrapper — swift-java does not yet mark `@JavaInterface` types as
+  `Sendable`, but the underlying JNI handle is safe to share. If you add
+  another exception, document the why in the same file.
 - `AppCoreAndroid` user-facing sources (`AppCoreNative.swift`,
-  `AndroidBridge.swift`) are wrapped in `#if canImport(Android)` so the
-  module is effectively empty on macOS. The `JExtractSwiftPlugin` still
-  runs there but its generated glue references no user code, so linking
-  succeeds.
+  `AndroidBridge.swift`) are *not* wrapped in `#if canImport(Android)`
+  because jextract runs on the macOS host and silently skips functions
+  that sit inside such a guard — the generated Java module class would
+  end up with no `appcoreCreate` / `appcoreToggleFavorite` / … methods.
+  AndroidBridge gates only its `Observations` usage on
+  `canImport(Android)` since `Observations` (SE-0475) requires a Swift
+  toolchain newer than this package's macOS deployment target; on macOS
+  the actor still compiles as a no-op.
+- There is exactly one `AppState` per process. `AppCoreNative` exposes a
+  global `AndroidBridge.shared` singleton actor and the entry points
+  (`appcoreCreate`, `appcoreToggleFavorite`, `appcoreRefresh`,
+  `appcoreDestroy`) operate on it without handles. The Kotlin side
+  initialises `AppStateHolder` once from `AppCoreApplication.onCreate`;
+  `appcoreCreate(sink:)` is idempotent (replaces the prior sink) so
+  per-test attach/detach in `BridgePerfTest` works without a reset hook.
 - Both `swift build` and `swift test` on macOS need
   `--disable-sandbox` and `JAVA_HOME` pointing at a JDK 17+ install
   (Android Studio's JBR works), because the plugin's Java-callback

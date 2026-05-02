@@ -29,6 +29,11 @@ import kotlin.system.measureNanoTime
  * Numbers are logged via println so they show up in `adb logcat` and the
  * connectedAndroidTest report. Tolerances are generous — these are sanity
  * checks, not regression gates.
+ *
+ * The Swift side holds a single `AndroidBridge.shared`. `appcoreCreate`
+ * replaces the sink (cancelling any prior observation task) so each test
+ * can attach a fresh `CapturingSink` without a dedicated reset hook;
+ * `appcoreDestroy()` detaches before the next test runs.
  */
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
@@ -52,14 +57,14 @@ class BridgePerfTest {
      *
      * The `a_` prefix puts this first under `@FixMethodOrder(NAME_ASCENDING)`
      * so it runs before any other test toggles state. This matters because
-     * the Swift handles table is process-wide; an earlier toggling test would
+     * the singleton bridge is process-wide; an earlier toggling test would
      * mask a regression by warming the executor.
      */
     @Test
     fun a_coldStart_initialSnapshotDeliveredSynchronously() = runBlocking {
         val sink = CapturingSink()
         val nanos = measureNanoTime {
-            val handle = AppCoreAndroid.appcoreCreate(sink)
+            AppCoreAndroid.appcoreCreate(sink)
             try {
                 // 50 ms is generous — the snapshot is delivered synchronously
                 // inside `appcoreCreate`, so it should already be queued the
@@ -71,7 +76,7 @@ class BridgePerfTest {
                 assertTrue("contains empty favorites array", initial.contains("\"favorites\":[]"))
                 assertTrue("globalFavoriteCount is initial 0", initial.contains("\"globalFavoriteCount\":0"))
             } finally {
-                AppCoreAndroid.appcoreDestroy(handle)
+                AppCoreAndroid.appcoreDestroy()
             }
         }
         report("cold start: create → first snapshot (synchronous)", listOf(nanos))
@@ -80,48 +85,48 @@ class BridgePerfTest {
     @Test
     fun syncJniCall_overhead() = runBlocking {
         val sink = CapturingSink()
-        val handle = AppCoreAndroid.appcoreCreate(sink)
+        AppCoreAndroid.appcoreCreate(sink)
         try {
             // Drain the cold-start snapshot.
             withTimeout(5_000) { sink.channel.receive() }
 
             // Warm-up.
-            repeat(20) { AppCoreAndroid.appcoreToggleFavorite(handle, "syd") }
+            repeat(20) { AppCoreAndroid.appcoreToggleFavorite("syd") }
             // Drain any snapshots from warm-up.
             drainBriefly(sink)
 
             val samples = mutableListOf<Long>()
             repeat(200) {
                 samples += measureNanoTime {
-                    AppCoreAndroid.appcoreToggleFavorite(handle, "syd")
+                    AppCoreAndroid.appcoreToggleFavorite("syd")
                 }
             }
             // Drain the resulting snapshots so the next test starts clean.
             drainBriefly(sink)
             report("sync JNI call (toggleFavorite)", samples)
         } finally {
-            AppCoreAndroid.appcoreDestroy(handle)
+            AppCoreAndroid.appcoreDestroy()
         }
     }
 
     @Test
     fun endToEnd_toggleRoundTrip() = runBlocking {
         val sink = CapturingSink()
-        val handle = AppCoreAndroid.appcoreCreate(sink)
+        AppCoreAndroid.appcoreCreate(sink)
         try {
             // Drain the cold-start snapshot.
             withTimeout(5_000) { sink.channel.receive() }
 
             // Warm-up so the dispatcher and JIT are settled.
             repeat(20) {
-                AppCoreAndroid.appcoreToggleFavorite(handle, "syd")
+                AppCoreAndroid.appcoreToggleFavorite("syd")
                 withTimeout(1_000) { sink.channel.receive() }
             }
 
             val samples = mutableListOf<Long>()
             repeat(100) { i ->
                 val t0 = System.nanoTime()
-                AppCoreAndroid.appcoreToggleFavorite(handle, "tyo")
+                AppCoreAndroid.appcoreToggleFavorite("tyo")
                 // Wait for the corresponding snapshot.
                 withTimeout(1_000) { sink.channel.receive() }
                 samples += System.nanoTime() - t0
@@ -131,14 +136,14 @@ class BridgePerfTest {
             // Sanity: every toggle produced exactly one snapshot.
             assertTrue("samples produced", samples.size == 100)
         } finally {
-            AppCoreAndroid.appcoreDestroy(handle)
+            AppCoreAndroid.appcoreDestroy()
         }
     }
 
     @Test
     fun snapshotPayload_size() = runBlocking {
         val sink = CapturingSink()
-        val handle = AppCoreAndroid.appcoreCreate(sink)
+        AppCoreAndroid.appcoreCreate(sink)
         try {
             val first = withTimeout(5_000) { sink.channel.receive() }
             println("[BridgePerf] snapshot JSON bytes (cold): ${first.toByteArray().size}")
@@ -148,9 +153,9 @@ class BridgePerfTest {
             // snapshot depending on Observations' transactional batching; we
             // just measure the size of whichever snapshot lands last in a
             // small window.
-            AppCoreAndroid.appcoreToggleFavorite(handle, "syd")
-            AppCoreAndroid.appcoreToggleFavorite(handle, "tyo")
-            AppCoreAndroid.appcoreToggleFavorite(handle, "lon")
+            AppCoreAndroid.appcoreToggleFavorite("syd")
+            AppCoreAndroid.appcoreToggleFavorite("tyo")
+            AppCoreAndroid.appcoreToggleFavorite("lon")
 
             var last = first
             try {
@@ -161,7 +166,7 @@ class BridgePerfTest {
 
             println("[BridgePerf] snapshot JSON bytes (3 favs): ${last.toByteArray().size}")
         } finally {
-            AppCoreAndroid.appcoreDestroy(handle)
+            AppCoreAndroid.appcoreDestroy()
         }
     }
 

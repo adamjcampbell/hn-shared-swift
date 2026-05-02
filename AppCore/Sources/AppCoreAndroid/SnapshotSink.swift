@@ -4,6 +4,6 @@
 /// (`com.example.appcore.bridge.SnapshotSink`) thanks to
 /// `enableJavaCallbacks: true` in `swift-java.config`. The Kotlin side
 /// implements the interface and registers an instance with `appcoreCreate`.
-public protocol SnapshotSink {
+public protocol SnapshotSink: Sendable {
     func deliver(snapshotJSON: String)
 }

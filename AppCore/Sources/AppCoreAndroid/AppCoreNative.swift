@@ -1,38 +1,5 @@
-#if canImport(Android)
 import Foundation
 import AppCore
-
-// MARK: - Handle table
-//
-// Each `appcoreCreate` returns an Int64 handle that the Kotlin caller must
-// pass back to subsequent `toggle/refresh/destroy` calls. We keep the
-// `AndroidBridge` instances alive in a process-global table.
-
-private final class HandleTable: @unchecked Sendable {
-    private var nextID: Int64 = 1
-    private var bridges: [Int64: AndroidBridge] = [:]
-    private let lock = NSLock()
-
-    func insert(_ bridge: AndroidBridge) -> Int64 {
-        lock.lock(); defer { lock.unlock() }
-        let id = nextID
-        nextID &+= 1
-        bridges[id] = bridge
-        return id
-    }
-
-    func get(_ id: Int64) -> AndroidBridge? {
-        lock.lock(); defer { lock.unlock() }
-        return bridges[id]
-    }
-
-    func remove(_ id: Int64) -> AndroidBridge? {
-        lock.lock(); defer { lock.unlock() }
-        return bridges.removeValue(forKey: id)
-    }
-}
-
-private let handles = HandleTable()
 
 // MARK: - jextract entry points
 //
@@ -44,30 +11,26 @@ private let handles = HandleTable()
 // plus a Swift `@_cdecl` glue file. We never write the JNI naming or
 // marshalling by hand. Note: `native` is a Java reserved keyword, so the
 // Java package is `…bridge` rather than `…native`.
+//
+// There is one `AppState` per process, owned by `AndroidBridge.shared`, so
+// none of these entry points take a handle.
 
-public func appcoreCreate(sink: some SnapshotSink) -> Int64 {
-    let bridge = AndroidBridge(sink: sink)
-    let id = handles.insert(bridge)
-    // Observations (SE-0475) only emits on mutation — see AndroidBridge.
-    // Deliver the initial snapshot synchronously so the Compose UI has
-    // something to render before the user does anything.
+public func appcoreCreate(sink: some SnapshotSink) {
+    // Observations (SE-0475) only emits on mutation, so deliver an initial
+    // snapshot synchronously before the actor task is scheduled. This is
+    // the load-bearing path for `BridgePerfTest.a_coldStart_…`.
     sink.deliver(snapshotJSON: Snapshot().toJSON())
-    Task { await bridge.start() }
-    return id
+    Task { await AndroidBridge.shared.attach(sink: sink) }
 }
 
-public func appcoreToggleFavorite(handle: Int64, id: String) {
-    guard let bridge = handles.get(handle) else { return }
-    Task { await bridge.toggleFavorite(id) }
+public func appcoreToggleFavorite(id: String) {
+    Task { await AndroidBridge.shared.toggleFavorite(id) }
 }
 
-public func appcoreRefresh(handle: Int64) {
-    guard let bridge = handles.get(handle) else { return }
-    Task { await bridge.refresh() }
+public func appcoreRefresh() {
+    Task { await AndroidBridge.shared.refresh() }
 }
 
-public func appcoreDestroy(handle: Int64) {
-    guard let bridge = handles.remove(handle) else { return }
-    Task { await bridge.close() }
+public func appcoreDestroy() {
+    Task { await AndroidBridge.shared.detach() }
 }
-#endif
