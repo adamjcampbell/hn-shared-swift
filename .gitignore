@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# Swift / SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# Xcode
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcuserstate
+
+# Android / Gradle
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+captures/
+.cxx/
+
+# JNI build outputs
+*.so
+
+# jextract-generated sources
+android-app/core-jni/src/main/java/com/example/appcore/native/
+android-app/core-jni/generated-swift/
