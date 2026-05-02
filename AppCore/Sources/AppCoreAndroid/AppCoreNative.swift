@@ -45,6 +45,10 @@ private let handles = HandleTable()
 public func appcoreCreate(sink: some SnapshotSink) -> Int64 {
     let bridge = AndroidBridge(sink: sink)
     let id = handles.insert(bridge)
+    // Observations (SE-0475) only emits on mutation — see AndroidBridge.
+    // Deliver the initial snapshot synchronously so the Compose UI has
+    // something to render before the user does anything.
+    sink.deliver(snapshotJSON: AndroidBridge.encodeInitialSnapshot())
     Task { await bridge.start() }
     return id
 }
