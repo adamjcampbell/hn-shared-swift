@@ -1,24 +1,82 @@
 # Cross-platform `@Observable` ↔ Compose Bridge
 
-A minimal example of a single Swift `@Observable` model shared between an iOS
-SwiftUI app and an Android Jetpack Compose app, **without Skip**, on the
-official Swift Android SDK.
+A minimal, runnable example of a single Swift `@Observable` model shared
+between an iOS SwiftUI app and an Android Jetpack Compose app, **without
+Skip**, on the official Swift Android SDK.
 
-See [`swift-observable-compose-bridge-spec.md`](swift-observable-compose-bridge-spec.md)
-for the full implementation spec, design rationale, and references.
+[`swift-observable-compose-bridge-spec.md`](swift-observable-compose-bridge-spec.md)
+is the original implementation spec. [`AGENT.md`](AGENT.md) lists project
+goals and non-goals at a glance.
 
 ## Layout
 
-- `AppCore/` — SwiftPM package with two targets: cross-platform `AppCore`
-  (consumed by iOS) and `AppCoreAndroid` (the JNI-facing bridge, Android only).
-- `ios-app/` — SwiftUI app that depends on the `AppCore` product.
-- `android-app/` — Gradle project that builds `AppCoreAndroid` for Android via
-  the Swift Android SDK and consumes it through `swift-java jextract --mode=jni`.
+- `AppCore/` — SwiftPM package with three targets:
+  - `AppCore` — the cross-platform `@Observable` model (`AppState`, `City`,
+    `Snapshot`). Consumed directly by iOS.
+  - `AppCoreAndroid` — Android-only JNI bridge. Friendly Swift functions plus
+    an `AndroidBridge` actor that owns an `AppState` and an `Observations`
+    task; jextract turns it into a `.so` + Java surface.
+  - `AppCoreTests` — XCTest/Swift Testing target running on macOS.
+- `ios-app/` — SwiftUI app generated from `project.yml` via `xcodegen`.
+- `android-app/` — Gradle project that builds `AppCoreAndroid` for Android
+  via the Swift Android SDK and consumes it through
+  `swift-java jextract --mode=jni`.
 
-## Status
+## Verified
 
-The Swift sources in `AppCore/Sources/` and the Kotlin sources under
-`android-app/app/` are implemented as the spec dictates. The
-`xcodeproj`, the `jextract`-generated Java surface, and the precise Gradle
-task wiring are intentionally left for the implementer to produce on the
-target host (see spec §6.1 and §12).
+| Surface | Tested how | Status |
+|---|---|---|
+| `AppCore` SwiftPM target | `swift test --disable-sandbox` on macOS (JAVA_HOME=JDK 21), 4/4 §11 tests pass | ✅ |
+| iOS app | `xcodebuild` for `iPhone 17 / iOS 26.4.1` simulator + manual launch | ✅ |
+| Android: build | `./gradlew :app:assembleDebug` produces `app-debug.apk` | ✅ |
+| Android: cold start | `BridgePerfTest.a_coldStart_…` regression test (50 ms timeout) | ✅ |
+| Android: end-to-end | `Medium_Phone_API_36.1` AVD; heart toggle reorders, pull-to-refresh updates header | ✅ |
+| Performance | See `BridgePerfTest`: sync JNI ~625 ns, full round-trip ~100 µs median | ✅ |
+
+## Spec deviations
+
+The spec was written before the actual `swift-java jextract` shape was
+known. Implementation discovered a few real differences that the codebase
+now reflects:
+
+1. **`AppCoreAndroid` sources are wrapped in `#if canImport(Android)`** so
+   the target compiles to an empty module on macOS. Lets us run
+   `swift build`/`swift test` against the package on macOS without the
+   Platform.swift `#error` aborting the build.
+2. **No hand-written `@_cdecl` annotations.** Spec §5.7 sketched a
+   `@_cdecl("Java_…")` design; in reality `swift-java`'s `JExtractSwiftPlugin`
+   is a SwiftPM build-tool plugin driven by `swift-java.config`, and it
+   generates both the Java surface *and* the `@_cdecl` glue from friendly
+   Swift signatures. `JNIBridge.swift` was deleted; `AppCoreNative.swift`
+   exposes `appcoreCreate / appcoreToggleFavorite / appcoreRefresh /
+   appcoreDestroy` as plain public functions.
+3. **`enableJavaCallbacks: true`** turns the Swift `protocol SnapshotSink`
+   into a Java interface; Kotlin's `AppStateHolder` implements it directly.
+   No hand-rolled Swift→Java JNI calls.
+4. **`native` is a Java reserved keyword** so the generated package is
+   `com.example.appcore.bridge`, not `…native` as the spec suggested.
+5. **Initial snapshot is delivered eagerly** from `appcoreCreate` because
+   `Observations` (SE-0475) only emits *after* a mutation. Without this,
+   Compose renders empty until the user toggles or refreshes.
+6. **`swift-java` is a path dependency** at
+   `/Users/adam/Developer/tools/swift-java`, not a remote git URL. SwiftPM
+   correctly omits it from iOS resolution because no iOS target uses it.
+
+## Toolchain
+
+| Component | Version used |
+|---|---|
+| Swift | 6.3.1 |
+| Swift Android SDK | 6.3.1 (`swift sdk install …`) |
+| Android NDK | 27.3.13750724 |
+| Android cmdline-tools | 13114758 |
+| Android SDK + emulator | from Android Studio bundle |
+| JDK | 21 (Android Studio JBR) |
+| `swift-java` | built from main, ~April 2026 |
+| Xcode | 26.4.1 |
+| `xcodegen` | latest from Homebrew |
+
+## Quick start
+
+iOS: see [`ios-app/README.md`](ios-app/README.md).
+Android: see [`android-app/README.md`](android-app/README.md).

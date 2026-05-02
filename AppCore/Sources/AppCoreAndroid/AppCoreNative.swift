@@ -1,3 +1,4 @@
+#if canImport(Android)
 import Foundation
 import AppCore
 
@@ -35,12 +36,14 @@ private let handles = HandleTable()
 
 // MARK: - jextract entry points
 //
-// These public functions are scanned by `swift-java jextract --mode=jni`,
-// which generates a Java class `com.example.appcore.bridge.AppCoreAndroid`
-// (named after the Swift module). `native` is a Java reserved keyword so we
-// can't use it as a package segment — `bridge` instead.
-// with matching `native` static methods + a Swift `@_cdecl` glue file.
-// We never write the JNI naming or marshalling by hand.
+// These public functions are scanned by `swift-java jextract --mode=jni`
+// (configured via `swift-java.config` in this directory; the
+// `JExtractSwiftPlugin` SwiftPM plugin runs it as part of `swift build`).
+// jextract generates a Java class `com.example.appcore.bridge.AppCoreAndroid`
+// — named after the Swift module — with matching `native` static methods,
+// plus a Swift `@_cdecl` glue file. We never write the JNI naming or
+// marshalling by hand. Note: `native` is a Java reserved keyword, so the
+// Java package is `…bridge` rather than `…native`.
 
 public func appcoreCreate(sink: some SnapshotSink) -> Int64 {
     let bridge = AndroidBridge(sink: sink)
@@ -67,3 +70,4 @@ public func appcoreDestroy(handle: Int64) {
     guard let bridge = handles.remove(handle) else { return }
     Task { await bridge.close() }
 }
+#endif

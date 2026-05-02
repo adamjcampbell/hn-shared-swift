@@ -6,9 +6,12 @@ import com.example.appcore.bridge.SnapshotSink
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.runners.MethodSorters
 import kotlin.math.roundToLong
 import kotlin.system.measureNanoTime
 
@@ -28,6 +31,7 @@ import kotlin.system.measureNanoTime
  * checks, not regression gates.
  */
 @RunWith(AndroidJUnit4::class)
+@FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class BridgePerfTest {
 
     private class CapturingSink : SnapshotSink {
@@ -37,18 +41,40 @@ class BridgePerfTest {
         }
     }
 
+    /**
+     * Regression test: the initial snapshot must be delivered without any
+     * mutation having occurred — synchronously, inside `appcoreCreate`.
+     *
+     * Why this matters: `Observations` (SE-0475) only emits after a property
+     * mutation. Without an explicit eager delivery on the Swift side, the
+     * Compose UI would render with `snapshot == null` until the user did
+     * something (heart tap or pull-to-refresh).
+     *
+     * The `a_` prefix puts this first under `@FixMethodOrder(NAME_ASCENDING)`
+     * so it runs before any other test toggles state. This matters because
+     * the Swift handles table is process-wide; an earlier toggling test would
+     * mask a regression by warming the executor.
+     */
     @Test
-    fun coldStart_firstSnapshotArrives() = runBlocking {
+    fun a_coldStart_initialSnapshotDeliveredSynchronously() = runBlocking {
         val sink = CapturingSink()
         val nanos = measureNanoTime {
             val handle = AppCoreAndroid.appcoreCreate(sink)
             try {
-                withTimeout(5_000) { sink.channel.receive() }
+                // 50 ms is generous — the snapshot is delivered synchronously
+                // inside `appcoreCreate`, so it should already be queued the
+                // moment the call returns. Anything longer indicates the
+                // eager-delivery path is broken.
+                val initial = withTimeout(50) { sink.channel.receive() }
+                assertNotNull("first snapshot JSON", initial)
+                assertTrue("contains demo cities", initial.contains("Sydney"))
+                assertTrue("contains empty favorites array", initial.contains("\"favorites\":[]"))
+                assertTrue("globalFavoriteCount is initial 0", initial.contains("\"globalFavoriteCount\":0"))
             } finally {
                 AppCoreAndroid.appcoreDestroy(handle)
             }
         }
-        report("cold start: create → first snapshot", listOf(nanos))
+        report("cold start: create → first snapshot (synchronous)", listOf(nanos))
     }
 
     @Test

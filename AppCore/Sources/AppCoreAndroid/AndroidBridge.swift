@@ -1,3 +1,4 @@
+#if canImport(Android)
 import Foundation
 import Observation
 import AppCore
@@ -68,3 +69,4 @@ actor AndroidBridge {
         return json
     }
 }
+#endif
