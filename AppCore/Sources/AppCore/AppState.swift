@@ -17,10 +17,7 @@ import Observation
 /// any cross-actor hops.
 @Observable
 public final class AppState {
-    public private(set) var cities: [City] = .demoData
-    public private(set) var favorites: Set<String> = []
-    public private(set) var globalFavoriteCount: Int = 0
-    public private(set) var lastRefreshedAt: Date? = nil
+    public private(set) var snapshot: Snapshot = Snapshot()
 
     public init() {}
 
@@ -30,12 +27,16 @@ public final class AppState {
     /// Both mutations happen synchronously and are batched into a single
     /// `Observations` transaction — see SE-0475 §"Transactional semantics".
     public func toggleFavorite(_ id: String) {
-        if favorites.contains(id) {
-            favorites.remove(id)
+        if snapshot.favorites.contains(id) {
+            snapshot.favorites.remove(id)
         } else {
-            favorites.insert(id)
+            snapshot.favorites.insert(id)
         }
-        cities.sort { lhs, rhs in
+        // Sort needs exclusive access to `snapshot.cities`, which goes
+        // through `snapshot`'s modify accessor — capture `favorites` into
+        // a local so the comparator does not re-read `snapshot`.
+        let favorites = snapshot.favorites
+        snapshot.cities.sort { lhs, rhs in
             let lhsFav = favorites.contains(lhs.id)
             let rhsFav = favorites.contains(rhs.id)
             if lhsFav != rhsFav { return lhsFav && !rhsFav }
@@ -54,7 +55,7 @@ public final class AppState {
     /// cross-actor data race risk.
     public func refresh() async {
         try? await Task.sleep(for: .seconds(1))
-        globalFavoriteCount = Int.random(in: 100...10_000)
-        lastRefreshedAt = .now
+        snapshot.globalFavoriteCount = Int.random(in: 100...10_000)
+        snapshot.lastRefreshedAt = .now
     }
 }

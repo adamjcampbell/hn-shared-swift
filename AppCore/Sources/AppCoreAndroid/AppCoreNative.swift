@@ -51,7 +51,7 @@ public func appcoreCreate(sink: some SnapshotSink) -> Int64 {
     // Observations (SE-0475) only emits on mutation — see AndroidBridge.
     // Deliver the initial snapshot synchronously so the Compose UI has
     // something to render before the user does anything.
-    sink.deliver(snapshotJSON: AndroidBridge.encodeInitialSnapshot())
+    sink.deliver(snapshotJSON: Snapshot().toJSON())
     Task { await bridge.start() }
     return id
 }

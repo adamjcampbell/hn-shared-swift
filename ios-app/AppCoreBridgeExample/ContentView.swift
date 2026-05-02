@@ -5,21 +5,22 @@ struct ContentView: View {
     @State private var appState = AppState()
 
     var body: some View {
+        let snapshot = appState.snapshot
         NavigationStack {
             List {
                 Section {
                     HeaderCard(
-                        count: appState.globalFavoriteCount,
-                        lastRefreshedAt: appState.lastRefreshedAt
+                        count: snapshot.globalFavoriteCount,
+                        lastRefreshedAt: snapshot.lastRefreshedAt
                     )
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 }
                 Section {
-                    ForEach(appState.cities) { city in
+                    ForEach(snapshot.cities) { city in
                         CityRow(
                             city: city,
-                            isFavorite: appState.favorites.contains(city.id),
+                            isFavorite: snapshot.favorites.contains(city.id),
                             onToggle: { appState.toggleFavorite(city.id) }
                         )
                     }

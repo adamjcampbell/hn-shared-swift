@@ -13,7 +13,7 @@ public struct City: Sendable, Identifiable, Codable, Equatable {
 }
 
 extension Array where Element == City {
-    static let demoData: [City] = [
+    public static let demoData: [City] = [
         City(id: "syd", name: "Sydney", country: "Australia"),
         City(id: "mel", name: "Melbourne", country: "Australia"),
         City(id: "tyo", name: "Tokyo", country: "Japan"),

@@ -1,19 +1,41 @@
 import Foundation
 
-/// A `Sendable` value-type snapshot of `AppState`.
+/// A `Sendable` value-type snapshot of the app's state.
 ///
-/// Used as the unit of state delivery from Swift to Kotlin. Values are
-/// JSON-encoded at the JNI boundary; see §2.6.
+/// `Snapshot` is the mutable state container. `AppState` is a thin
+/// `@Observable` wrapper that holds one of these and exposes mutating
+/// helpers; the JNI bridge serialises this type as JSON (see §2.6).
 public struct Snapshot: Sendable, Codable, Equatable {
-    public let cities: [City]
-    public let favorites: Set<String>
-    public let globalFavoriteCount: Int
-    public let lastRefreshedAt: Date?
+    public var cities: [City]
+    public var favorites: Set<String>
+    public var globalFavoriteCount: Int
+    public var lastRefreshedAt: Date?
 
-    public init(from state: AppState) {
-        self.cities = state.cities
-        self.favorites = state.favorites
-        self.globalFavoriteCount = state.globalFavoriteCount
-        self.lastRefreshedAt = state.lastRefreshedAt
+    public init(
+        cities: [City] = .demoData,
+        favorites: Set<String> = [],
+        globalFavoriteCount: Int = 0,
+        lastRefreshedAt: Date? = nil
+    ) {
+        self.cities = cities
+        self.favorites = favorites
+        self.globalFavoriteCount = globalFavoriteCount
+        self.lastRefreshedAt = lastRefreshedAt
+    }
+}
+
+extension Snapshot {
+    private static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
+
+    public func toJSON() -> String {
+        guard let data = try? Self.encoder.encode(self),
+              let json = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return json
     }
 }
