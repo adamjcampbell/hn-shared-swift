@@ -32,3 +32,8 @@ captures/
 # jextract-generated sources
 android-app/core-jni/src/main/java/com/example/appcore/native/
 android-app/core-jni/generated-swift/
+.claude/
+
+# Android build outputs
+android-app/.gradle/
+android-app/**/build/

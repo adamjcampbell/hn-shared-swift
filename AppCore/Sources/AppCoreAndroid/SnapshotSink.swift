@@ -1,9 +1,9 @@
-import Foundation
-
-/// The Swift-side protocol implemented by the JNI callback bridge.
+/// Sink for snapshot deliveries from Swift to Kotlin.
 ///
-/// Exists so `AndroidBridge` doesn't import any JNI symbols directly —
-/// the JNI implementation conforms to this and is injected at construction.
-public protocol SnapshotSink: AnyObject, Sendable {
+/// jextract turns this protocol into a Java interface
+/// (`com.example.appcore.bridge.SnapshotSink`) thanks to
+/// `enableJavaCallbacks: true` in `swift-java.config`. The Kotlin side
+/// implements the interface and registers an instance with `appcoreCreate`.
+public protocol SnapshotSink {
     func deliver(snapshotJSON: String)
 }

@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
@@ -14,20 +15,17 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1"
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     buildFeatures { compose = true }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14"
-    }
-
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions { jvmTarget = "21" }
 }
 
 dependencies {

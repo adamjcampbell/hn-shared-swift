@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.1
 import PackageDescription
 
 let sharedSettings: [SwiftSetting] = [
@@ -16,7 +16,14 @@ let package = Package(
     ],
     products: [
         .library(name: "AppCore", targets: ["AppCore"]),
-        .library(name: "AppCoreAndroid", targets: ["AppCoreAndroid"]),
+        .library(
+            name: "AppCoreAndroid",
+            type: .dynamic,
+            targets: ["AppCoreAndroid"]
+        ),
+    ],
+    dependencies: [
+        .package(path: "/Users/adam/Developer/tools/swift-java"),
     ],
     targets: [
         .target(
@@ -25,8 +32,15 @@ let package = Package(
         ),
         .target(
             name: "AppCoreAndroid",
-            dependencies: ["AppCore"],
-            swiftSettings: sharedSettings
+            dependencies: [
+                "AppCore",
+                .product(name: "SwiftJava", package: "swift-java"),
+            ],
+            exclude: ["swift-java.config"],
+            swiftSettings: sharedSettings,
+            plugins: [
+                .plugin(name: "JExtractSwiftPlugin", package: "swift-java"),
+            ]
         ),
         .testTarget(
             name: "AppCoreTests",
