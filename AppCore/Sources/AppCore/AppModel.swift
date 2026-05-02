@@ -23,6 +23,10 @@ import Observation
 public final class AppModel {
     public private(set) var state: AppState = AppState()
 
+    /// Unfiltered source of truth for the city list. The visible
+    /// `state.cities` is derived from this on every `setSearchQuery` event.
+    private let allCities: [City] = .demoData
+
     public init() {}
 
     /// Single entry point for every user-driven mutation.
@@ -46,11 +50,13 @@ public final class AppModel {
             toggleFavorite(id)
         case .refresh:
             await refresh()
+        case .setSearchQuery(let query):
+            applyFilter(query)
         }
     }
 
-    /// Toggle whether `id` is in the favorites set, then re-sort `cities`
-    /// so favorites bubble to the top.
+    /// Toggle whether `id` is in the favorites set, then re-sort the
+    /// currently-visible cities so favorites bubble to the top.
     ///
     /// Both mutations happen synchronously and are batched into a single
     /// `Observations` transaction — see SE-0475 §"Transactional semantics".
@@ -60,6 +66,30 @@ public final class AppModel {
         } else {
             state.favorites.insert(id)
         }
+        sortCities()
+    }
+
+    /// Simulate a network refresh. Sleeps for ~1s then mutates two
+    /// observable properties whose changes are visible in the UI as a
+    /// running counter and a timestamp.
+    private func refresh() async {
+        try? await Task.sleep(for: .seconds(1))
+        state.globalFavoriteCount = Int.random(in: 100...10_000)
+        state.lastRefreshedAt = .now
+    }
+
+    /// Recompute `state.cities` from `allCities` using the new query
+    /// (case-insensitive name contains; whitespace-only is treated as
+    /// no filter), then re-apply the favorites-first sort.
+    private func applyFilter(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        state.cities = trimmed.isEmpty
+            ? allCities
+            : allCities.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+        sortCities()
+    }
+
+    private func sortCities() {
         // Capture `favorites` locally so the comparator doesn't re-read
         // `state` on every comparison (each read goes through the
         // observation registrar).
@@ -70,14 +100,5 @@ public final class AppModel {
             if lhsFav != rhsFav { return lhsFav && !rhsFav }
             return lhs.name < rhs.name
         }
-    }
-
-    /// Simulate a network refresh. Sleeps for ~1s then mutates two
-    /// observable properties whose changes are visible in the UI as a
-    /// running counter and a timestamp.
-    private func refresh() async {
-        try? await Task.sleep(for: .seconds(1))
-        state.globalFavoriteCount = Int.random(in: 100...10_000)
-        state.lastRefreshedAt = .now
     }
 }

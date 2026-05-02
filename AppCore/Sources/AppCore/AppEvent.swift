@@ -15,6 +15,7 @@ import Foundation
 /// ```json
 /// {"type":"toggleFavorite","id":"syd"}
 /// {"type":"refresh"}
+/// {"type":"setSearchQuery","value":"par"}
 /// ```
 ///
 /// The hand-rolled `Codable` is deliberate. The synthesised representation
@@ -27,17 +28,20 @@ import Foundation
 public enum AppEvent: Sendable, Equatable {
     case toggleFavorite(id: String)
     case refresh
+    case setSearchQuery(String)
 }
 
 extension AppEvent: Codable {
     private enum CodingKeys: String, CodingKey {
         case type
         case id
+        case value
     }
 
     private enum Kind: String, Codable {
         case toggleFavorite
         case refresh
+        case setSearchQuery
     }
 
     public init(from decoder: any Decoder) throws {
@@ -49,6 +53,9 @@ extension AppEvent: Codable {
             self = .toggleFavorite(id: id)
         case .refresh:
             self = .refresh
+        case .setSearchQuery:
+            let value = try container.decode(String.self, forKey: .value)
+            self = .setSearchQuery(value)
         }
     }
 
@@ -60,6 +67,9 @@ extension AppEvent: Codable {
             try container.encode(id, forKey: .id)
         case .refresh:
             try container.encode(Kind.refresh, forKey: .type)
+        case .setSearchQuery(let value):
+            try container.encode(Kind.setSearchQuery, forKey: .type)
+            try container.encode(value, forKey: .value)
         }
     }
 }

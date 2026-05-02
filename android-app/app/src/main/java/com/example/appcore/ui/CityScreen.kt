@@ -3,6 +3,7 @@ package com.example.appcore.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -10,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.example.appcore.state.rememberAppModel
 import kotlinx.coroutines.launch
@@ -21,6 +23,8 @@ fun CityScreen() {
     val state = holder.state
     val scope = rememberCoroutineScope()
 
+    var query by remember { mutableStateOf("") }
+
     PullToRefreshBox(
         isRefreshing = holder.isRefreshing,
         onRefresh = { scope.launch { holder.refresh() } }
@@ -29,6 +33,19 @@ fun CityScreen() {
             HeaderCard(
                 count = state?.globalFavoriteCount,
                 lastRefreshedAt = state?.lastRefreshedAt
+            )
+            OutlinedTextField(
+                value = query,
+                onValueChange = {
+                    query = it
+                    holder.setSearchQuery(it)
+                },
+                label = { Text("Filter cities") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
             )
             LazyColumn(Modifier.fillMaxSize()) {
                 items(state?.cities ?: emptyList()) { city ->

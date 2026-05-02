@@ -3,6 +3,7 @@ import AppCore
 
 struct ContentView: View {
     @State private var appModel = AppModel()
+    @State private var queryString = ""
 
     var body: some View {
         let appState = appModel.state
@@ -17,6 +18,14 @@ struct ContentView: View {
                     .listRowSeparator(.hidden)
                 }
                 Section {
+                    TextField("Filter cities", text: $queryString)
+                        .textFieldStyle(.roundedBorder)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+                Section {
                     ForEach(appState.cities) { city in
                         CityRow(
                             city: city,
@@ -29,6 +38,9 @@ struct ContentView: View {
                 }
             }
             .refreshable { await appModel.dispatch(.refresh) }
+            .onChange(of: queryString) { _, newValue in
+                Task { await appModel.dispatch(.setSearchQuery(newValue)) }
+            }
             .navigationTitle("Cities")
         }
     }

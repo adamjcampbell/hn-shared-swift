@@ -32,6 +32,10 @@ sealed class AppEvent {
     @Serializable
     @SerialName("refresh")
     data object Refresh : AppEvent()
+
+    @Serializable
+    @SerialName("setSearchQuery")
+    data class SetSearchQuery(val value: String) : AppEvent()
 }
 
 /**
@@ -79,6 +83,8 @@ object AppModelHolder : SnapshotSink {
     }
 
     fun toggleFavorite(id: String) = dispatch(AppEvent.ToggleFavorite(id))
+
+    fun setSearchQuery(value: String) = dispatch(AppEvent.SetSearchQuery(value))
 
     suspend fun refresh() {
         isRefreshing = true

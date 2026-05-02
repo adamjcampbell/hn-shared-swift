@@ -54,6 +54,58 @@ struct AppModelTests {
         // after the await stays on it. Verify we are still on MainActor.
         MainActor.assertIsolated()
     }
+
+    @Test("setSearchQuery filters cities case-insensitively")
+    func setSearchQuery_filters() async {
+        let model = AppModel()
+        let totalCount = model.state.cities.count
+
+        // "ne" matches Sydney, Melbourne, and New York (and only those).
+        await model.dispatch(.setSearchQuery("NE"))
+        let names = model.state.cities.map(\.name)
+        #expect(names.allSatisfy { $0.localizedCaseInsensitiveContains("ne") })
+        #expect(Set(names) == ["Sydney", "Melbourne", "New York"])
+        #expect(model.state.cities.count < totalCount)
+
+        await model.dispatch(.setSearchQuery(""))
+        #expect(model.state.cities.count == totalCount)
+    }
+
+    @Test("setSearchQuery treats whitespace-only as no filter")
+    func setSearchQuery_whitespaceOnly() async {
+        let model = AppModel()
+        let totalCount = model.state.cities.count
+
+        await model.dispatch(.setSearchQuery("  \t\n "))
+        #expect(model.state.cities.count == totalCount)
+    }
+
+    @Test("toggling favourite while filtered keeps filter applied")
+    func toggleFavorite_preservesFilter() async {
+        let model = AppModel()
+        await model.dispatch(.setSearchQuery("on"))
+        let filteredCount = model.state.cities.count
+        #expect(filteredCount > 0)
+
+        await model.dispatch(.toggleFavorite(id: "lon"))
+        #expect(model.state.cities.count == filteredCount)
+        #expect(model.state.cities.first?.id == "lon")
+    }
+
+    @Test("favourite status survives query changes")
+    func setSearchQuery_preservesFavourites() async {
+        let model = AppModel()
+        await model.dispatch(.toggleFavorite(id: "syd"))
+        #expect(model.state.favorites.contains("syd"))
+
+        await model.dispatch(.setSearchQuery("paris"))
+        #expect(model.state.favorites.contains("syd"))
+        #expect(model.state.cities.contains(where: { $0.id == "syd" }) == false)
+
+        await model.dispatch(.setSearchQuery(""))
+        #expect(model.state.favorites.contains("syd"))
+        #expect(model.state.cities.first?.id == "syd")
+    }
 }
 
 @Suite("AppEvent JSON round-trip")
@@ -80,6 +132,17 @@ struct AppEventTests {
         #expect(decoded == event)
     }
 
+    @Test("setSearchQuery encodes with value payload")
+    func setSearchQuery_wireShape() throws {
+        let event = AppEvent.setSearchQuery("paris")
+        let json = event.toJSON()
+        #expect(json.contains("\"type\":\"setSearchQuery\""))
+        #expect(json.contains("\"value\":\"paris\""))
+
+        let decoded = try #require(AppEvent(json: json))
+        #expect(decoded == event)
+    }
+
     @Test("decodes hand-written wire literals")
     func decodes_handWrittenLiterals() throws {
         // These are the literal payloads the Kotlin side sends; if Swift
@@ -89,6 +152,9 @@ struct AppEventTests {
 
         let refresh = try #require(AppEvent(json: #"{"type":"refresh"}"#))
         #expect(refresh == .refresh)
+
+        let query = try #require(AppEvent(json: #"{"type":"setSearchQuery","value":"par"}"#))
+        #expect(query == .setSearchQuery("par"))
     }
 
     @Test("rejects unknown discriminators")
