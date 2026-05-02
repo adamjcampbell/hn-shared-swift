@@ -2,31 +2,33 @@ import SwiftUI
 import AppCore
 
 struct ContentView: View {
-    @State private var appState = AppState()
+    @State private var appModel = AppModel()
 
     var body: some View {
-        let snapshot = appState.snapshot
+        let appState = appModel.state
         NavigationStack {
             List {
                 Section {
                     HeaderCard(
-                        count: snapshot.globalFavoriteCount,
-                        lastRefreshedAt: snapshot.lastRefreshedAt
+                        count: appState.globalFavoriteCount,
+                        lastRefreshedAt: appState.lastRefreshedAt
                     )
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                 }
                 Section {
-                    ForEach(snapshot.cities) { city in
+                    ForEach(appState.cities) { city in
                         CityRow(
                             city: city,
-                            isFavorite: snapshot.favorites.contains(city.id),
-                            onToggle: { appState.toggleFavorite(city.id) }
+                            isFavorite: appState.favorites.contains(city.id),
+                            onToggle: {
+                                Task { await appModel.dispatch(.toggleFavorite(id: city.id)) }
+                            }
                         )
                     }
                 }
             }
-            .refreshable { await appState.refresh() }
+            .refreshable { await appModel.dispatch(.refresh) }
             .navigationTitle("Cities")
         }
     }

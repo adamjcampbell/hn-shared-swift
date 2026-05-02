@@ -46,6 +46,13 @@ class BridgePerfTest {
         }
     }
 
+    // Hand-written wire literals avoid pulling kotlinx.serialization into
+    // the hot path — these tests measure Swift-side cost only.
+    private companion object {
+        const val TOGGLE_SYD_JSON = """{"type":"toggleFavorite","id":"syd"}"""
+        const val TOGGLE_TYO_JSON = """{"type":"toggleFavorite","id":"tyo"}"""
+    }
+
     /**
      * Regression test: the initial snapshot must be delivered without any
      * mutation having occurred — synchronously, inside `appcoreCreate`.
@@ -91,19 +98,19 @@ class BridgePerfTest {
             withTimeout(5_000) { sink.channel.receive() }
 
             // Warm-up.
-            repeat(20) { AppCoreAndroid.appcoreToggleFavorite("syd") }
+            repeat(20) { AppCoreAndroid.appcoreDispatch(TOGGLE_SYD_JSON) }
             // Drain any snapshots from warm-up.
             drainBriefly(sink)
 
             val samples = mutableListOf<Long>()
             repeat(200) {
                 samples += measureNanoTime {
-                    AppCoreAndroid.appcoreToggleFavorite("syd")
+                    AppCoreAndroid.appcoreDispatch(TOGGLE_SYD_JSON)
                 }
             }
             // Drain the resulting snapshots so the next test starts clean.
             drainBriefly(sink)
-            report("sync JNI call (toggleFavorite)", samples)
+            report("sync JNI call (dispatch — incl. JSON decode)", samples)
         } finally {
             AppCoreAndroid.appcoreDestroy()
         }
@@ -119,14 +126,14 @@ class BridgePerfTest {
 
             // Warm-up so the dispatcher and JIT are settled.
             repeat(20) {
-                AppCoreAndroid.appcoreToggleFavorite("syd")
+                AppCoreAndroid.appcoreDispatch(TOGGLE_SYD_JSON)
                 withTimeout(1_000) { sink.channel.receive() }
             }
 
             val samples = mutableListOf<Long>()
             repeat(100) { i ->
                 val t0 = System.nanoTime()
-                AppCoreAndroid.appcoreToggleFavorite("tyo")
+                AppCoreAndroid.appcoreDispatch(TOGGLE_TYO_JSON)
                 // Wait for the corresponding snapshot.
                 withTimeout(1_000) { sink.channel.receive() }
                 samples += System.nanoTime() - t0
@@ -153,9 +160,9 @@ class BridgePerfTest {
             // snapshot depending on Observations' transactional batching; we
             // just measure the size of whichever snapshot lands last in a
             // small window.
-            AppCoreAndroid.appcoreToggleFavorite("syd")
-            AppCoreAndroid.appcoreToggleFavorite("tyo")
-            AppCoreAndroid.appcoreToggleFavorite("lon")
+            AppCoreAndroid.appcoreDispatch(TOGGLE_SYD_JSON)
+            AppCoreAndroid.appcoreDispatch(TOGGLE_TYO_JSON)
+            AppCoreAndroid.appcoreDispatch("""{"type":"toggleFavorite","id":"lon"}""")
 
             var last = first
             try {

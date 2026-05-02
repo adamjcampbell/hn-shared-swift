@@ -2,15 +2,15 @@ import Foundation
 import Observation
 import AppCore
 
-/// Android-side coordinator that owns an `AppState` and an `Observations`
+/// Android-side coordinator that owns an `AppModel` and an `Observations`
 /// task; mediates between sync entry points and async observation.
 ///
-/// **Why this is an actor:** see spec §2.5. `AppState` is a non-`Sendable`
+/// **Why this is an actor:** see spec §2.5. `AppModel` is a non-`Sendable`
 /// reference shared between (a) entry-point invocations from the JVM and
 /// (b) the `Observations` task — they must be in the same isolation domain.
 /// The actor *is* that isolation domain.
 ///
-/// **Why a singleton:** there is exactly one `AppState` per process. Holding
+/// **Why a singleton:** there is exactly one `AppModel` per process. Holding
 /// the bridge as `static let shared` means we don't need a hand-rolled
 /// `@unchecked Sendable` handle table to keep instances alive across JNI
 /// calls — the actor reference is the handle, and actors are inherently
@@ -24,7 +24,7 @@ import AppCore
 actor AndroidBridge {
     static let shared = AndroidBridge()
 
-    private let state = AppState()
+    private let appModel = AppModel()
     private var sink: (any SnapshotSink)?
     private var observationTask: Task<Void, Never>?
 
@@ -39,9 +39,9 @@ actor AndroidBridge {
         self.sink = sink
         #if canImport(Android)
         observationTask = Task { [self] in
-            let observations = Observations { self.state.snapshot }
-            for await snapshot in observations {
-                self.sink?.deliver(snapshotJSON: snapshot.toJSON())
+            let observations = Observations { self.appModel.state }
+            for await state in observations {
+                self.sink?.deliver(snapshotJSON: state.toJSON())
             }
         }
         #endif
@@ -53,11 +53,9 @@ actor AndroidBridge {
         sink = nil
     }
 
-    func toggleFavorite(_ id: String) {
-        state.toggleFavorite(id)
-    }
-
-    func refresh() async {
-        await state.refresh()
+    /// Forward a decoded `AppEvent` to the model. Runs on the bridge
+    /// actor's executor; subsequent `dispatch` calls queue behind it.
+    func dispatch(_ event: AppEvent) async {
+        await appModel.dispatch(event)
     }
 }

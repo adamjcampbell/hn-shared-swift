@@ -11,14 +11,14 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.appcore.state.rememberAppState
+import com.example.appcore.state.rememberAppModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CityScreen() {
-    val holder = rememberAppState()
-    val snapshot = holder.snapshot
+    val holder = rememberAppModel()
+    val state = holder.state
     val scope = rememberCoroutineScope()
 
     PullToRefreshBox(
@@ -27,14 +27,14 @@ fun CityScreen() {
     ) {
         Column(Modifier.fillMaxSize()) {
             HeaderCard(
-                count = snapshot?.globalFavoriteCount,
-                lastRefreshedAt = snapshot?.lastRefreshedAt
+                count = state?.globalFavoriteCount,
+                lastRefreshedAt = state?.lastRefreshedAt
             )
             LazyColumn(Modifier.fillMaxSize()) {
-                items(snapshot?.cities ?: emptyList()) { city ->
+                items(state?.cities ?: emptyList()) { city ->
                     CityRow(
                         city = city,
-                        isFavorite = snapshot?.favorites?.contains(city.id) == true,
+                        isFavorite = state?.favorites?.contains(city.id) == true,
                         onToggle = { holder.toggleFavorite(city.id) }
                     )
                 }

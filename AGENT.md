@@ -9,10 +9,13 @@ code is the source of truth; both UIs are thin renderers.
 
 ## Goals
 
-- One Swift type (`AppState`) drives both platforms.
-- iOS: direct `@Observable` + SwiftUI; no JNI, no JSON.
+- One Swift type (`AppModel`) drives both platforms; one Codable
+  `AppEvent` enum carries every user-driven mutation.
+- iOS: direct `@Observable` + SwiftUI; no JNI, no JSON. Local UI input
+  state (`@State`) fires events through `appModel.dispatch(_:)`.
 - Android: `AndroidBridge` actor + `Observations` task → JSON snapshot →
-  Java callback → Compose recomposition.
+  Java callback → Compose recomposition. Mutations go through one JNI
+  entry point: `appcoreDispatch(eventJSON:)`.
 - Modern Swift concurrency: language mode 6,
   `NonisolatedNonsendingByDefault` (SE-0461), `Observations` (SE-0475),
   region-based isolation (SE-0414).
@@ -58,13 +61,21 @@ Per spec §12 plus what verification surfaced:
   `canImport(Android)` since `Observations` (SE-0475) requires a Swift
   toolchain newer than this package's macOS deployment target; on macOS
   the actor still compiles as a no-op.
-- There is exactly one `AppState` per process. `AppCoreNative` exposes a
+- There is exactly one `AppModel` per process. `AppCoreNative` exposes a
   global `AndroidBridge.shared` singleton actor and the entry points
-  (`appcoreCreate`, `appcoreToggleFavorite`, `appcoreRefresh`,
-  `appcoreDestroy`) operate on it without handles. The Kotlin side
-  initialises `AppStateHolder` once from `AppCoreApplication.onCreate`;
-  `appcoreCreate(sink:)` is idempotent (replaces the prior sink) so
-  per-test attach/detach in `BridgePerfTest` works without a reset hook.
+  (`appcoreCreate`, `appcoreDispatch`, `appcoreDestroy`) operate on it
+  without handles. The Kotlin side initialises `AppModelHolder` once from
+  `AppCoreApplication.onCreate`; `appcoreCreate(sink:)` is idempotent
+  (replaces the prior sink) so per-test attach/detach in `BridgePerfTest`
+  works without a reset hook.
+- The value-type snapshot is `AppState` (renamed from `Snapshot` so the
+  property reads as `appModel.state: AppState`). Don't rename it back to
+  `State` — that collides with SwiftUI's `@State` property wrapper in
+  iOS code.
+- Adding a new mutation requires (a) a new case on `AppEvent` (Swift),
+  (b) a `switch` arm in `AppModel.dispatch`, and (c) a matching
+  `@SerialName`'d variant on Kotlin's `sealed class AppEvent` in
+  `AppModelHolder.kt`. No new JNI entry point.
 - Both `swift build` and `swift test` on macOS need
   `--disable-sandbox` and `JAVA_HOME` pointing at a JDK 17+ install
   (Android Studio's JBR works), because the plugin's Java-callback
