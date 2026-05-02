@@ -1,0 +1,37 @@
+name: AppCoreBridgeExample
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+# Local SwiftPM dependency on the cross-platform AppCore package.
+packages:
+  AppCore:
+    path: ../AppCore
+
+targets:
+  AppCoreBridgeExample:
+    type: application
+    platform: iOS
+    sources:
+      - path: AppCoreBridgeExample
+    info:
+      path: AppCoreBridgeExample/Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleDisplayName: AppCore Bridge
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.appcore.ios
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_VERSION: "5.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+    dependencies:
+      - package: AppCore
+        product: AppCore

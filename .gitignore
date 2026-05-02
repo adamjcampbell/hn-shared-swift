@@ -7,6 +7,7 @@
 .codex-cache/
 Package.resolved
 *.xcworkspace
+*.xcodeproj
 xcuserdata/
 DerivedData/
 
