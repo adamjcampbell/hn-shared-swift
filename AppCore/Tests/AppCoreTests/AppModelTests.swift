@@ -61,13 +61,13 @@ struct AppModelTests {
         let totalCount = model.state.cities.count
 
         // "ne" matches Sydney, Melbourne, and New York (and only those).
-        await model.dispatch(.setSearchQuery("NE"))
+        await model.dispatch(.setSearchQuery(value: "NE"))
         let names = model.state.cities.map(\.name)
         #expect(names.allSatisfy { $0.localizedCaseInsensitiveContains("ne") })
         #expect(Set(names) == ["Sydney", "Melbourne", "New York"])
         #expect(model.state.cities.count < totalCount)
 
-        await model.dispatch(.setSearchQuery(""))
+        await model.dispatch(.setSearchQuery(value: ""))
         #expect(model.state.cities.count == totalCount)
     }
 
@@ -76,14 +76,14 @@ struct AppModelTests {
         let model = AppModel()
         let totalCount = model.state.cities.count
 
-        await model.dispatch(.setSearchQuery("  \t\n "))
+        await model.dispatch(.setSearchQuery(value: "  \t\n "))
         #expect(model.state.cities.count == totalCount)
     }
 
     @Test("toggling favourite while filtered keeps filter applied")
     func toggleFavorite_preservesFilter() async {
         let model = AppModel()
-        await model.dispatch(.setSearchQuery("on"))
+        await model.dispatch(.setSearchQuery(value: "on"))
         let filteredCount = model.state.cities.count
         #expect(filteredCount > 0)
 
@@ -98,11 +98,11 @@ struct AppModelTests {
         await model.dispatch(.toggleFavorite(id: "syd"))
         #expect(model.state.favorites.contains("syd"))
 
-        await model.dispatch(.setSearchQuery("paris"))
+        await model.dispatch(.setSearchQuery(value: "paris"))
         #expect(model.state.favorites.contains("syd"))
         #expect(model.state.cities.contains(where: { $0.id == "syd" }) == false)
 
-        await model.dispatch(.setSearchQuery(""))
+        await model.dispatch(.setSearchQuery(value: ""))
         #expect(model.state.favorites.contains("syd"))
         #expect(model.state.cities.first?.id == "syd")
     }
@@ -134,7 +134,7 @@ struct AppEventTests {
 
     @Test("setSearchQuery encodes with value payload")
     func setSearchQuery_wireShape() throws {
-        let event = AppEvent.setSearchQuery("paris")
+        let event = AppEvent.setSearchQuery(value: "paris")
         let json = event.toJSON()
         #expect(json.contains("\"type\":\"setSearchQuery\""))
         #expect(json.contains("\"value\":\"paris\""))
@@ -154,7 +154,7 @@ struct AppEventTests {
         #expect(refresh == .refresh)
 
         let query = try #require(AppEvent(json: #"{"type":"setSearchQuery","value":"par"}"#))
-        #expect(query == .setSearchQuery("par"))
+        #expect(query == .setSearchQuery(value: "par"))
     }
 
     @Test("rejects unknown discriminators")

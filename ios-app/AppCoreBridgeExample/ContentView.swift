@@ -39,7 +39,7 @@ struct ContentView: View {
             }
             .refreshable { await appModel.dispatch(.refresh) }
             .onChange(of: queryString) { _, newValue in
-                Task { await appModel.dispatch(.setSearchQuery(newValue)) }
+                Task { await appModel.dispatch(.setSearchQuery(value: newValue)) }
             }
             .navigationTitle("Cities")
         }

@@ -28,7 +28,7 @@ import Foundation
 public enum AppEvent: Sendable, Equatable {
     case toggleFavorite(id: String)
     case refresh
-    case setSearchQuery(String)
+    case setSearchQuery(value: String)
 }
 
 extension AppEvent: Codable {
@@ -55,7 +55,7 @@ extension AppEvent: Codable {
             self = .refresh
         case .setSearchQuery:
             let value = try container.decode(String.self, forKey: .value)
-            self = .setSearchQuery(value)
+            self = .setSearchQuery(value: value)
         }
     }
 
