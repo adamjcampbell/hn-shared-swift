@@ -21,7 +21,8 @@ data class AppState(
 
 /**
  * Mirrors the Swift `AppEvent` enum. Wire shape is `{"type":"...", ...}`,
- * matching `AppCore/Sources/AppCore/AppEvent.swift`'s hand-rolled `Codable`.
+ * matching `AppCore/Sources/AppCore/AppEvent.swift`'s `@Codable` +
+ * `@CodedAt("type")` MetaCodable annotations.
  */
 @Serializable
 sealed class AppEvent {
