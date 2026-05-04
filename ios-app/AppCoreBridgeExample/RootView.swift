@@ -31,38 +31,56 @@ private struct CitiesContent: View {
     let state: AppState
     let searchText: String
     @Environment(\.isSearching) private var isSearching
-    @Environment(\.dispatch) private var dispatch
 
     var body: some View {
         Group {
             if isSearching {
-                searchResults
+                SearchResults(
+                    cities: state.cities,
+                    favorites: state.favorites,
+                    searchText: searchText
+                )
             } else {
-                fullList
-            }
-        }
-        .scrollDismissesKeyboard(.immediately)
-    }
-
-    @ViewBuilder
-    private var searchResults: some View {
-        if state.cities.isEmpty && !searchText.isEmpty {
-            ContentUnavailableView.search(text: searchText)
-        } else {
-            List { CityRows(state: state) }
-                .listStyle(.plain)
-        }
-    }
-
-    private var fullList: some View {
-        List {
-            Section {
-                FavoritesSummary(
+                FullCitiesList(
+                    cities: state.cities,
+                    favorites: state.favorites,
                     count: state.globalFavoriteCount,
                     lastRefreshedAt: state.lastRefreshedAt
                 )
             }
-            Section { CityRows(state: state) }
+        }
+        .scrollDismissesKeyboard(.immediately)
+    }
+}
+
+private struct SearchResults: View {
+    let cities: [City]
+    let favorites: Set<String>
+    let searchText: String
+
+    var body: some View {
+        if cities.isEmpty && !searchText.isEmpty {
+            ContentUnavailableView.search(text: searchText)
+        } else {
+            List { CityRows(cities: cities, favorites: favorites) }
+                .listStyle(.plain)
+        }
+    }
+}
+
+private struct FullCitiesList: View {
+    let cities: [City]
+    let favorites: Set<String>
+    let count: Int
+    let lastRefreshedAt: Date?
+    @Environment(\.dispatch) private var dispatch
+
+    var body: some View {
+        List {
+            Section {
+                FavoritesSummary(count: count, lastRefreshedAt: lastRefreshedAt)
+            }
+            Section { CityRows(cities: cities, favorites: favorites) }
         }
         .listStyle(.insetGrouped)
         .refreshable {
@@ -72,14 +90,15 @@ private struct CitiesContent: View {
 }
 
 private struct CityRows: View {
-    let state: AppState
+    let cities: [City]
+    let favorites: Set<String>
     @Environment(\.dispatch) private var dispatch
 
     var body: some View {
-        ForEach(state.cities) { city in
+        ForEach(cities) { city in
             CityRow(
                 city: city,
-                isFavorite: state.favorites.contains(city.id),
+                isFavorite: favorites.contains(city.id),
                 onToggle: {
                     dispatch(.toggleFavorite(id: city.id))
                 }
