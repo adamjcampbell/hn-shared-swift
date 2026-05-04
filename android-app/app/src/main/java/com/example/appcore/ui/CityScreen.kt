@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
@@ -23,7 +24,15 @@ fun CityScreen() {
     val state = holder.state
     val scope = rememberCoroutineScope()
 
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
+
+    // Process-death rehydration: the OS restores `query` from the Bundle, but
+    // AppCore came back with an empty filter. Replay the event once so the
+    // actor's filtered city list catches up with the visible input. After
+    // rotation the actor's filter survives, so this is a harmless no-op.
+    LaunchedEffect(Unit) {
+        if (query.isNotEmpty()) holder.setSearchQuery(query)
+    }
 
     PullToRefreshBox(
         isRefreshing = holder.isRefreshing,

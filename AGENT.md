@@ -25,7 +25,14 @@ code is the source of truth; both UIs are thin renderers.
 Per spec §12 plus what verification surfaced:
 
 - **No networking.** `refresh()` is `Task.sleep(for: .seconds(1))`.
-- **No persistence.** State resets on relaunch.
+- **No persistence.** State resets on relaunch. The one nuance: the
+  `query` text field in `CityScreen` is `rememberSaveable` so it
+  survives Android process death (Bundle-backed lifecycle state, not
+  on-disk persistence — swipe-from-recents still clears it), and
+  `CityScreen` replays a single `setSearchQuery` on first composition
+  so AppCore's filter catches up with the rehydrated input. AppCore's
+  own state (favorites, refresh count) intentionally resets on
+  process death.
 - **No localisation, accessibility beyond defaults, multi-window iOS,
   large-screen Android, Mac Catalyst, macOS app.**
 - **No Skip.** The whole point is doing this without Skip.

@@ -958,7 +958,7 @@ These are testable. Each one passes or fails unambiguously.
 3. `git grep -E '@unchecked|nonisolated\(unsafe\)' AppCore/Sources/` returns nothing.
 4. The iOS app, run on iOS 17+, displays the city list. Tapping the heart icon on a city instantly toggles the heart and re-orders the list. Pulling to refresh shows a spinner for ~1s, after which the "Worldwide favorites" number changes and the timestamp updates.
 5. The Android app, run on Android 10+, displays the same screen. Tapping the heart triggers the same toggle and re-order, with a perceptible but small (<50ms) delay corresponding to the JNI round-trip plus snapshot encode/decode. Pulling to refresh produces a spinner for ~1.1s, after which the same two header values change.
-6. Killing the Android app and re-launching it shows the city list with no favorites (state is intentionally not persisted).
+6. After a system-initiated process death (`adb shell am kill com.example.appcore`) and relaunch via the app switcher: the search input is restored from `rememberSaveable`, and the visible city list is filtered consistently with that input — `CityScreen` replays a one-shot `setSearchQuery` on first composition so AppCore's filter catches up with the rehydrated input. Favorites and refresh count are reset to defaults (AppCore-owned state is intentionally not persisted). Swipe-from-recents also resets the search input. See AGENT.md *No persistence* for the rationale.
 7. Running both apps side-by-side and comparing screenshots: the layouts are visibly equivalent (city list, header card, heart icons in the same position).
 
 ---
