@@ -3,8 +3,8 @@
     <application
         android:name=".AppCoreApplication"
         android:allowBackup="false"
-        android:label="AppCore Bridge Example"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:label="@string/app_name"
+        android:theme="@style/Theme.AppCoreBridgeExample">
         <activity
             android:name=".ui.MainActivity"
             android:exported="true">

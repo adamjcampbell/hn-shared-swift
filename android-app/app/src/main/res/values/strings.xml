@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AppCore Bridge Example</string>
+    <string name="cities_title">Cities</string>
+    <string name="filter_cities_label">Filter cities</string>
+    <string name="favorite_action">Favorite</string>
+    <string name="unfavorite_action">Unfavorite</string>
+    <string name="worldwide_favorites_label">Worldwide favorites: %1$s</string>
+    <string name="last_refreshed_label">Last refreshed: %1$s</string>
+    <string name="last_refreshed_never">never</string>
+    <string name="value_unavailable">—</string>
+</resources>

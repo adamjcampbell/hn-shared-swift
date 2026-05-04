@@ -3,22 +3,16 @@ package com.example.appcore.ui
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
-import androidx.compose.ui.Modifier
+import androidx.activity.enableEdgeToEdge
+import com.example.appcore.ui.theme.AppCoreTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier, color = MaterialTheme.colorScheme.background) {
-                    Scaffold { padding ->
-                        // padding is intentionally unused; CityScreen draws its own header.
-                        CityScreen()
-                    }
-                }
+            AppCoreTheme {
+                CityScreen()
             }
         }
     }
