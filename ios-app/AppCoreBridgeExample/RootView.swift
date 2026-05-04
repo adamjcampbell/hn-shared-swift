@@ -6,7 +6,7 @@ struct RootView: View {
 
     var body: some View {
         NavigationStack { CitiesScreen(state: appModel.state) }
-        .environment(\.dispatch, AppEventDispatch(appModel))
+            .environment(\.dispatch, AppEventDispatch(appModel))
     }
 }
 
