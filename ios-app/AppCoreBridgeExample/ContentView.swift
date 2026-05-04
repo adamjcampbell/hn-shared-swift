@@ -7,7 +7,7 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            CitiesContent(appModel: appModel, searchText: searchText)
+            CitiesContent(state: appModel.state, searchText: searchText)
                 .searchable(text: $searchText, prompt: "Filter cities")
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -16,13 +16,15 @@ struct ContentView: View {
                 }
                 .navigationTitle("Cities")
         }
+        .environment(\.dispatch, AppEventDispatch(appModel))
     }
 }
 
 private struct CitiesContent: View {
-    let appModel: AppModel
+    let state: AppState
     let searchText: String
     @Environment(\.isSearching) private var isSearching
+    @Environment(\.dispatch) private var dispatch
 
     var body: some View {
         Group {
@@ -37,10 +39,10 @@ private struct CitiesContent: View {
 
     @ViewBuilder
     private var searchResults: some View {
-        if appModel.state.cities.isEmpty && !searchText.isEmpty {
+        if state.cities.isEmpty && !searchText.isEmpty {
             ContentUnavailableView.search(text: searchText)
         } else {
-            List { CityRows(appModel: appModel) }
+            List { CityRows(state: state) }
                 .listStyle(.plain)
         }
     }
@@ -49,29 +51,30 @@ private struct CitiesContent: View {
         List {
             Section {
                 HeaderCard(
-                    count: appModel.state.globalFavoriteCount,
-                    lastRefreshedAt: appModel.state.lastRefreshedAt
+                    count: state.globalFavoriteCount,
+                    lastRefreshedAt: state.lastRefreshedAt
                 )
             }
-            Section { CityRows(appModel: appModel) }
+            Section { CityRows(state: state) }
         }
         .listStyle(.insetGrouped)
         .refreshable {
-            await appModel.dispatch(.refresh)
+            await dispatch.run(.refresh)
         }
     }
 }
 
 private struct CityRows: View {
-    let appModel: AppModel
+    let state: AppState
+    @Environment(\.dispatch) private var dispatch
 
     var body: some View {
-        ForEach(appModel.state.cities) { city in
+        ForEach(state.cities) { city in
             CityRow(
                 city: city,
-                isFavorite: appModel.state.favorites.contains(city.id),
+                isFavorite: state.favorites.contains(city.id),
                 onToggle: {
-                    Task { await appModel.dispatch(.toggleFavorite(id: city.id)) }
+                    dispatch(.toggleFavorite(id: city.id))
                 }
             )
         }
