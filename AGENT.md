@@ -11,8 +11,11 @@ code is the source of truth; both UIs are thin renderers.
 
 - One Swift type (`AppModel`) drives both platforms; one Codable
   `AppEvent` enum carries every user-driven mutation.
-- iOS: direct `@Observable` + SwiftUI; no JNI, no JSON. Local UI input
-  state (`@State`) fires events through `appModel.dispatch(_:)`.
+- iOS: direct `@Observable` + SwiftUI; no JNI, no JSON. `RootView` owns
+  the singleton `AppModel` and installs an `AppEventDispatch` action via
+  `\.dispatch`. Descendant views receive narrow `AppState` slices (often
+  just the fields they read) and fire events through `\.dispatch` — the
+  model is invisible below the root.
 - Android: `AndroidBridge` actor + `Observations` task → JSON snapshot →
   Java callback → Compose recomposition. Mutations go through one JNI
   entry point: `appcoreDispatch(eventJSON:)`.
@@ -99,6 +102,24 @@ Per spec §12 plus what verification surfaced:
   toggling tests would mask a regression of the eager-delivery path.
 - The iOS `.xcodeproj` is generated from `ios-app/project.yml` via
   `xcodegen` and gitignored.
+- **iOS view-layer rules** (enforced by `ios-app/AppCoreBridgeExample/RootView.swift` + `AppEventDispatch.swift`):
+  - `AppModel` is held only by `RootView`. Below the root, views accept
+    `AppState` (or specific slices like `cities` / `favorites`) as
+    parameters; never `AppModel` itself.
+  - Events flow back via `@Environment(\.dispatch)`, an
+    `AppEventDispatch` callable struct in the shape of SwiftUI's
+    `DismissAction`. The struct is **`Equatable`** (`===` on the held
+    `AppModel`); without that conformance, SwiftUI's reflection-based
+    environment diff cannot compare a closure-holding value, marks the
+    env entry as changed on every parent body re-eval, and invalidates
+    every descendant reading the key. If you add a similar capability,
+    use the same shape: callable struct + stable `Equatable` identity.
+  - Don't write `private var foo: some View` on a View. SwiftUI can't
+    diff computed properties — they inline into the parent body and
+    lose per-section skip behaviour. Extract into a private `struct
+    Foo: View` so the child gets its own diffing checkpoint, and store
+    only the fields the body reads (narrow inputs let SwiftUI skip the
+    body when unrelated `AppState` fields mutate).
 
 ## When making changes
 

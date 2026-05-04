@@ -61,6 +61,19 @@ now reflects:
 6. **`swift-java` is a path dependency** at
    `/Users/adam/Developer/tools/swift-java`, not a remote git URL. SwiftPM
    correctly omits it from iOS resolution because no iOS target uses it.
+7. **iOS view layer evolved past spec §7.** The spec sketches a
+   `ContentView` that calls `appState.toggleFavorite(...)` directly and
+   pushes `AppModel` into descendant views. The shipped tree is
+   `RootView` → `CitiesScreen` → `CitiesContent` → `SearchResults` /
+   `FullCitiesList` → `CityRows`/`FavoritesSummary` → `CityRow`. Only
+   `RootView` holds `AppModel`; below it, views take narrow `AppState`
+   slices and dispatch via `@Environment(\.dispatch)` (an
+   `AppEventDispatch` `Equatable` callable struct — closures held in
+   `EnvironmentValues` without `Equatable` conformance defeat SwiftUI's
+   diff). Computed `some View` properties were also extracted into
+   proper View structs so SwiftUI gets per-section diffing checkpoints.
+   See `ios-app/AppCoreBridgeExample/RootView.swift` +
+   `AppEventDispatch.swift`, and `AGENT.md`'s iOS view-layer rules.
 
 ## Toolchain
 
