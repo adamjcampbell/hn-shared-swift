@@ -1,22 +1,22 @@
 import SwiftUI
 import AppCore
 
-struct ContentView: View {
+struct RootView: View {
     @State private var appModel = AppModel()
 
     var body: some View {
-        NavigationStack { CitiesContent(state: appModel.state) }
+        NavigationStack { CitiesScreen(state: appModel.state) }
         .environment(\.dispatch, AppEventDispatch(appModel))
     }
 }
 
-private struct CitiesContent: View {
+private struct CitiesScreen: View {
     let state: AppState
     @State private var searchText = ""
     @Environment(\.dispatch) private var dispatch
 
     var body: some View {
-        CitiesList(state: state, searchText: searchText)
+        CitiesContent(state: state, searchText: searchText)
             .searchable(text: $searchText, prompt: "Filter cities")
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
@@ -27,7 +27,7 @@ private struct CitiesContent: View {
     }
 }
 
-private struct CitiesList: View {
+private struct CitiesContent: View {
     let state: AppState
     let searchText: String
     @Environment(\.isSearching) private var isSearching
@@ -57,7 +57,7 @@ private struct CitiesList: View {
     private var fullList: some View {
         List {
             Section {
-                HeaderCard(
+                FavoritesSummary(
                     count: state.globalFavoriteCount,
                     lastRefreshedAt: state.lastRefreshedAt
                 )
@@ -88,7 +88,7 @@ private struct CityRows: View {
     }
 }
 
-private struct HeaderCard: View {
+private struct FavoritesSummary: View {
     let count: Int
     let lastRefreshedAt: Date?
 
