@@ -3,33 +3,22 @@ import AppCore
 
 struct ContentView: View {
     @State private var appModel = AppModel()
-    @State private var queryString = ""
+    @State private var searchText = ""
 
     var body: some View {
-        let appState = appModel.state
         NavigationStack {
             List {
                 Section {
                     HeaderCard(
-                        count: appState.globalFavoriteCount,
-                        lastRefreshedAt: appState.lastRefreshedAt
+                        count: appModel.state.globalFavoriteCount,
+                        lastRefreshedAt: appModel.state.lastRefreshedAt
                     )
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
                 }
                 Section {
-                    TextField("Filter cities", text: $queryString)
-                        .textFieldStyle(.roundedBorder)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                }
-                Section {
-                    ForEach(appState.cities) { city in
+                    ForEach(appModel.state.cities) { city in
                         CityRow(
                             city: city,
-                            isFavorite: appState.favorites.contains(city.id),
+                            isFavorite: appModel.state.favorites.contains(city.id),
                             onToggle: {
                                 Task { await appModel.dispatch(.toggleFavorite(id: city.id)) }
                             }
@@ -37,11 +26,21 @@ struct ContentView: View {
                     }
                 }
             }
+            .listStyle(.insetGrouped)
+            .scrollDismissesKeyboard(.immediately)
             .refreshable { await appModel.dispatch(.refresh) }
-            .onChange(of: queryString) { _, newValue in
+            .searchable(text: $searchText, prompt: "Filter cities")
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .onChange(of: searchText) { _, newValue in
                 Task { await appModel.dispatch(.setSearchQuery(value: newValue)) }
             }
             .navigationTitle("Cities")
+            .overlay {
+                if appModel.state.cities.isEmpty && !searchText.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                }
+            }
         }
     }
 }
@@ -58,9 +57,6 @@ private struct HeaderCard: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 12))
     }
 }
 
@@ -79,6 +75,8 @@ private struct CityRow: View {
             Button(action: onToggle) {
                 Image(systemName: isFavorite ? "heart.fill" : "heart")
                     .foregroundStyle(isFavorite ? .pink : .secondary)
+                    .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.bounce, value: isFavorite)
             }
             .buttonStyle(.plain)
         }
