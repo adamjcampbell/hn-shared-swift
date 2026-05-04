@@ -3,24 +3,31 @@ import AppCore
 
 struct ContentView: View {
     @State private var appModel = AppModel()
-    @State private var searchText = ""
 
     var body: some View {
-        NavigationStack {
-            CitiesContent(state: appModel.state, searchText: searchText)
-                .searchable(text: $searchText, prompt: "Filter cities")
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .onChange(of: searchText) { _, newValue in
-                    Task { await appModel.dispatch(.setSearchQuery(value: newValue)) }
-                }
-                .navigationTitle("Cities")
-        }
+        NavigationStack { CitiesContent(state: appModel.state) }
         .environment(\.dispatch, AppEventDispatch(appModel))
     }
 }
 
 private struct CitiesContent: View {
+    let state: AppState
+    @State private var searchText = ""
+    @Environment(\.dispatch) private var dispatch
+
+    var body: some View {
+        CitiesList(state: state, searchText: searchText)
+            .searchable(text: $searchText, prompt: "Filter cities")
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .onChange(of: searchText) { _, newValue in
+                dispatch(.setSearchQuery(value: newValue))
+            }
+            .navigationTitle("Cities")
+    }
+}
+
+private struct CitiesList: View {
     let state: AppState
     let searchText: String
     @Environment(\.isSearching) private var isSearching
