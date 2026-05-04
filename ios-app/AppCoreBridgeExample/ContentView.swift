@@ -7,40 +7,73 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    HeaderCard(
-                        count: appModel.state.globalFavoriteCount,
-                        lastRefreshedAt: appModel.state.lastRefreshedAt
-                    )
+            CitiesContent(appModel: appModel, searchText: searchText)
+                .searchable(text: $searchText, prompt: "Filter cities")
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .onChange(of: searchText) { _, newValue in
+                    Task { await appModel.dispatch(.setSearchQuery(value: newValue)) }
                 }
-                Section {
-                    ForEach(appModel.state.cities) { city in
-                        CityRow(
-                            city: city,
-                            isFavorite: appModel.state.favorites.contains(city.id),
-                            onToggle: {
-                                Task { await appModel.dispatch(.toggleFavorite(id: city.id)) }
-                            }
-                        )
-                    }
+                .navigationTitle("Cities")
+        }
+    }
+}
+
+private struct CitiesContent: View {
+    let appModel: AppModel
+    let searchText: String
+    @Environment(\.isSearching) private var isSearching
+
+    var body: some View {
+        Group {
+            if isSearching {
+                searchResults
+            } else {
+                fullList
+            }
+        }
+        .scrollDismissesKeyboard(.immediately)
+    }
+
+    @ViewBuilder
+    private var searchResults: some View {
+        if appModel.state.cities.isEmpty && !searchText.isEmpty {
+            ContentUnavailableView.search(text: searchText)
+        } else {
+            List { CityRows(appModel: appModel) }
+                .listStyle(.plain)
+        }
+    }
+
+    private var fullList: some View {
+        List {
+            Section {
+                HeaderCard(
+                    count: appModel.state.globalFavoriteCount,
+                    lastRefreshedAt: appModel.state.lastRefreshedAt
+                )
+            }
+            Section { CityRows(appModel: appModel) }
+        }
+        .listStyle(.insetGrouped)
+        .refreshable {
+            await appModel.dispatch(.refresh)
+        }
+    }
+}
+
+private struct CityRows: View {
+    let appModel: AppModel
+
+    var body: some View {
+        ForEach(appModel.state.cities) { city in
+            CityRow(
+                city: city,
+                isFavorite: appModel.state.favorites.contains(city.id),
+                onToggle: {
+                    Task { await appModel.dispatch(.toggleFavorite(id: city.id)) }
                 }
-            }
-            .listStyle(.insetGrouped)
-            .scrollDismissesKeyboard(.immediately)
-            .refreshable { await appModel.dispatch(.refresh) }
-            .searchable(text: $searchText, prompt: "Filter cities")
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .onChange(of: searchText) { _, newValue in
-                Task { await appModel.dispatch(.setSearchQuery(value: newValue)) }
-            }
-            .navigationTitle("Cities")
-            .overlay {
-                if appModel.state.cities.isEmpty && !searchText.isEmpty {
-                    ContentUnavailableView.search(text: searchText)
-                }
-            }
+            )
         }
     }
 }
