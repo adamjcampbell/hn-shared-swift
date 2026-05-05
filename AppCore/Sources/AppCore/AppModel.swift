@@ -58,10 +58,10 @@ public final class AppModel {
         case .toggleRead(let id):
             toggleRead(id)
         case .refresh:
-            await runFetch(debounce: .immediately)
+            await runFetch(debounce: nil)
         case .setSearchQuery(let value):
             state.searchQuery = value
-            await runFetch(debounce: .after(Self.searchDebounce))
+            await runFetch(debounce: Self.searchDebounce)
         }
     }
 
@@ -81,18 +81,16 @@ public final class AppModel {
     /// `CancellationError`, the body returns `.cancelled`, and the prior
     /// dispatch's `await searchTask?.value` here resolves to `.cancelled`
     /// — at which point the prior dispatch returns without committing
-    /// anything to `state`.
-    private func runFetch(debounce: DebounceMode) async {
+    /// anything to `state`. `debounce: nil` runs the fetch immediately.
+    private func runFetch(debounce: Duration?) async {
         searchTask?.cancel()
 
         let query = state.searchQuery
         let task = Task<FetchOutcome, Never> { [client] in
-            if case .after(let duration) = debounce {
-                do {
-                    try await Task.sleep(for: duration)
-                } catch {
-                    return .cancelled
-                }
+            if let debounce {
+                // If sleep is cancelled, fall through — the next URLSession
+                // call will see Task.isCancelled and throw immediately.
+                try? await Task.sleep(for: debounce)
             }
             do {
                 let stories = query.isEmpty
@@ -107,8 +105,7 @@ public final class AppModel {
         }
         searchTask = task
 
-        state.isLoading = true
-        state.loadError = nil
+        if !state.isLoading { state.isLoading = true }
 
         switch await task.value {
         case .cancelled:
@@ -119,17 +116,13 @@ public final class AppModel {
         case .success(let stories):
             state.stories = stories
             state.lastRefreshedAt = .now
+            state.loadError = nil
             state.isLoading = false
         case .failure(let message):
             state.loadError = message
             state.isLoading = false
         }
     }
-}
-
-private enum DebounceMode: Sendable {
-    case immediately
-    case after(Duration)
 }
 
 private enum FetchOutcome: Sendable {
