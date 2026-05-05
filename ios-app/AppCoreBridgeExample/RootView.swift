@@ -151,14 +151,21 @@ private struct StoryRow: View {
     let story: Story
     let isRead: Bool
     @Environment(\.dispatch) private var dispatch
+    @State private var presented: IdentifiableURL?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 if let urlString = story.url, let url = URL(string: urlString) {
-                    Link(story.title, destination: url)
-                        .font(.body)
-                        .foregroundStyle(isRead ? .secondary : .primary)
+                    Button {
+                        presented = IdentifiableURL(url: url)
+                    } label: {
+                        Text(story.title)
+                            .font(.body)
+                            .foregroundStyle(isRead ? .secondary : .primary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .buttonStyle(.plain)
                 } else {
                     Text(story.title)
                         .font(.body)
@@ -178,6 +185,10 @@ private struct StoryRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(isRead ? "Mark unread" : "Mark read")
+        }
+        .sheet(item: $presented) { item in
+            SafariView(url: item.url)
+                .ignoresSafeArea()
         }
     }
 
