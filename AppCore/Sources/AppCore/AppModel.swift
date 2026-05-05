@@ -26,6 +26,12 @@ public final class AppModel {
     @ObservationIgnored
     private let client: HNClient
 
+    /// Driver of the debounce sleep. `ContinuousClock()` in production;
+    /// tests inject a `TestClock` so the 250 ms debounce doesn't translate
+    /// into 250 ms of real-clock waiting per test.
+    @ObservationIgnored
+    private let clock: any Clock<Duration>
+
     /// In-flight network task. Replaced (and the predecessor cancelled)
     /// on every `.refresh` and post-debounce `.setSearchQuery` — only one
     /// fetch runs at a time, and the latest dispatch always wins.
@@ -35,8 +41,12 @@ public final class AppModel {
     /// Debounce window for `.setSearchQuery`.
     static let searchDebounce: Duration = .milliseconds(250)
 
-    public init(client: HNClient = HNClient()) {
+    public init(
+        client: HNClient = HNClient(),
+        clock: any Clock<Duration> = ContinuousClock()
+    ) {
         self.client = client
+        self.clock = clock
     }
 
     /// Single entry point for every user-driven mutation.
@@ -86,11 +96,18 @@ public final class AppModel {
         searchTask?.cancel()
 
         let query = state.searchQuery
-        let task = Task<FetchOutcome, Never> { [client] in
+        let task = Task<FetchOutcome, Never> { [client, clock] in
             if let debounce {
-                // If sleep is cancelled, fall through — the next URLSession
-                // call will see Task.isCancelled and throw immediately.
-                try? await Task.sleep(for: debounce)
+                do {
+                    try await clock.sleep(for: debounce)
+                } catch {
+                    // Cancelled during the debounce wait. Bail before
+                    // calling the client — the bail must happen here, not
+                    // implicitly via the fetch's downstream cancellation
+                    // throw, because test mocks can't be expected to honor
+                    // cancellation as faithfully as URLSession.
+                    return .cancelled
+                }
             }
             do {
                 let stories = query.isEmpty

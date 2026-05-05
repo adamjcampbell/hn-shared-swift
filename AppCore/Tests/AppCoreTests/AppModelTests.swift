@@ -1,44 +1,44 @@
+import Clocks
 import Foundation
 import Testing
 @testable import AppCore
 
-private let twoStoriesFixture: String = #"""
-{
-  "hits": [
-    {
-      "objectID": "100",
-      "title": "Top story",
-      "author": "alice",
-      "points": 50,
-      "num_comments": 10,
-      "url": "https://example.com/a",
-      "created_at": "2026-05-04T08:00:00.000Z"
-    },
-    {
-      "objectID": "101",
-      "title": "Second story",
-      "author": "bob",
-      "points": 20,
-      "num_comments": 3,
-      "url": null,
-      "created_at": "2026-05-04T08:01:00.000Z"
-    }
-  ]
+private let storyA = Story(
+    id: "100", title: "Top story", author: "alice",
+    points: 50, commentCount: 10,
+    url: "https://example.com/a",
+    createdAt: Date(timeIntervalSince1970: 1)
+)
+private let storyB = Story(
+    id: "101", title: "Second story", author: "bob",
+    points: 20, commentCount: 3,
+    url: nil,
+    createdAt: Date(timeIntervalSince1970: 2)
+)
+
+/// Records the queries the mock client was called with. An actor so the
+/// `@Sendable` closures in the mock can mutate it from the Task's
+/// executor while the test reads it from MainActor.
+private actor CallRecorder {
+    private(set) var frontPageCalls = 0
+    private(set) var searchCalls: [String] = []
+
+    func recordFrontPage() { frontPageCalls += 1 }
+    func recordSearch(_ query: String) { searchCalls.append(query) }
 }
-"""#
 
-@Suite("AppModel", .serialized)
+@Suite("AppModel")
 struct AppModelTests {
-
-    init() { URLProtocolStub.reset() }
 
     @Test("refresh populates stories and timestamp")
     func refresh_populatesStoriesAndTimestamp() async {
-        URLProtocolStub.responder = { request in
-            okResponse(twoStoriesFixture, for: request.url!)
-        }
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { [storyA, storyB] },
+                search: { _ in [] }
+            )
+        )
 
-        let model = AppModel(client: HNClient(session: makeStubbedSession()))
         #expect(model.state.stories.isEmpty)
         #expect(model.state.lastRefreshedAt == nil)
 
@@ -53,8 +53,13 @@ struct AppModelTests {
 
     @Test("refresh records loadError on failure")
     func refresh_recordsErrorOnFailure() async {
-        // Responder unset → URLProtocolStub fails the request.
-        let model = AppModel(client: HNClient(session: makeStubbedSession()))
+        struct Boom: Error {}
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { throw Boom() },
+                search: { _ in throw Boom() }
+            )
+        )
 
         await model.dispatch(.refresh)
 
@@ -65,7 +70,9 @@ struct AppModelTests {
 
     @Test("toggleRead adds and removes")
     func toggleRead_addsAndRemoves() async {
-        let model = AppModel()
+        let model = AppModel(
+            client: HNClient(frontPage: { [] }, search: { _ in [] })
+        )
         #expect(model.state.read.contains("100") == false)
 
         await model.dispatch(.toggleRead(id: "100"))
@@ -77,86 +84,132 @@ struct AppModelTests {
 
     @Test("read state survives a refresh")
     func toggleRead_survivesRefresh() async {
-        URLProtocolStub.responder = { request in
-            okResponse(twoStoriesFixture, for: request.url!)
-        }
-
-        let model = AppModel(client: HNClient(session: makeStubbedSession()))
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { [storyA, storyB] },
+                search: { _ in [] }
+            )
+        )
         await model.dispatch(.toggleRead(id: "100"))
         #expect(model.state.read.contains("100"))
 
         await model.dispatch(.refresh)
-        // The id is back in the freshly fetched list, AND still in read.
         #expect(model.state.stories.contains(where: { $0.id == "100" }))
         #expect(model.state.read.contains("100"))
     }
 
     @Test("setSearchQuery debounces, then fires one request")
+    @MainActor
     func setSearchQuery_firesDebouncedRequest() async {
-        var requestCount = 0
-        URLProtocolStub.requestRecorder = { _ in requestCount += 1 }
-        URLProtocolStub.responder = { request in
-            okResponse(twoStoriesFixture, for: request.url!)
-        }
+        let calls = CallRecorder()
+        let clock = TestClock()
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { [] },
+                search: { query in
+                    await calls.recordSearch(query)
+                    return [storyA]
+                }
+            ),
+            clock: clock
+        )
 
-        let model = AppModel(client: HNClient(session: makeStubbedSession()))
-        await model.dispatch(.setSearchQuery(value: "rust"))
+        let dispatch = Task { @MainActor in
+            await model.dispatch(.setSearchQuery(value: "rust"))
+        }
+        // Yield until the dispatch is parked in `clock.sleep`.
+        await Task.megaYield()
+        await clock.advance(by: AppModel.searchDebounce)
+        await dispatch.value
 
         #expect(model.state.searchQuery == "rust")
-        // The single dispatch slept the debounce inline, then issued
-        // exactly one request. Result committed on completion.
-        #expect(requestCount == 1)
-        #expect(model.state.stories.count == 2)
+        #expect(model.state.stories.map(\.id) == ["100"])
+        await #expect(calls.searchCalls == ["rust"])
         #expect(model.state.isLoading == false)
     }
 
-    // The cancel-and-replace property — three concurrent
-    // `.setSearchQuery` dispatches collapse to one HTTP request, and a
-    // `.refresh` during a pending debounce cancels the pending search —
-    // is verifiable in code but flaky to test through `URLProtocolStub`,
-    // because the stub answers requests synchronously inside
-    // `startLoading`. By the time `searchTask?.cancel()` propagates, the
-    // about-to-be-cancelled task has often already received its response,
-    // so the request still counts as "fired" from the test's point of
-    // view. Real network calls are slow enough for cancellation to win;
-    // a stubbed test would need a sleeping responder to simulate that,
-    // which is its own can of worms.
-    //
-    // The property is argued from the code: every dispatch arm that
-    // wants to win calls `searchTask?.cancel()` before storing its own
-    // task; the prior task's `URLSession.data` throws `CancellationError`
-    // on cancel, which surfaces as `.cancelled` in the prior dispatch's
-    // `await searchTask.value` and skips the commit.
+    @Test("rapid keystrokes coalesce — only the latest fires")
+    @MainActor
+    func setSearchQuery_coalescesRapidKeystrokes() async {
+        let calls = CallRecorder()
+        let clock = TestClock()
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { [] },
+                search: { query in
+                    await calls.recordSearch(query)
+                    return [storyA]
+                }
+            ),
+            clock: clock
+        )
 
-    @Test("refresh uses search endpoint when searchQuery is non-empty")
-    func refresh_searchPath() async throws {
-        var lastURL: URL?
-        URLProtocolStub.responder = { request in
-            lastURL = request.url
-            return okResponse(twoStoriesFixture, for: request.url!)
+        // Fire three concurrent dispatches on MainActor. Each one
+        // synchronously cancels the prior `searchTask` and parks in
+        // `clock.sleep`.
+        let t1 = Task { @MainActor in await model.dispatch(.setSearchQuery(value: "ru")) }
+        let t2 = Task { @MainActor in await model.dispatch(.setSearchQuery(value: "rus")) }
+        let t3 = Task { @MainActor in await model.dispatch(.setSearchQuery(value: "rust")) }
+        await Task.megaYield()
+
+        // Advance the virtual clock past the debounce. The cancelled
+        // sleeps return CancellationError; only the latest survives to
+        // call `client.search`.
+        await clock.advance(by: AppModel.searchDebounce)
+        await t1.value
+        await t2.value
+        await t3.value
+
+        await #expect(calls.searchCalls == ["rust"])
+        #expect(model.state.searchQuery == "rust")
+        #expect(model.state.stories.map(\.id) == ["100"])
+    }
+
+    @Test("refresh during pending debounce cancels the pending search")
+    @MainActor
+    func refresh_cancelsPendingDebounce() async {
+        let calls = CallRecorder()
+        let clock = TestClock()
+        let model = AppModel(
+            client: HNClient(
+                frontPage: {
+                    await calls.recordFrontPage()
+                    return [storyA, storyB]
+                },
+                search: { query in
+                    await calls.recordSearch(query)
+                    return [storyA]
+                }
+            ),
+            clock: clock
+        )
+
+        // Start a pending search whose debounce is in flight, then fire
+        // refresh. Refresh's own `runFetch` cancels the pending task.
+        let pending = Task { @MainActor in
+            await model.dispatch(.setSearchQuery(value: "rust"))
         }
-
-        let model = AppModel(client: HNClient(session: makeStubbedSession()))
-        await model.dispatch(.setSearchQuery(value: "rust"))
+        await Task.megaYield()
         await model.dispatch(.refresh)
+        // Drain the pending dispatch (its sleep was cancelled, so it
+        // resolves to .cancelled and returns).
+        await clock.advance(by: AppModel.searchDebounce)
+        await pending.value
 
-        let url = try #require(lastURL)
-        #expect(url.path == "/api/v1/search")
-        #expect(url.absoluteString.contains("query=rust"))
+        // Refresh ran with searchQuery already set to "rust", so it hit
+        // the search endpoint. The pending dispatch's debounce got
+        // cancelled before it could fire its own request.
+        await #expect(calls.frontPageCalls == 0)
+        await #expect(calls.searchCalls == ["rust"])
     }
 
     @Test("dispatch resumes on caller's actor (SE-0461)")
     @MainActor
     func dispatch_runsOnCallersActor() async {
-        URLProtocolStub.responder = { request in
-            okResponse(twoStoriesFixture, for: request.url!)
-        }
-
-        let model = AppModel(client: HNClient(session: makeStubbedSession()))
+        let model = AppModel(
+            client: HNClient(frontPage: { [] }, search: { _ in [] })
+        )
         await model.dispatch(.refresh)
-        // SE-0461: NonisolatedNonsendingByDefault means dispatch runs on
-        // the caller's actor (MainActor here) and the resumption after
-        // the await stays on it.
         MainActor.assertIsolated()
     }
 }

@@ -5,27 +5,73 @@ import FoundationNetworking
 
 /// HTTP client for the Algolia Hacker News search API.
 ///
-/// **Why a `final class` and not an `actor`:** the client has no shared
-/// mutable state to protect — `baseURL`, `productionSession`, and
-/// `decoder` are `static let` of well-known thread-safe types, and the
-/// instance-level `session` is `let`. Methods are `async` and unannotated,
-/// so under SE-0461 (`NonisolatedNonsendingByDefault`, enabled package-
-/// wide) they run on the **caller's** actor: iOS calls run on `MainActor`,
-/// Android calls run on the `AndroidBridge` actor. Promoting the class to
-/// an actor would add two pointless hops per call without protecting
-/// anything.
+/// **Closure-struct shape, not a class.** The struct holds two
+/// `@Sendable` closure properties — `frontPage` and `search` — which
+/// `AppModel` calls. This is the natural mock point: tests inject
+/// closures directly without going through `URLSession` or
+/// `URLProtocol`. Production callers use the no-arg `init()`, which
+/// wires the closures to `URLSession.shared`-style live HTTP.
 ///
-/// **`Sendable` conformance:** `HNClient` only holds `let` properties of
-/// thread-safe types (`URLSession`, `JSONDecoder`, static `URL`). Marking
-/// it `Sendable` is what makes the cancel-and-replace pattern in
-/// `AppModel` possible: the unstructured `Task` that issues the HTTP
-/// call captures `[client]` directly, with no `self` capture, so the
-/// closure has no non-Sendable region to send across.
+/// **`Sendable`.** All properties are `@Sendable` closures of
+/// `Sendable` types, so the whole struct is `Sendable`. That's what
+/// makes the cancel-and-replace pattern in `AppModel` work: the
+/// unstructured `Task` that issues the HTTP call captures `[client]`
+/// directly, with no `self` capture, so the closure has no
+/// non-Sendable region to send across.
 ///
-/// **Cancellation:** every method calls `URLSession.data(from:)`, which
-/// throws `CancellationError` when the surrounding `Task` is cancelled.
-/// `AppModel` relies on this for debounced search.
-public final class HNClient: Sendable {
+/// **Cancellation.** The live closures call `URLSession.data(from:)`,
+/// which throws `CancellationError` when the surrounding `Task` is
+/// cancelled. Test closures use the project's `TestClock` to make
+/// cancellation deterministic.
+public struct HNClient: Sendable {
+    public var frontPage: @Sendable () async throws -> [Story]
+    public var search: @Sendable (_ query: String) async throws -> [Story]
+
+    public init(
+        frontPage: @escaping @Sendable () async throws -> [Story],
+        search: @escaping @Sendable (_ query: String) async throws -> [Story]
+    ) {
+        self.frontPage = frontPage
+        self.search = search
+    }
+}
+
+extension HNClient {
+    /// Live implementation hitting `hn.algolia.com/api/v1`.
+    public init() {
+        self.init(session: HNClient.productionSession)
+    }
+
+    /// Test seam for URL-construction tests that want to drive the
+    /// live HTTP path through a `URLProtocol`-stubbed `URLSession`.
+    /// Module-internal so production callers can't pass a session by
+    /// accident.
+    init(session: URLSession) {
+        self.init(
+            frontPage: {
+                try await HNClient.fetch(
+                    session: session,
+                    path: "search_by_date",
+                    queryItems: [
+                        URLQueryItem(name: "tags", value: "front_page"),
+                        URLQueryItem(name: "hitsPerPage", value: "50"),
+                    ]
+                )
+            },
+            search: { query in
+                try await HNClient.fetch(
+                    session: session,
+                    path: "search",
+                    queryItems: [
+                        URLQueryItem(name: "query", value: query),
+                        URLQueryItem(name: "tags", value: "story"),
+                        URLQueryItem(name: "hitsPerPage", value: "50"),
+                    ]
+                )
+            }
+        )
+    }
+
     private static let baseURL = URL(string: "https://hn.algolia.com/api/v1/")!
 
     private static let decoder: JSONDecoder = {
@@ -34,57 +80,27 @@ public final class HNClient: Sendable {
         return decoder
     }()
 
-    private static let productionSession: URLSession = {
+    static let productionSession: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 10
-        // Note: `waitsForConnectivity` is read-only in swift-corelibs-
-        // Foundation (Android/Linux), so we don't touch it. The default
-        // is false on both platforms anyway.
+        // `waitsForConnectivity` is read-only on swift-corelibs-Foundation
+        // (Android/Linux), so we don't touch it. The default (`false`) is
+        // what we want anyway.
         return URLSession(configuration: configuration)
     }()
 
-    private let session: URLSession
-
-    public init() {
-        self.session = Self.productionSession
-    }
-
-    /// Test-only initialiser. Module-internal so production callers can't
-    /// pass a custom session by accident, but `AppCoreTests` can construct
-    /// one wired to a `URLProtocol` stub.
-    init(session: URLSession) {
-        self.session = session
-    }
-
-    public func frontPage() async throws -> [Story] {
-        try await fetch(
-            path: "search_by_date",
-            queryItems: [
-                URLQueryItem(name: "tags", value: "front_page"),
-                URLQueryItem(name: "hitsPerPage", value: "50"),
-            ]
-        )
-    }
-
-    public func search(_ query: String) async throws -> [Story] {
-        try await fetch(
-            path: "search",
-            queryItems: [
-                URLQueryItem(name: "query", value: query),
-                URLQueryItem(name: "tags", value: "story"),
-                URLQueryItem(name: "hitsPerPage", value: "50"),
-            ]
-        )
-    }
-
-    private func fetch(path: String, queryItems: [URLQueryItem]) async throws -> [Story] {
+    private static func fetch(
+        session: URLSession,
+        path: String,
+        queryItems: [URLQueryItem]
+    ) async throws -> [Story] {
         var components = URLComponents(
-            url: Self.baseURL.appendingPathComponent(path),
+            url: HNClient.baseURL.appendingPathComponent(path),
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = queryItems
         let (data, _) = try await session.data(from: components.url!)
-        let response = try Self.decoder.decode(HNSearchResponse.self, from: data)
+        let response = try HNClient.decoder.decode(HNSearchResponse.self, from: data)
         return response.hits.compactMap(Story.init(hit:))
     }
 }

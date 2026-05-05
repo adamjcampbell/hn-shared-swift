@@ -29,6 +29,10 @@ let package = Package(
         // Main extends the upper bound to `<604`. Re-pin to a version
         // tag once MetaCodable cuts a release that includes the bump.
         .package(url: "https://github.com/SwiftyLab/MetaCodable.git", branch: "main"),
+        // Test-only: deterministic time control via TestClock so the
+        // 250 ms debounce in AppModel doesn't translate into 250 ms of
+        // real-clock waiting per test.
+        .package(url: "https://github.com/pointfreeco/swift-clocks", from: "1.0.0"),
     ],
     targets: [
         .target(
@@ -52,7 +56,10 @@ let package = Package(
         ),
         .testTarget(
             name: "AppCoreTests",
-            dependencies: ["AppCore"],
+            dependencies: [
+                "AppCore",
+                .product(name: "Clocks", package: "swift-clocks"),
+            ],
             swiftSettings: sharedSettings
         ),
     ]
