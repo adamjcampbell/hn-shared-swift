@@ -33,19 +33,18 @@ private struct CitiesContent: View {
     @Environment(\.isSearching) private var isSearching
 
     var body: some View {
-        Group {
+        FullCitiesList(
+            cities: state.cities,
+            favorites: state.favorites,
+            count: state.globalFavoriteCount,
+            lastRefreshedAt: state.lastRefreshedAt
+        )
+        .overlay {
             if isSearching {
                 SearchResults(
                     cities: state.cities,
                     favorites: state.favorites,
                     searchText: searchText
-                )
-            } else {
-                FullCitiesList(
-                    cities: state.cities,
-                    favorites: state.favorites,
-                    count: state.globalFavoriteCount,
-                    lastRefreshedAt: state.lastRefreshedAt
                 )
             }
         }
@@ -59,12 +58,14 @@ private struct SearchResults: View {
     let searchText: String
 
     var body: some View {
-        if cities.isEmpty && !searchText.isEmpty {
-            ContentUnavailableView.search(text: searchText)
-        } else {
-            List { CityRows(cities: cities, favorites: favorites) }
-                .listStyle(.plain)
-        }
+        List { CityRows(cities: cities, favorites: favorites) }
+            .listStyle(.plain)
+            .background(.background)
+            .overlay {
+                if cities.isEmpty && !searchText.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                }
+            }
     }
 }
 
