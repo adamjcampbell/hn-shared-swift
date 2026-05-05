@@ -36,7 +36,7 @@ public final class AppModel {
     /// on every `.refresh` and post-debounce `.setSearchQuery` — only one
     /// fetch runs at a time, and the latest dispatch always wins.
     @ObservationIgnored
-    private var searchTask: Task<FetchOutcome, Never>?
+    private var searchTask: Task<[Story], Error>?
 
     /// Debounce window for `.setSearchQuery`.
     static let searchDebounce: Duration = .milliseconds(250)
@@ -96,54 +96,32 @@ public final class AppModel {
         searchTask?.cancel()
 
         let query = state.searchQuery
-        let task = Task<FetchOutcome, Never> { [client, clock] in
+        let task = Task<[Story], Error> { [client, clock] in
             if let debounce {
-                do {
-                    try await clock.sleep(for: debounce)
-                } catch {
-                    // Cancelled during the debounce wait. Bail before
-                    // calling the client — the bail must happen here, not
-                    // implicitly via the fetch's downstream cancellation
-                    // throw, because test mocks can't be expected to honor
-                    // cancellation as faithfully as URLSession.
-                    return .cancelled
-                }
+                try await clock.sleep(for: debounce)
             }
-            do {
-                let stories = query.isEmpty
-                    ? try await client.frontPage()
-                    : try await client.search(query)
-                return .success(stories)
-            } catch is CancellationError {
-                return .cancelled
-            } catch {
-                return .failure(error.localizedDescription)
-            }
+            return query.isEmpty
+                ? try await client.frontPage()
+                : try await client.search(query)
         }
         searchTask = task
 
         if !state.isLoading { state.isLoading = true }
 
-        switch await task.value {
-        case .cancelled:
-            // A newer dispatch superseded us. The newer one is responsible
-            // for committing its own result; leave isLoading=true so the
-            // spinner stays until that fetch settles.
-            return
-        case .success(let stories):
+        do {
+            let stories = try await task.value
             state.stories = stories
             state.lastRefreshedAt = .now
             state.loadError = nil
             state.isLoading = false
-        case .failure(let message):
-            state.loadError = message
+        } catch is CancellationError {
+            // A newer dispatch superseded us. The newer one is responsible
+            // for committing its own result; leave isLoading=true so the
+            // spinner stays until that fetch settles.
+            return
+        } catch {
+            state.loadError = error.localizedDescription
             state.isLoading = false
         }
     }
-}
-
-private enum FetchOutcome: Sendable {
-    case success([Story])
-    case failure(String)
-    case cancelled
 }
