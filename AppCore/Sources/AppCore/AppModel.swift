@@ -38,6 +38,11 @@ public final class AppModel {
     @ObservationIgnored
     private var searchTask: Task<[Story], Error>?
 
+    /// Debounce window for `.setSearchQuery`. Exposed (rather than
+    /// inlined) so tests can name the same duration when advancing
+    /// their `TestClock`.
+    static let searchDebounce: Duration = .milliseconds(250)
+
     public init(
         client: HNClient = HNClient(),
         clock: any Clock<Duration> = ContinuousClock()
@@ -68,7 +73,7 @@ public final class AppModel {
             await runFetch()
         case .setSearchQuery(let value):
             state.searchQuery = value
-            await runFetch(debounce: .milliseconds(250))
+            await runFetch(debounce: Self.searchDebounce)
         }
     }
 

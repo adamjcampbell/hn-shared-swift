@@ -119,7 +119,7 @@ struct AppModelTests {
         }
         // Yield until the dispatch is parked in `clock.sleep`.
         await Task.megaYield()
-        await clock.advance(by: .milliseconds(250))
+        await clock.advance(by: AppModel.searchDebounce)
         await dispatch.value
 
         #expect(model.state.searchQuery == "rust")
@@ -155,7 +155,7 @@ struct AppModelTests {
         // Advance the virtual clock past the debounce. The cancelled
         // sleeps return CancellationError; only the latest survives to
         // call `client.search`.
-        await clock.advance(by: .milliseconds(250))
+        await clock.advance(by: AppModel.searchDebounce)
         await t1.value
         await t2.value
         await t3.value
@@ -193,7 +193,7 @@ struct AppModelTests {
         await model.dispatch(.refresh)
         // Drain the pending dispatch (its sleep was cancelled, so it
         // resolves to .cancelled and returns).
-        await clock.advance(by: .milliseconds(250))
+        await clock.advance(by: AppModel.searchDebounce)
         await pending.value
 
         // Refresh ran with searchQuery already set to "rust", so it hit
