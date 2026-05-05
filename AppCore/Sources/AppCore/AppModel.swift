@@ -118,7 +118,7 @@ public final class AppModel {
         }
         searchTask = task
 
-        if !state.isLoading { state.isLoading = true }
+        state.isLoading = true
 
         do {
             let stories = try await task.value
