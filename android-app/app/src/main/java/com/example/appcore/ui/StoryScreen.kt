@@ -47,7 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -262,14 +262,14 @@ private fun HeaderCard(
 
 @Composable
 private fun StoryRow(story: Story, isRead: Boolean, onToggle: () -> Unit) {
-    val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
     val contentColor = if (isRead) {
         MaterialTheme.colorScheme.onSurfaceVariant
     } else {
         MaterialTheme.colorScheme.onSurface
     }
     val rowModifier = story.url?.let { url ->
-        Modifier.clickable { uriHandler.openUri(url) }
+        Modifier.clickable { context.launchCustomTab(url) }
     } ?: Modifier
 
     val host = story.url?.let { runCatching { java.net.URI(it).host }.getOrNull() }
