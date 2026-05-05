@@ -28,15 +28,6 @@ actor AndroidBridge {
     private var sink: (any SnapshotSink)?
     private var observationTask: Task<Void, Never>?
 
-    /// Last `AppState` we delivered through the sink. Used to skip the
-    /// JSON-encode + JNI hop when an `Observations` emission is byte-
-    /// identical to the prior one — `Observations` itself doesn't dedup
-    /// (every `willSet` starts a transaction, even if the value didn't
-    /// change), and Compose's `mutableStateOf<AppState?>` only saves
-    /// the recompose, not the wire round-trip. ~10–30 KB of held state
-    /// to avoid ~100 µs of JNI per redundant emission.
-    private var lastDeliveredState: AppState?
-
     private init() {}
 
     /// Attach a snapshot sink and (re)start the observation loop. Idempotent:
@@ -46,13 +37,23 @@ actor AndroidBridge {
     func attach(sink: any SnapshotSink) {
         observationTask?.cancel()
         self.sink = sink
-        lastDeliveredState = nil
         #if canImport(Android)
         observationTask = Task { [self] in
+            // `lastDeliveredState` skips the JSON-encode + JNI hop when
+            // an `Observations` emission is byte-identical to the prior
+            // one. `Observations` itself doesn't dedup (every `willSet`
+            // starts a transaction even if the value didn't change), and
+            // Compose's `mutableStateOf<AppState?>` only saves the
+            // recompose, not the wire round-trip. Holding a ~10–30 KB
+            // copy buys back ~100 µs of JNI per skipped emission.
+            //
+            // Local to the Task — re-attach cancels and respawns, so a
+            // fresh sink gets a fresh comparison automatically.
+            var lastDeliveredState: AppState?
             let observations = Observations { self.appModel.state }
             for await state in observations {
-                guard state != self.lastDeliveredState else { continue }
-                self.lastDeliveredState = state
+                guard state != lastDeliveredState else { continue }
+                lastDeliveredState = state
                 self.sink?.deliver(snapshotJSON: state.toJSON())
             }
         }

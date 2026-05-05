@@ -91,14 +91,18 @@ Per spec §12 plus what verification surfaced:
   `State` — that collides with SwiftUI's `@State` property wrapper in
   iOS code.
 - **`AndroidBridge` deduplicates emissions before the JNI hop.** The
-  observation loop holds `lastDeliveredState: AppState?` and skips
-  `sink.deliver` when the new state equals the prior one. `Observations`
-  starts a transaction on every `willSet` regardless of value-equality,
-  so without this guard a redundant write (e.g. `state.isLoading = true`
-  when already true) would JSON-encode and JNI-hop for nothing.
-  Compose's `mutableStateOf<AppState?>` saves the recompose either way,
-  but the wire round-trip costs ~100 µs per skipped emission. Holding a
+  observation `Task` body holds a local `var lastDeliveredState:
+  AppState?` and skips `sink.deliver` when the new state equals the
+  prior one. `Observations` starts a transaction on every `willSet`
+  regardless of value-equality, so without this guard a redundant
+  write (e.g. `state.isLoading = true` when already true) would
+  JSON-encode and JNI-hop for nothing. Compose's
+  `mutableStateOf<AppState?>` saves the recompose either way, but the
+  wire round-trip costs ~100 µs per skipped emission. Holding a
   ~10–30 KB copy of the prior state is the cheap end of the trade.
+  The dedup state lives inside the Task closure rather than on the
+  actor — `attach` cancels and respawns the Task, so a fresh sink
+  gets a fresh comparison automatically.
 - **Debouncing lives inside `AppModel.dispatch`, not the platform UI.**
   `.setSearchQuery` cancel-and-replaces a stored
   `searchTask: Task<[Story], Error>?`. The platform UI just forwards
