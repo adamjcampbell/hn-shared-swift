@@ -2,7 +2,12 @@
 
 A minimal, runnable example of a single Swift `@Observable` model shared
 between an iOS SwiftUI app and an Android Jetpack Compose app, **without
-Skip**, on the official Swift Android SDK.
+Skip**, on the official Swift Android SDK. The example is a small Hacker
+News reader: front-page stories, server-side search via the free
+[Algolia HN API](https://hn.algolia.com/api), and a per-story read
+indicator. Networking lives in Swift (`URLSession` via conditional
+`import FoundationNetworking` on Android); both UIs only render the
+snapshot.
 
 [`swift-observable-compose-bridge-spec.md`](swift-observable-compose-bridge-spec.md)
 is the original implementation spec. [`AGENT.md`](AGENT.md) lists project
@@ -26,18 +31,26 @@ goals and non-goals at a glance.
 
 | Surface | Tested how | Status |
 |---|---|---|
-| `AppCore` SwiftPM target | `swift test --disable-sandbox` on macOS (JAVA_HOME=JDK 21), 4/4 §11 tests pass | ✅ |
-| iOS app | `xcodebuild` for `iPhone 17 / iOS 26.4.1` simulator + manual launch | ✅ |
+| `AppCore` SwiftPM target | `swift test --disable-sandbox --no-parallel` on macOS (JAVA_HOME=JDK 21), 16/16 tests pass | ✅ |
+| iOS app | `xcodebuild` for `iPhone 17 / iOS 26.4.1` simulator | ✅ |
 | Android: build | `./gradlew :app:assembleDebug` produces `app-debug.apk` | ✅ |
 | Android: cold start | `BridgePerfTest.a_coldStart_…` regression test (50 ms timeout) | ✅ |
-| Android: end-to-end | `Medium_Phone_API_36.1` AVD; heart toggle reorders, pull-to-refresh updates header | ✅ |
-| Performance | See `BridgePerfTest`: sync JNI ~625 ns, full round-trip ~100 µs median | ✅ |
+| Performance | See `BridgePerfTest`: sync JNI ~625 ns, full round-trip ~100 µs median | (carries over from pre-networking baseline) |
 
 ## Spec deviations
 
 The spec was written before the actual `swift-java jextract` shape was
-known. Implementation discovered a few real differences that the codebase
-now reflects:
+known and before networking was added. The codebase now reflects a few
+real differences from spec §1–§13:
+
+0. **Networking is in.** Spec §12 listed "no networking" as a non-goal.
+   The example now fetches Hacker News stories via Algolia HN search
+   with `URLSession` in `AppCore`. `setSearchQuery` updates local state
+   only; the platform UI (`task(id:)` on iOS, `LaunchedEffect` on
+   Android) debounces 250 ms and dispatches `.refresh`. Cancellation
+   propagates through Task cancellation on iOS; on Android, an
+   internal `requestEpoch` field discards stale results when a newer
+   `.refresh` is queued.
 
 1. **`AppCoreAndroid` sources are wrapped in `#if canImport(Android)`** so
    the target compiles to an empty module on macOS. Lets us run

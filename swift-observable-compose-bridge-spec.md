@@ -986,7 +986,8 @@ For the `Observations` integration, a single test:
 
 So no one wonders later:
 
-- **Networking.** `refresh()` simulates with `Task.sleep`. Plugging in URLSession is straightforward but not the point of the example.
+- ~~**Networking.** `refresh()` simulates with `Task.sleep`.~~
+  *(Superseded — see §15.)*
 - **Persistence.** State resets on app restart. SwiftData / Room would be a follow-up.
 - **Localisation.** All strings are English.
 - **Accessibility.** The heart icons have content descriptions but the example doesn't go beyond defaults.
@@ -1076,3 +1077,76 @@ Background reading on actor patterns:
 - Matt Massicotte, [Default isolation with Swift 6.2](https://www.massicotte.org/default-isolation-swift-6_2/)
 - Matt Massicotte, [SE-0420: Inheritance of actor isolation](https://www.massicotte.org/concurrency-swift-6-se-0420/)
 - Donny Wals, [Should you opt-in to Swift 6.2's Main Actor isolation?](https://www.donnywals.com/should-you-opt-in-to-swift-6-2s-main-actor-isolation/)
+
+---
+
+## 15. Addendum: networking (Hacker News reader rewrite)
+
+Spec §12 originally listed "Networking" as out of scope (`refresh()`
+slept for one second). The example was rewritten to fetch Hacker News
+stories from the Algolia HN search API. This section documents the
+shape the addendum settled on; it overrides §12's first bullet.
+
+### 15.1 Domain rename
+
+| Spec § | Was | Is |
+|---|---|---|
+| §5.1 | `City(id, name, country)` + 6-row demo data | `Story(id, title, author, points, commentCount, url?, createdAt)` |
+| §5.2 | `cities` / `favorites` / `globalFavoriteCount` / `lastRefreshedAt` | `stories` / `read` / `searchQuery` / `isLoading` / `lastRefreshedAt` / `loadError` |
+| §5.2 events | `toggleFavorite(id:)` / `refresh` / `setSearchQuery(value:)` | `toggleRead(id:)` / `refresh` / `setSearchQuery(value:)` |
+
+`AppEvent`'s wire format is unchanged in shape — only the
+`toggleFavorite` discriminator becomes `toggleRead`. No new JNI entry
+point.
+
+### 15.2 The HTTP client (`AppCore/Sources/AppCore/HNClient.swift`)
+
+`HNClient` is a plain `final class` — **not** an `actor`, and **not**
+marked `Sendable`. Methods (`frontPage()` and `search(_:)`) are async
+and unannotated, so under SE-0461 they run on the caller's actor with
+zero hops. `HNClient` is constructed in `AppModel.init` and lives
+inside `AppModel`'s region for the process lifetime; under SE-0414 it
+never crosses an actor boundary, so the compiler doesn't ask for a
+Sendable proof.
+
+The Android build uses Foundation's networking sub-component:
+
+```swift
+import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+```
+
+### 15.3 Debounce + cancellation
+
+The eventually-deployed design pushes debouncing **out of `AppCore`**
+into the platform UI layer:
+
+- iOS: `.task(id: searchText) { try? await Task.sleep(.milliseconds(250)); if !Task.isCancelled { await dispatch.run(.refresh) } }`
+- Android: `LaunchedEffect(Unit) { snapshotFlow { state?.searchQuery }.distinctUntilChanged().drop(1).collect { delay(250); refresh() } }`
+
+The earlier attempt to put the `Task<Void, Never>?` debounce handle
+inside `AppModel.dispatch` ran into Swift 6 region isolation:
+`Task.init` takes a sending closure, and `AppModel` is non-Sendable
+(its isolation is the caller's actor under SE-0461). Capturing `self`
+into the inner Task was a hard error. Pushing the debounce to the
+platform side keeps `AppModel` clean.
+
+Cancellation still works cross-platform:
+
+- On iOS, `task(id:)`'s body is cancelled when `searchText` changes,
+  which throws inside `URLSession.data(from:)`; `runFetch` catches
+  `CancellationError` and skips the state update.
+- On Android, Kotlin-side cancellation can't reach Swift (the JNI
+  dispatch is fire-and-forget). Instead, `AppModel.runFetch`
+  increments a `requestEpoch` and only commits the result if the
+  epoch hasn't moved while the request was in flight.
+
+### 15.4 `AppState` snapshot growth
+
+`AppState`'s payload size grows from ~340 B to ~10–30 KB depending on
+the front page or search results. The spec's §2.6 reasoning ("JSON is
+fast enough at the demo's payload scale") still holds for this size,
+but the threshold is no longer a single-digit-cities budget — re-
+evaluate if pagination ever lands.
