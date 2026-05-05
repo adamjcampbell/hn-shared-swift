@@ -120,6 +120,18 @@ Per spec §12 plus what verification surfaced:
     Foo: View` so the child gets its own diffing checkpoint, and store
     only the fields the body reads (narrow inputs let SwiftUI skip the
     body when unrelated `AppState` fields mutate).
+  - For views that toggle between two states of the *same* surface
+    (empty/full, search/main), render the underlying view always and
+    reveal the alternate via `.overlay { if cond { … } }`. Top-level
+    `if/else` swaps destroy the previous branch and lose its identity
+    — scroll position, internal state, and animation hooks all reset.
+    Apple's WWDC21 *Craft search experiences in SwiftUI* recommends
+    overlay specifically so the main UI stays mounted across a search
+    interaction. Reserve `if/else` at the top of `body` for *different*
+    surfaces (logged-out vs logged-in, list vs detail). When the
+    overlay needs to fully occlude what's behind it, use
+    `.background(.background)` — the iOS 17+ `BackgroundStyle`
+    `ShapeStyle`, no UIKit bridge.
 
 ## When making changes
 

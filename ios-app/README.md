@@ -63,6 +63,15 @@ Performance corollaries reflected in the source:
   takes `cities`/`favorites`, not the whole `AppState`, so refreshes
   (which only mutate `globalFavoriteCount` / `lastRefreshedAt`) skip
   `CityRows.body` entirely.
+- Two-state surfaces use `.overlay { if cond { … } }`, not top-level
+  `if/else`. `SearchResults` is mounted as an overlay over
+  `FullCitiesList` whenever `\.isSearching` is true, so the main
+  list's scroll position and internal state survive a search
+  round-trip (this is Apple's WWDC21 recommendation). The empty state
+  inside `SearchResults` is the same pattern, one level down: the
+  plain list is always mounted; `ContentUnavailableView.search` is
+  overlaid when there are no matches. `.background(.background)` on
+  the search overlay occludes the inset-grouped chrome behind it.
 
 `AGENT.md` in the repo root has the same rules in its "Non-obvious
 project rules" section.
