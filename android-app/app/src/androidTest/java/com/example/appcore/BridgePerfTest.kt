@@ -20,11 +20,11 @@ import kotlin.system.measureNanoTime
  *
  * Three measurements:
  *  - cold start: time from `appcoreCreate` to the first snapshot delivery
- *  - sync JNI overhead: just the time of the synchronous `appcoreToggleFavorite`
+ *  - sync JNI overhead: just the time of the synchronous `appcoreDispatch`
  *    call (the work is fire-and-forget on the Swift side, so this is ~the cost
  *    of crossing JNI plus enqueuing a Task on the actor)
- *  - end-to-end round-trip: `toggle` call → next snapshot containing the new
- *    favorites set arriving in the JVM
+ *  - end-to-end round-trip: `dispatch(toggleRead)` call → next snapshot
+ *    containing the new read set arriving in the JVM
  *
  * Numbers are logged via println so they show up in `adb logcat` and the
  * connectedAndroidTest report. Tolerances are generous — these are sanity
@@ -49,8 +49,8 @@ class BridgePerfTest {
     // Hand-written wire literals avoid pulling kotlinx.serialization into
     // the hot path — these tests measure Swift-side cost only.
     private companion object {
-        const val TOGGLE_SYD_JSON = """{"type":"toggleFavorite","id":"syd"}"""
-        const val TOGGLE_TYO_JSON = """{"type":"toggleFavorite","id":"tyo"}"""
+        const val TOGGLE_FOO_JSON = """{"type":"toggleRead","id":"foo"}"""
+        const val TOGGLE_BAR_JSON = """{"type":"toggleRead","id":"bar"}"""
     }
 
     /**
@@ -79,9 +79,13 @@ class BridgePerfTest {
                 // eager-delivery path is broken.
                 val initial = withTimeout(50) { sink.channel.receive() }
                 assertNotNull("first snapshot JSON", initial)
-                assertTrue("contains demo cities", initial.contains("Sydney"))
-                assertTrue("contains empty favorites array", initial.contains("\"favorites\":[]"))
-                assertTrue("globalFavoriteCount is initial 0", initial.contains("\"globalFavoriteCount\":0"))
+                // The HN reader starts with empty AppCore state — front page
+                // gets fetched once the UI dispatches `.refresh`. The eager
+                // initial snapshot is what allows Compose to render a loading
+                // spinner instead of `null` while that first fetch is in flight.
+                assertTrue("contains empty stories array", initial.contains("\"stories\":[]"))
+                assertTrue("contains empty read array", initial.contains("\"read\":[]"))
+                assertTrue("isLoading defaults false", initial.contains("\"isLoading\":false"))
             } finally {
                 AppCoreAndroid.appcoreDestroy()
             }
@@ -98,14 +102,14 @@ class BridgePerfTest {
             withTimeout(5_000) { sink.channel.receive() }
 
             // Warm-up.
-            repeat(20) { AppCoreAndroid.appcoreDispatch(TOGGLE_SYD_JSON) }
+            repeat(20) { AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON) }
             // Drain any snapshots from warm-up.
             drainBriefly(sink)
 
             val samples = mutableListOf<Long>()
             repeat(200) {
                 samples += measureNanoTime {
-                    AppCoreAndroid.appcoreDispatch(TOGGLE_SYD_JSON)
+                    AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON)
                 }
             }
             // Drain the resulting snapshots so the next test starts clean.
@@ -126,14 +130,14 @@ class BridgePerfTest {
 
             // Warm-up so the dispatcher and JIT are settled.
             repeat(20) {
-                AppCoreAndroid.appcoreDispatch(TOGGLE_SYD_JSON)
+                AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON)
                 withTimeout(1_000) { sink.channel.receive() }
             }
 
             val samples = mutableListOf<Long>()
             repeat(100) { i ->
                 val t0 = System.nanoTime()
-                AppCoreAndroid.appcoreDispatch(TOGGLE_TYO_JSON)
+                AppCoreAndroid.appcoreDispatch(TOGGLE_BAR_JSON)
                 // Wait for the corresponding snapshot.
                 withTimeout(1_000) { sink.channel.receive() }
                 samples += System.nanoTime() - t0
@@ -156,13 +160,13 @@ class BridgePerfTest {
             println("[BridgePerf] snapshot JSON bytes (cold): ${first.toByteArray().size}")
             println("[BridgePerf] snapshot JSON (cold): $first")
 
-            // Add three favorites. Each toggle may or may not produce its own
-            // snapshot depending on Observations' transactional batching; we
-            // just measure the size of whichever snapshot lands last in a
+            // Mark three stories read. Each toggle may or may not produce its
+            // own snapshot depending on Observations' transactional batching;
+            // we just measure the size of whichever snapshot lands last in a
             // small window.
-            AppCoreAndroid.appcoreDispatch(TOGGLE_SYD_JSON)
-            AppCoreAndroid.appcoreDispatch(TOGGLE_TYO_JSON)
-            AppCoreAndroid.appcoreDispatch("""{"type":"toggleFavorite","id":"lon"}""")
+            AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON)
+            AppCoreAndroid.appcoreDispatch(TOGGLE_BAR_JSON)
+            AppCoreAndroid.appcoreDispatch("""{"type":"toggleRead","id":"baz"}""")
 
             var last = first
             try {
@@ -171,7 +175,7 @@ class BridgePerfTest {
                 }
             } catch (_: Exception) { /* timeout — channel idle */ }
 
-            println("[BridgePerf] snapshot JSON bytes (3 favs): ${last.toByteArray().size}")
+            println("[BridgePerf] snapshot JSON bytes (3 read): ${last.toByteArray().size}")
         } finally {
             AppCoreAndroid.appcoreDestroy()
         }

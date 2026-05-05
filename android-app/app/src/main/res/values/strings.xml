@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AppCore Bridge Example</string>
-    <string name="cities_title">Cities</string>
-    <string name="filter_cities_label">Filter cities</string>
-    <string name="favorite_action">Favorite</string>
-    <string name="unfavorite_action">Unfavorite</string>
-    <string name="worldwide_favorites_label">Worldwide favorites: %1$s</string>
+    <string name="app_title">Hacker News</string>
+    <string name="search_placeholder">Search Hacker News</string>
+    <string name="front_page_title">Front page</string>
+    <string name="search_title">Search: \"%1$s\"</string>
     <string name="last_refreshed_label">Last refreshed: %1$s</string>
     <string name="last_refreshed_never">never</string>
-    <string name="value_unavailable">—</string>
+    <string name="unread_meta_label">%1$d unread of %2$d · last refreshed %3$s</string>
+    <string name="mark_read_action">Mark read</string>
+    <string name="mark_unread_action">Mark unread</string>
+    <string name="no_results">No matching stories for \"%1$s\"</string>
 </resources>

@@ -1,22 +1,34 @@
 package com.example.appcore.state
 
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.SnapshotSink
-import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 @Serializable
-data class City(val id: String, val name: String, val country: String)
+data class Story(
+    val id: String,
+    val title: String,
+    val author: String,
+    val points: Int,
+    val commentCount: Int,
+    val url: String? = null,
+    val createdAt: String,
+)
 
 @Serializable
 data class AppState(
-    val cities: List<City>,
-    val favorites: Set<String>,
-    val globalFavoriteCount: Int,
-    val lastRefreshedAt: String? = null
+    val stories: List<Story> = emptyList(),
+    val read: Set<String> = emptySet(),
+    val searchQuery: String = "",
+    val isLoading: Boolean = false,
+    val lastRefreshedAt: String? = null,
+    val loadError: String? = null,
 )
 
 /**
@@ -27,8 +39,8 @@ data class AppState(
 @Serializable
 sealed class AppEvent {
     @Serializable
-    @SerialName("toggleFavorite")
-    data class ToggleFavorite(val id: String) : AppEvent()
+    @SerialName("toggleRead")
+    data class ToggleRead(val id: String) : AppEvent()
 
     @Serializable
     @SerialName("refresh")
@@ -58,11 +70,13 @@ sealed class AppEvent {
  * side too. We initialise once from `AppCoreApplication.onCreate` and
  * leave it running for the process lifetime; the Compose tree just reads
  * `state`.
+ *
+ * **Loading state:** the snapshot's `isLoading` and `loadError` come
+ * straight from Swift — no Kotlin-side timer. Pull-to-refresh's spinner
+ * just observes `state.isLoading`.
  */
 object AppModelHolder : SnapshotSink {
     var state by mutableStateOf<AppState?>(null)
-        private set
-    var isRefreshing by mutableStateOf(false)
         private set
 
     private val json = Json {
@@ -81,17 +95,6 @@ object AppModelHolder : SnapshotSink {
 
     fun dispatch(event: AppEvent) {
         AppCoreAndroid.appcoreDispatch(json.encodeToString(AppEvent.serializer(), event))
-    }
-
-    fun toggleFavorite(id: String) = dispatch(AppEvent.ToggleFavorite(id))
-
-    fun setSearchQuery(value: String) = dispatch(AppEvent.SetSearchQuery(value))
-
-    suspend fun refresh() {
-        isRefreshing = true
-        dispatch(AppEvent.Refresh)
-        delay(1100)
-        isRefreshing = false
     }
 }
 
