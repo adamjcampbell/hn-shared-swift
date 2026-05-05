@@ -31,7 +31,7 @@ goals and non-goals at a glance.
 
 | Surface | Tested how | Status |
 |---|---|---|
-| `AppCore` SwiftPM target | `swift test --disable-sandbox --no-parallel` on macOS (JAVA_HOME=JDK 21), 16/16 tests pass | ✅ |
+| `AppCore` SwiftPM target | `swift test --disable-sandbox` on macOS (JAVA_HOME=JDK 21), 17/17 tests pass in ~10 ms | ✅ |
 | iOS app | `xcodebuild` for `iPhone 17 / iOS 26.4.1` simulator | ✅ |
 | Android: build | `./gradlew :app:assembleDebug` produces `app-debug.apk` | ✅ |
 | Android: cold start | `BridgePerfTest.a_coldStart_…` regression test (50 ms timeout) | ✅ |
@@ -45,12 +45,14 @@ real differences from spec §1–§13:
 
 0. **Networking is in.** Spec §12 listed "no networking" as a non-goal.
    The example now fetches Hacker News stories via Algolia HN search
-   with `URLSession` in `AppCore`. `setSearchQuery` updates local state
-   only; the platform UI (`task(id:)` on iOS, `LaunchedEffect` on
-   Android) debounces 250 ms and dispatches `.refresh`. Cancellation
-   propagates through Task cancellation on iOS; on Android, an
-   internal `requestEpoch` field discards stale results when a newer
-   `.refresh` is queued.
+   with `URLSession` in `AppCore`. `HNClient` is a `Sendable` closure-
+   struct so tests inject mock closures directly. Debouncing lives
+   inside `AppModel.dispatch`: `.setSearchQuery` cancel-and-replaces
+   a `Task<[Story], Error>?` that sleeps the debounce window then
+   issues the fetch, with cancellation flowing through the standard
+   `CancellationError` path. The platform UI just forwards every
+   keystroke. `AppModel` takes a `Clock` so tests use `TestClock` for
+   deterministic timing.
 
 1. **`AppCoreAndroid` sources are wrapped in `#if canImport(Android)`** so
    the target compiles to an empty module on macOS. Lets us run

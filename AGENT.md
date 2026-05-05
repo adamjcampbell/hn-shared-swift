@@ -23,15 +23,15 @@ both UIs only render the snapshot.
 - Android: `AndroidBridge` actor + `Observations` task → JSON snapshot →
   Java callback → Compose recomposition. Mutations go through one JNI
   entry point: `appcoreDispatch(eventJSON:)`.
-- Networking lives in Swift: `HNClient` is a plain `final class`
-  (no `Sendable` conformance, no actor) injected into `AppModel.init`.
-  Region-based isolation (SE-0414) keeps the client inside `AppModel`'s
-  region for the process lifetime. `URLSession.data(from:)` is wrapped
-  in a `runFetch` helper that mirrors `isLoading` / `loadError` / a
-  `requestEpoch` revision check into `AppState` — the latter is what
-  makes "fast typing → only the last query's results land" work on
-  Android, where Kotlin-side cancellation can't propagate through the
-  fire-and-forget JNI dispatch.
+- Networking lives in Swift: `HNClient` is a `Sendable` struct with
+  two `@Sendable` closure properties (`frontPage`, `search`), injected
+  into `AppModel.init`. The struct shape is the natural mock point —
+  tests inject closures directly. Production callers use the no-arg
+  `init()`, which wires the closures to live HTTP via `URLSession`.
+  `AppModel.runFetch` cancel-and-replaces a single `searchTask:
+  Task<[Story], Error>?` — the latest dispatch always wins; cancelled
+  predecessors throw `CancellationError` from `clock.sleep` or the
+  fetch and are skipped at the dispatch arm's `catch`.
 - Modern Swift concurrency: language mode 6,
   `NonisolatedNonsendingByDefault` (SE-0461), `Observations` (SE-0475),
   region-based isolation (SE-0414).
@@ -90,18 +90,32 @@ Per spec §12 plus what verification surfaced:
   property reads as `appModel.state: AppState`). Don't rename it back to
   `State` — that collides with SwiftUI's `@State` property wrapper in
   iOS code.
-- **Debouncing lives in the platform UI, not in `AppCore`.** iOS
-  `task(id: searchText)` and Android `LaunchedEffect(searchQuery)`
-  each sleep 250 ms then dispatch `.refresh`. The earlier attempt to
-  spawn a `Task` inside `AppModel.dispatch` ran into Swift 6 region
-  isolation: `Task.init` takes a sending closure, and `AppModel` is
-  deliberately non-`Sendable` (its isolation is the caller's actor
-  under SE-0461), so capturing `self` into the Task was a hard error.
-  Pushing debounce to the platform side is the cleaner answer:
-  cancellation still propagates through the JNI bridge into
-  `URLSession.data(from:)` (which throws `CancellationError`) on iOS,
-  and on Android where Kotlin-side cancellation can't reach Swift the
-  `requestEpoch` field in `AppModel` discards stale results.
+- **Debouncing lives inside `AppModel.dispatch`, not the platform UI.**
+  `.setSearchQuery` cancel-and-replaces a stored
+  `searchTask: Task<[Story], Error>?`. The platform UI just forwards
+  every keystroke as `.setSearchQuery`. The Task body captures only
+  Sendable values (`[client, clock, query]`) — never `self` — and
+  returns `[Story]` or throws. The dispatch arm awaits with `try` and
+  commits the result on the caller's actor. This sidesteps SE-0461's
+  "unstructured Task in nonisolated function captures non-Sendable
+  self" hole: there's no self capture, so there's no region transfer
+  to fail. State mutations happen back in the dispatch arm, not in
+  the Task.
+- **Inject `clock: any Clock<Duration>` into `AppModel` for tests.**
+  Default is `ContinuousClock()`. `runFetch`'s Task body uses
+  `clock.sleep(for:)` for the debounce wait. Tests pass a `TestClock`
+  (from `pointfreeco/swift-clocks`) and call `clock.advance(by:)` to
+  release suspended sleepers atomically — no real-clock waiting. Two
+  cancel-and-replace tests
+  (`setSearchQuery_coalescesRapidKeystrokes`,
+  `refresh_cancelsPendingDebounce`) run in <1 ms each.
+- **The debounce sleep needs an explicit
+  `do { try await clock.sleep(...) } catch { return .cancelled }`.**
+  Don't simplify it to `try? await clock.sleep` and rely on the
+  client's downstream `CancellationError` throw — `URLSession.data`
+  honors cancellation, but test-mock closures can't be expected to as
+  faithfully. Bailing at the sleep boundary is robust regardless of
+  what the client does.
 - **Networking on Android requires `import FoundationNetworking`**
   inside `#if canImport(FoundationNetworking)`. On Apple platforms
   `URLSession` is part of `Foundation`; on swift-corelibs-foundation
@@ -118,13 +132,13 @@ Per spec §12 plus what verification surfaced:
   to differ — (b) a `switch` arm in `AppModel.dispatch`, and (c) a matching
   `@SerialName`'d variant on Kotlin's `sealed class AppEvent` in
   `AppModelHolder.kt`. No new JNI entry point.
-- **Tests must run with `--no-parallel`.** `URLProtocolStub` keeps
-  responder + recorder in `nonisolated(unsafe) static var` storage
-  (acceptable in `Tests/`, forbidden in `Sources/`). Swift Testing
-  parallelises across suites by default, which trampled the static
-  state. `.serialized` only serialises within a single suite, and a
-  `@globalActor` was tried and did not gate cross-suite execution. The
-  pragmatic fix is in the test command, not the test source.
+- **`URLProtocolStub` is `nonisolated(unsafe) static var` storage**
+  (acceptable in `Tests/`, forbidden in `Sources/`). Only `HNClientTests`
+  touches it, and that suite carries `.serialized` — no other suite
+  references it. If a future suite starts using `URLProtocolStub` it
+  also needs `.serialized`, AND the runner needs `--no-parallel`,
+  because `.serialized` only serialises within a single suite (Swift
+  Testing parallelises across suites by default).
 - Both `swift build` and `swift test` on macOS need
   `--disable-sandbox` and `JAVA_HOME` pointing at a JDK 17+ install
   (Android Studio's JBR works), because the plugin's Java-callback
@@ -186,7 +200,7 @@ Per spec §12 plus what verification surfaced:
 ## When making changes
 
 - Verify both platforms still build:
-  - `cd AppCore && JAVA_HOME=/Applications/Android\ Studio.app/Contents/jbr/Contents/Home swift test --disable-sandbox --no-parallel`
+  - `cd AppCore && JAVA_HOME=/Applications/Android\ Studio.app/Contents/jbr/Contents/Home swift test --disable-sandbox`
   - `cd ios-app && xcodebuild -project AppCoreBridgeExample.xcodeproj -scheme AppCoreBridgeExample -destination 'platform=iOS Simulator,name=iPhone 17' build`
   - `cd android-app && ./gradlew :app:assembleDebug && ./gradlew :app:connectedDebugAndroidTest`
 - The `BridgePerfTest.a_coldStart_…` regression test is the load-bearing

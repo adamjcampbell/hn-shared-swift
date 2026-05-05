@@ -1101,13 +1101,29 @@ point.
 
 ### 15.2 The HTTP client (`AppCore/Sources/AppCore/HNClient.swift`)
 
-`HNClient` is a plain `final class` — **not** an `actor`, and **not**
-marked `Sendable`. Methods (`frontPage()` and `search(_:)`) are async
-and unannotated, so under SE-0461 they run on the caller's actor with
-zero hops. `HNClient` is constructed in `AppModel.init` and lives
-inside `AppModel`'s region for the process lifetime; under SE-0414 it
-never crosses an actor boundary, so the compiler doesn't ask for a
-Sendable proof.
+`HNClient` is a `Sendable` struct with two `@Sendable` closure
+properties:
+
+```swift
+public struct HNClient: Sendable {
+    public var frontPage: @Sendable () async throws -> [Story]
+    public var search:    @Sendable (String) async throws -> [Story]
+}
+```
+
+The struct shape *is* the natural mock point — tests inject closures
+directly without going through `URLSession` or `URLProtocol`.
+Production callers use the no-arg `init()`, which wires the closures
+to live HTTP via `URLSession`. There's an internal `init(session:)`
+test seam for the URL-construction tests that want to drive the live
+pipeline through a `URLProtocol`-stubbed session.
+
+`Sendable` conformance is what enables the cancel-and-replace
+pattern in `AppModel`: the unstructured `Task` that issues the HTTP
+call captures `[client, clock]` directly with no `self` capture, so
+there's no non-Sendable region to send across. `URLSession`,
+`JSONDecoder`, and the static `URL` constants are all Sendable
+already, so the struct's conformance is real (not `@unchecked`).
 
 The Android build uses Foundation's networking sub-component:
 
@@ -1120,28 +1136,84 @@ import FoundationNetworking
 
 ### 15.3 Debounce + cancellation
 
-The eventually-deployed design pushes debouncing **out of `AppCore`**
-into the platform UI layer:
+Debouncing lives **inside `AppModel.dispatch`**. `.setSearchQuery`
+cancel-and-replaces a stored
+`searchTask: Task<[Story], Error>?`:
 
-- iOS: `.task(id: searchText) { try? await Task.sleep(.milliseconds(250)); if !Task.isCancelled { await dispatch.run(.refresh) } }`
-- Android: `LaunchedEffect(Unit) { snapshotFlow { state?.searchQuery }.distinctUntilChanged().drop(1).collect { delay(250); refresh() } }`
+```swift
+case .setSearchQuery(let value):
+    state.searchQuery = value
+    await runFetch(debounce: Self.searchDebounce)
+```
 
-The earlier attempt to put the `Task<Void, Never>?` debounce handle
-inside `AppModel.dispatch` ran into Swift 6 region isolation:
-`Task.init` takes a sending closure, and `AppModel` is non-Sendable
-(its isolation is the caller's actor under SE-0461). Capturing `self`
-into the inner Task was a hard error. Pushing the debounce to the
-platform side keeps `AppModel` clean.
+`runFetch` cancels the prior task, captures `[client, clock]` plus
+the local `query` (all Sendable) into a new throwing Task, stores
+it, and awaits the result on the caller's actor:
 
-Cancellation still works cross-platform:
+```swift
+let task = Task<[Story], Error> { [client, clock] in
+    if let debounce {
+        try await clock.sleep(for: debounce)
+    }
+    return query.isEmpty
+        ? try await client.frontPage()
+        : try await client.search(query)
+}
+searchTask = task
+do {
+    let stories = try await task.value
+    state.stories = stories
+    state.lastRefreshedAt = .now
+    state.loadError = nil
+    state.isLoading = false
+} catch is CancellationError {
+    return  // a newer dispatch superseded us
+} catch {
+    state.loadError = error.localizedDescription
+    state.isLoading = false
+}
+```
 
-- On iOS, `task(id:)`'s body is cancelled when `searchText` changes,
-  which throws inside `URLSession.data(from:)`; `runFetch` catches
-  `CancellationError` and skips the state update.
-- On Android, Kotlin-side cancellation can't reach Swift (the JNI
-  dispatch is fire-and-forget). Instead, `AppModel.runFetch`
-  increments a `requestEpoch` and only commits the result if the
-  epoch hasn't moved while the request was in flight.
+Why this works under Swift 6 strict concurrency:
+
+- The Task closure captures only `Sendable` values. There is no
+  `self` to send across regions, so SE-0461's "unstructured Task in
+  nonisolated function captures non-Sendable self" hole doesn't
+  apply.
+- State commits happen back in the `dispatch` arm, which is on the
+  caller's actor — `MainActor` on iOS, `AndroidBridge` on Android.
+
+Cancellation:
+
+- A new `.setSearchQuery` (or `.refresh`) calls `searchTask?.cancel()`
+  before storing its own task. The prior task's `clock.sleep` (or
+  the fetch call) throws `CancellationError`; the prior dispatch's
+  `try await task.value` re-throws it, the `catch is
+  CancellationError` arm returns, and the stale result is never
+  committed.
+- On Android the JNI dispatch is fire-and-forget, but cancellation
+  here doesn't depend on Kotlin propagating anything — it's all
+  driven by the Swift-side `Task.cancel()` call inside `runFetch`.
+
+`Clock` injection makes the debounce deterministic in tests:
+
+```swift
+public init(
+    client: HNClient = HNClient(),
+    clock: any Clock<Duration> = ContinuousClock()
+)
+```
+
+Tests pass a `TestClock` (from `pointfreeco/swift-clocks`) and call
+`clock.advance(by: .milliseconds(250))` to release suspended sleepers
+atomically. The `setSearchQuery_coalescesRapidKeystrokes` and
+`refresh_cancelsPendingDebounce` tests run in <1 ms each.
+
+The `do/catch` around `clock.sleep` is load-bearing — don't
+"simplify" to `try? await clock.sleep(...)` and rely on the client's
+downstream cancellation throw. `URLSession.data` honors cancellation,
+but test-mock closures can't be expected to as faithfully. Bailing
+at the sleep boundary is robust regardless of what the client does.
 
 ### 15.4 `AppState` snapshot growth
 
