@@ -102,6 +102,20 @@ Per spec §12 plus what verification surfaced:
   toggling tests would mask a regression of the eager-delivery path.
 - The iOS `.xcodeproj` is generated from `ios-app/project.yml` via
   `xcodegen` and gitignored.
+- The iOS target builds in **Swift 6** with **Approachable Concurrency**
+  enabled (`SWIFT_APPROACHABLE_CONCURRENCY = YES`), default actor
+  isolation **explicitly `nonisolated`** (not `MainActor` — to keep the
+  cross-platform "isolation determined by the call site" rule from
+  spec §2), and `SWIFT_STRICT_CONCURRENCY = complete`. The combination
+  gives us SE-0461 (`NonisolatedNonsendingByDefault`) so `async`
+  functions inherit the caller's actor — which means `appModel`'s
+  `dispatch(_:)` runs on `MainActor` when called from a SwiftUI body
+  without any explicit annotation. The one place that *does* need
+  explicit `@MainActor` is `AppEventDispatch`'s perform paths
+  (`callAsFunction`, `run`, and the inner `Task`) because they capture
+  the non-`Sendable` `AppModel` into a sending `Task` closure; pinning
+  the call site, capture, and Task body to MainActor satisfies region
+  isolation without crossing actors.
 - **iOS view-layer rules** (enforced by `ios-app/AppCoreBridgeExample/RootView.swift` + `AppEventDispatch.swift`):
   - `AppModel` is held only by `RootView`. Below the root, views accept
     `AppState` (or specific slices like `cities` / `favorites`) as
