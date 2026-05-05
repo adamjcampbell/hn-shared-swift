@@ -43,6 +43,10 @@ sealed class AppEvent {
     data class ToggleRead(val id: String) : AppEvent()
 
     @Serializable
+    @SerialName("markRead")
+    data class MarkRead(val id: String) : AppEvent()
+
+    @Serializable
     @SerialName("refresh")
     data object Refresh : AppEvent()
 

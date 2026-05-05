@@ -158,6 +158,7 @@ private struct StoryRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 if let urlString = story.url, let url = URL(string: urlString) {
                     Button {
+                        dispatch(.markRead(id: story.id))
                         presented = IdentifiableURL(url: url)
                     } label: {
                         Text(story.title)

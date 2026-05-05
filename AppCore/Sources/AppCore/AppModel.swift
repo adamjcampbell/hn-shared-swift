@@ -69,6 +69,8 @@ public final class AppModel {
         switch event {
         case .toggleRead(let id):
             toggleRead(id)
+        case .markRead(let id):
+            state.read.insert(id)
         case .refresh:
             await runFetch()
         case .setSearchQuery(let value):

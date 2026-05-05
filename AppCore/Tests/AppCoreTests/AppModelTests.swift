@@ -82,6 +82,21 @@ struct AppModelTests {
         #expect(model.state.read.contains("100") == false)
     }
 
+    @Test("markRead inserts and is idempotent")
+    func markRead_insertsAndIsIdempotent() async {
+        let model = AppModel(
+            client: HNClient(frontPage: { [] }, search: { _ in [] })
+        )
+        #expect(model.state.read.contains("100") == false)
+
+        await model.dispatch(.markRead(id: "100"))
+        #expect(model.state.read.contains("100"))
+
+        await model.dispatch(.markRead(id: "100"))
+        #expect(model.state.read.contains("100"))
+        #expect(model.state.read.count == 1)
+    }
+
     @Test("read state survives a refresh")
     func toggleRead_survivesRefresh() async {
         let model = AppModel(
@@ -228,6 +243,17 @@ struct AppEventTests {
         #expect(decoded == event)
     }
 
+    @Test("markRead encodes with discriminator and id payload")
+    func markRead_wireShape() throws {
+        let event = AppEvent.markRead(id: "39184235")
+        let json = event.toJSON()
+        #expect(json.contains("\"type\":\"markRead\""))
+        #expect(json.contains("\"id\":\"39184235\""))
+
+        let decoded = try #require(AppEvent(json: json))
+        #expect(decoded == event)
+    }
+
     @Test("refresh encodes as bare type discriminator")
     func refresh_wireShape() throws {
         let event = AppEvent.refresh
@@ -255,6 +281,9 @@ struct AppEventTests {
         // ever stops accepting them the cross-language contract has drifted.
         let toggle = try #require(AppEvent(json: #"{"type":"toggleRead","id":"100"}"#))
         #expect(toggle == .toggleRead(id: "100"))
+
+        let mark = try #require(AppEvent(json: #"{"type":"markRead","id":"100"}"#))
+        #expect(mark == .markRead(id: "100"))
 
         let refresh = try #require(AppEvent(json: #"{"type":"refresh"}"#))
         #expect(refresh == .refresh)

@@ -89,6 +89,7 @@ fun StoryScreen() {
             onRefresh = { scope.launch { holder.dispatch(AppEvent.Refresh) } },
             onSearchTextChanged = { holder.dispatch(AppEvent.SetSearchQuery(it)) },
             onToggleRead = { holder.dispatch(AppEvent.ToggleRead(it)) },
+            onMarkRead = { holder.dispatch(AppEvent.MarkRead(it)) },
             modifier = Modifier
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
@@ -104,6 +105,7 @@ private fun StoriesContent(
     onRefresh: () -> Unit,
     onSearchTextChanged: (String) -> Unit,
     onToggleRead: (String) -> Unit,
+    onMarkRead: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val searchBarState = rememberSearchBarState()
@@ -164,7 +166,7 @@ private fun StoriesContent(
                             loadError = state?.loadError,
                         )
                     }
-                    storyRows(stories, read, onToggleRead)
+                    storyRows(stories, read, onToggleRead, onMarkRead)
                 }
             }
 
@@ -178,7 +180,7 @@ private fun StoriesContent(
     }
 
     ExpandedFullScreenSearchBar(state = searchBarState, inputField = inputField) {
-        LazyColumn { storyRows(stories, read, onToggleRead) }
+        LazyColumn { storyRows(stories, read, onToggleRead, onMarkRead) }
     }
 }
 
@@ -186,12 +188,14 @@ private fun LazyListScope.storyRows(
     stories: List<Story>,
     read: Set<String>,
     onToggleRead: (String) -> Unit,
+    onMarkRead: (String) -> Unit,
 ) {
     items(stories, key = { it.id }) { story ->
         StoryRow(
             story = story,
             isRead = read.contains(story.id),
             onToggle = { onToggleRead(story.id) },
+            onOpen = { onMarkRead(story.id) },
         )
     }
 }
@@ -261,7 +265,12 @@ private fun HeaderCard(
 }
 
 @Composable
-private fun StoryRow(story: Story, isRead: Boolean, onToggle: () -> Unit) {
+private fun StoryRow(
+    story: Story,
+    isRead: Boolean,
+    onToggle: () -> Unit,
+    onOpen: () -> Unit,
+) {
     val context = LocalContext.current
     val contentColor = if (isRead) {
         MaterialTheme.colorScheme.onSurfaceVariant
@@ -269,7 +278,10 @@ private fun StoryRow(story: Story, isRead: Boolean, onToggle: () -> Unit) {
         MaterialTheme.colorScheme.onSurface
     }
     val rowModifier = story.url?.let { url ->
-        Modifier.clickable { context.launchCustomTab(url) }
+        Modifier.clickable {
+            onOpen()
+            context.launchCustomTab(url)
+        }
     } ?: Modifier
 
     val host = story.url?.let { runCatching { java.net.URI(it).host }.getOrNull() }
