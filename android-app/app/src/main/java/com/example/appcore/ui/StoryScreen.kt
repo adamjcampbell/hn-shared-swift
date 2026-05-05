@@ -56,10 +56,7 @@ import com.example.appcore.state.AppEvent
 import com.example.appcore.state.AppState
 import com.example.appcore.state.Story
 import com.example.appcore.state.rememberAppModel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -114,27 +111,14 @@ private fun StoriesContent(
     val scope = rememberCoroutineScope()
 
     // Pipe textfield changes into AppCore as `setSearchQuery` events.
+    // AppCore handles its own debounce inside `.setSearchQuery` —
+    // Compose just forwards every keystroke.
     // distinctUntilChanged guards against snapshotFlow re-emitting on
     // cursor / selection changes.
     LaunchedEffect(Unit) {
         snapshotFlow { textFieldState.text.toString() }
             .distinctUntilChanged()
             .collect(onSearchTextChanged)
-    }
-
-    // Debounce + dispatch Refresh whenever AppCore's searchQuery changes.
-    // Mirrors iOS's `task(id:)` debounce. `drop(1)` skips the initial
-    // null/empty emission (the LaunchedEffect(Unit) above already kicks
-    // off the first Refresh on launch).
-    LaunchedEffect(Unit) {
-        snapshotFlow { state?.searchQuery }
-            .filterNotNull()
-            .distinctUntilChanged()
-            .drop(1)
-            .collect {
-                delay(250)
-                onRefresh()
-            }
     }
 
     val stories = state?.stories ?: emptyList()

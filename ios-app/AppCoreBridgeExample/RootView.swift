@@ -21,19 +21,13 @@ private struct StoriesScreen: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .onChange(of: searchText) { _, newValue in
-                // Synchronous local update; the .task(id:) below drives
-                // the debounced network fetch.
+                // AppCore handles its own debounce inside `.setSearchQuery`
+                // — see AppModel.dispatch. iOS just forwards every keystroke.
                 dispatch(.setSearchQuery(value: newValue))
             }
-            .task(id: searchText) {
-                // Debounce + cancel-and-refire pattern. SwiftUI cancels
-                // the prior body when `id` changes, which throws inside
-                // any awaiting URLSession data task; AppCore's `runFetch`
-                // catches CancellationError and skips the state update.
-                try? await Task.sleep(for: .milliseconds(250))
-                if !Task.isCancelled {
-                    await dispatch.run(.refresh)
-                }
+            .task {
+                // One-shot first-appear fetch.
+                await dispatch.run(.refresh)
             }
             .navigationTitle("Hacker News")
     }
