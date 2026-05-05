@@ -93,17 +93,10 @@ private struct FullCitiesList: View {
 private struct CityRows: View {
     let cities: [City]
     let favorites: Set<String>
-    @Environment(\.dispatch) private var dispatch
 
     var body: some View {
         ForEach(cities) { city in
-            CityRow(
-                city: city,
-                isFavorite: favorites.contains(city.id),
-                onToggle: {
-                    dispatch(.toggleFavorite(id: city.id))
-                }
-            )
+            CityRow(city: city, isFavorite: favorites.contains(city.id))
         }
     }
 }
@@ -126,7 +119,7 @@ private struct FavoritesSummary: View {
 private struct CityRow: View {
     let city: City
     let isFavorite: Bool
-    let onToggle: () -> Void
+    @Environment(\.dispatch) private var dispatch
 
     var body: some View {
         HStack {
@@ -135,7 +128,9 @@ private struct CityRow: View {
                 Text(city.country).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button(action: onToggle) {
+            Button {
+                dispatch(.toggleFavorite(id: city.id))
+            } label: {
                 Image(systemName: isFavorite ? "heart.fill" : "heart")
                     .foregroundStyle(isFavorite ? .pink : .secondary)
                     .contentTransition(.symbolEffect(.replace))
