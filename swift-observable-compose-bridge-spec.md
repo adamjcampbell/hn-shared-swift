@@ -1143,7 +1143,7 @@ cancel-and-replaces a stored
 ```swift
 case .setSearchQuery(let value):
     state.searchQuery = value
-    await runFetch(debounce: Self.searchDebounce)
+    await runFetch(debounce: .milliseconds(250))
 ```
 
 `runFetch` cancels the prior task, captures `[client, clock]` plus

@@ -38,9 +38,6 @@ public final class AppModel {
     @ObservationIgnored
     private var searchTask: Task<[Story], Error>?
 
-    /// Debounce window for `.setSearchQuery`.
-    static let searchDebounce: Duration = .milliseconds(250)
-
     public init(
         client: HNClient = HNClient(),
         clock: any Clock<Duration> = ContinuousClock()
@@ -68,10 +65,10 @@ public final class AppModel {
         case .toggleRead(let id):
             toggleRead(id)
         case .refresh:
-            await runFetch(debounce: nil)
+            await runFetch()
         case .setSearchQuery(let value):
             state.searchQuery = value
-            await runFetch(debounce: Self.searchDebounce)
+            await runFetch(debounce: .milliseconds(250))
         }
     }
 
@@ -102,7 +99,7 @@ public final class AppModel {
     /// query and commit stale data. Letting the throw propagate is what
     /// makes the cancel-and-replace property robust against any client
     /// implementation, mock or live.
-    private func runFetch(debounce: Duration?) async {
+    private func runFetch(debounce: Duration? = nil) async {
         searchTask?.cancel()
 
         let query = state.searchQuery
