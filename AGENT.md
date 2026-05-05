@@ -109,13 +109,15 @@ Per spec §12 plus what verification surfaced:
   cancel-and-replace tests
   (`setSearchQuery_coalescesRapidKeystrokes`,
   `refresh_cancelsPendingDebounce`) run in <1 ms each.
-- **The debounce sleep needs an explicit
-  `do { try await clock.sleep(...) } catch { return .cancelled }`.**
-  Don't simplify it to `try? await clock.sleep` and rely on the
-  client's downstream `CancellationError` throw — `URLSession.data`
-  honors cancellation, but test-mock closures can't be expected to as
-  faithfully. Bailing at the sleep boundary is robust regardless of
-  what the client does.
+- **`try` (not `try?`) on the debounce `clock.sleep`.** The Task body
+  uses `try await clock.sleep(for: debounce)` and lets the throw
+  propagate. Swallowing it with `try?` would let cancelled tasks fall
+  through to the client's fetch call, and a test-mock closure that
+  doesn't honor cancellation would then succeed for the cancelled
+  query and commit stale data. `URLSession.data` honors cancellation
+  in production, but the mocks can't be expected to as faithfully —
+  letting the throw propagate makes cancel-and-replace robust against
+  any client implementation.
 - **Networking on Android requires `import FoundationNetworking`**
   inside `#if canImport(FoundationNetworking)`. On Apple platforms
   `URLSession` is part of `Foundation`; on swift-corelibs-foundation

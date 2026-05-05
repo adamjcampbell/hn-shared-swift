@@ -1209,11 +1209,19 @@ Tests pass a `TestClock` (from `pointfreeco/swift-clocks`) and call
 atomically. The `setSearchQuery_coalescesRapidKeystrokes` and
 `refresh_cancelsPendingDebounce` tests run in <1 ms each.
 
-The `do/catch` around `clock.sleep` is load-bearing — don't
-"simplify" to `try? await clock.sleep(...)` and rely on the client's
-downstream cancellation throw. `URLSession.data` honors cancellation,
-but test-mock closures can't be expected to as faithfully. Bailing
-at the sleep boundary is robust regardless of what the client does.
+`try` (not `try?`) on the debounce sleep is load-bearing. The body
+uses `try await clock.sleep(for: debounce)` and lets the throw
+propagate; cancelled tasks throw at the sleep, the throw bubbles
+through the Task without ever reaching the fetch line, and the
+prior dispatch's `catch is CancellationError` arm handles it.
+Swallowing the throw with `try?` would let cancelled tasks fall
+through to `client.frontPage()` / `client.search(...)`, and a
+test-mock closure that doesn't honor cancellation would then
+succeed for the cancelled query and commit stale data.
+`URLSession.data` honors cancellation in production, but mocks
+can't be expected to as faithfully — letting the throw propagate
+makes the cancel-and-replace property robust against any client
+implementation.
 
 ### 15.4 `AppState` snapshot growth
 

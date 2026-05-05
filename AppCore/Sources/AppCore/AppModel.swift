@@ -85,13 +85,23 @@ public final class AppModel {
 
     /// Cancel-and-replace a single in-flight fetch task.
     ///
-    /// The Task body captures only Sendable values (`client`, `query`,
-    /// `debounce`). When a new dispatch arrives, it cancels the prior
-    /// task; that task's `URLSession.data(from:)` throws
-    /// `CancellationError`, the body returns `.cancelled`, and the prior
-    /// dispatch's `await searchTask?.value` here resolves to `.cancelled`
-    /// — at which point the prior dispatch returns without committing
-    /// anything to `state`. `debounce: nil` runs the fetch immediately.
+    /// The Task body captures only Sendable values (`client`, `clock`)
+    /// plus the local `query` and `debounce` — never `self`. When a new
+    /// dispatch arrives, it cancels the prior task; that task's
+    /// `clock.sleep` throws `CancellationError`, the throw propagates
+    /// through the Task body without ever reaching the fetch call, and
+    /// the prior dispatch's `try await task.value` re-throws into the
+    /// `catch is CancellationError` arm — which returns without
+    /// committing anything to `state`. `debounce: nil` runs the fetch
+    /// immediately.
+    ///
+    /// **`try` (not `try?`) on the sleep is load-bearing.** Swallowing
+    /// the throw with `try?` would let cancelled tasks fall through to
+    /// the fetch call, and a test-mock closure that doesn't honor
+    /// cancellation (most don't) would then succeed for the cancelled
+    /// query and commit stale data. Letting the throw propagate is what
+    /// makes the cancel-and-replace property robust against any client
+    /// implementation, mock or live.
     private func runFetch(debounce: Duration?) async {
         searchTask?.cancel()
 
