@@ -23,82 +23,90 @@ import Observation
 public final class AppModel {
     public private(set) var state: AppState = AppState()
 
-    /// Unfiltered source of truth for the city list. The visible
-    /// `state.cities` is derived from this on every `setSearchQuery` event.
-    private let allCities: [City] = .demoData
+    @ObservationIgnored
+    private let client: HNClient
 
-    public init() {}
+    /// Monotonic counter incremented on every `.refresh`. Each fetch
+    /// captures its epoch and only commits results if the epoch is still
+    /// current when the response lands. On iOS this is redundant because
+    /// SwiftUI's `task(id:)` cancels the prior dispatch (and `URLSession`
+    /// throws `CancellationError`); on Android the JNI dispatch is
+    /// fire-and-forget so Kotlin-side cancellation can't propagate, and
+    /// the epoch is what makes "fast typing → only the last query's
+    /// results land" actually true.
+    @ObservationIgnored
+    private var requestEpoch: UInt64 = 0
+
+    public init(client: HNClient = HNClient()) {
+        self.client = client
+    }
 
     /// Single entry point for every user-driven mutation.
     ///
     /// `async` so callers that need completion (e.g. SwiftUI's
-    /// `.refreshable` to dismiss the pull-to-refresh spinner) can `await`
-    /// the call. Fire-and-forget call sites wrap in `Task { ... }` at the
-    /// call site — that *is* the optional Task the UI controls.
-    ///
-    /// Why not `-> Task<Void, Never>?`: the `Task { ... }` initialiser
-    /// takes a sending closure, and `AppModel` is deliberately
-    /// non-`Sendable` (its isolation is whatever the caller provides —
-    /// MainActor on iOS, the bridge actor on Android). Spawning a Task
-    /// from inside a method on a non-`Sendable` class would either force
-    /// AppModel to adopt a fixed actor (breaking the platform-agnostic
-    /// design) or hit Swift 6 region-isolation errors. Pushing Task
-    /// creation to the call site keeps each platform's isolation intact.
+    /// `.refreshable` to dismiss the pull-to-refresh spinner, or a
+    /// `.task(id:)` driving debounced search) can `await` the call.
+    /// Cancellation propagates: when the surrounding Task is cancelled,
+    /// the inner `URLSession.data` throws `CancellationError`, which
+    /// `runFetch` swallows without updating `state.stories`. This is
+    /// what makes "type fast → only the last query's results land"
+    /// work identically on both platforms.
     public func dispatch(_ event: AppEvent) async {
         switch event {
-        case .toggleFavorite(let id):
-            toggleFavorite(id)
+        case .toggleRead(let id):
+            toggleRead(id)
         case .refresh:
-            await refresh()
-        case .setSearchQuery(let query):
-            applyFilter(query)
+            await runFetch {
+                self.state.searchQuery.isEmpty
+                    ? try await self.client.frontPage()
+                    : try await self.client.search(self.state.searchQuery)
+            }
+        case .setSearchQuery(let value):
+            // Synchronous local update only. Debouncing + the actual
+            // network fetch is driven by the platform UI (`task(id:)` on
+            // iOS, `LaunchedEffect` on Android), which fires `.refresh`
+            // after a 250 ms debounce. Doing it that way lets the
+            // platform's structured concurrency primitives handle
+            // cancellation, which sidesteps the "spawn a Task that
+            // captures non-Sendable self" hole that Swift 6 region
+            // isolation closes off.
+            state.searchQuery = value
         }
     }
 
-    /// Toggle whether `id` is in the favorites set, then re-sort the
-    /// currently-visible cities so favorites bubble to the top.
-    ///
-    /// Both mutations happen synchronously and are batched into a single
-    /// `Observations` transaction — see SE-0475 §"Transactional semantics".
-    private func toggleFavorite(_ id: String) {
-        if state.favorites.contains(id) {
-            state.favorites.remove(id)
+    private func toggleRead(_ id: String) {
+        if state.read.contains(id) {
+            state.read.remove(id)
         } else {
-            state.favorites.insert(id)
+            state.read.insert(id)
         }
-        sortCities()
     }
 
-    /// Simulate a network refresh. Sleeps for ~1s then mutates two
-    /// observable properties whose changes are visible in the UI as a
-    /// running counter and a timestamp.
-    private func refresh() async {
-        try? await Task.sleep(for: .seconds(1))
-        state.globalFavoriteCount = Int.random(in: 100...10_000)
-        state.lastRefreshedAt = .now
-    }
-
-    /// Recompute `state.cities` from `allCities` using the new query
-    /// (case-insensitive name contains; whitespace-only is treated as
-    /// no filter), then re-apply the favorites-first sort.
-    private func applyFilter(_ query: String) {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        state.cities = trimmed.isEmpty
-            ? allCities
-            : allCities.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
-        sortCities()
-    }
-
-    private func sortCities() {
-        // Capture `favorites` locally so the comparator doesn't re-read
-        // `state` on every comparison (each read goes through the
-        // observation registrar).
-        let favorites = state.favorites
-        state.cities.sort { lhs, rhs in
-            let lhsFav = favorites.contains(lhs.id)
-            let rhsFav = favorites.contains(rhs.id)
-            if lhsFav != rhsFav { return lhsFav && !rhsFav }
-            return lhs.name < rhs.name
+    /// Run a network request, mirroring loading/error state into `AppState`.
+    /// The two synchronous mutations on success (`stories` + `lastRefreshedAt`)
+    /// batch into one `Observations` transaction (SE-0475) on Android.
+    private func runFetch(_ body: () async throws -> [Story]) async {
+        requestEpoch &+= 1
+        let myEpoch = requestEpoch
+        state.isLoading = true
+        state.loadError = nil
+        do {
+            let stories = try await body()
+            // Stale: a newer .refresh started while we were awaiting, so
+            // its result is what should win. Drop ours silently.
+            guard myEpoch == requestEpoch else { return }
+            state.stories = stories
+            state.lastRefreshedAt = .now
+            state.isLoading = false
+        } catch is CancellationError {
+            // A new fetch is on its way (the platform UI re-fired refresh
+            // because the search text changed). Leave isLoading=true so
+            // the spinner stays until that fetch settles.
+            return
+        } catch {
+            guard myEpoch == requestEpoch else { return }
+            state.loadError = error.localizedDescription
+            state.isLoading = false
         }
     }
 }

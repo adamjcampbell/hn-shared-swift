@@ -1,122 +1,154 @@
+import Foundation
 import Testing
 @testable import AppCore
 
-@Suite("AppModel")
+private let twoStoriesFixture: String = #"""
+{
+  "hits": [
+    {
+      "objectID": "100",
+      "title": "Top story",
+      "author": "alice",
+      "points": 50,
+      "num_comments": 10,
+      "url": "https://example.com/a",
+      "created_at": "2026-05-04T08:00:00.000Z"
+    },
+    {
+      "objectID": "101",
+      "title": "Second story",
+      "author": "bob",
+      "points": 20,
+      "num_comments": 3,
+      "url": null,
+      "created_at": "2026-05-04T08:01:00.000Z"
+    }
+  ]
+}
+"""#
+
+@Suite("AppModel", .serialized)
 struct AppModelTests {
 
-    @Test("toggleFavorite adds and removes")
-    func toggleFavorite_addsAndRemoves() async {
-        let model = AppModel()
-        #expect(model.state.favorites.contains("syd") == false)
+    init() { URLProtocolStub.reset() }
 
-        await model.dispatch(.toggleFavorite(id: "syd"))
-        #expect(model.state.favorites.contains("syd"))
+    @Test("refresh populates stories and timestamp")
+    func refresh_populatesStoriesAndTimestamp() async {
+        URLProtocolStub.responder = { request in
+            okResponse(twoStoriesFixture, for: request.url!)
+        }
 
-        await model.dispatch(.toggleFavorite(id: "syd"))
-        #expect(model.state.favorites.contains("syd") == false)
-    }
-
-    @Test("toggleFavorite resorts list with favorites first")
-    func toggleFavorite_resortsList() async {
-        let model = AppModel()
-        // Favourite a city that isn't naturally first alphabetically.
-        await model.dispatch(.toggleFavorite(id: "tyo"))
-        #expect(model.state.cities.first?.id == "tyo")
-
-        // Favouriting another bubbles both to the top, sorted by name.
-        await model.dispatch(.toggleFavorite(id: "par"))
-        let topTwoIDs = model.state.cities.prefix(2).map(\.id)
-        #expect(Set(topTwoIDs) == ["tyo", "par"])
-        // "Paris" < "Tokyo" alphabetically, so Paris should be first.
-        #expect(model.state.cities[0].id == "par")
-        #expect(model.state.cities[1].id == "tyo")
-    }
-
-    @Test("refresh updates observable properties")
-    func refresh_updatesObservables() async {
-        let model = AppModel()
-        #expect(model.state.globalFavoriteCount == 0)
+        let model = AppModel(client: HNClient(session: makeStubbedSession()))
+        #expect(model.state.stories.isEmpty)
         #expect(model.state.lastRefreshedAt == nil)
 
         await model.dispatch(.refresh)
 
-        #expect(model.state.globalFavoriteCount > 0)
+        #expect(model.state.stories.count == 2)
+        #expect(model.state.stories.first?.title == "Top story")
         #expect(model.state.lastRefreshedAt != nil)
+        #expect(model.state.isLoading == false)
+        #expect(model.state.loadError == nil)
     }
 
-    @Test("refresh runs on caller's actor")
-    @MainActor
-    func refresh_runsOnCallersActor() async {
-        let model = AppModel()
+    @Test("refresh records loadError on failure")
+    func refresh_recordsErrorOnFailure() async {
+        // Responder unset → URLProtocolStub fails the request.
+        let model = AppModel(client: HNClient(session: makeStubbedSession()))
+
         await model.dispatch(.refresh)
-        // SE-0461: NonisolatedNonsendingByDefault means dispatch/refresh
-        // run on the caller's actor (MainActor here) and the resumption
-        // after the await stays on it. Verify we are still on MainActor.
+
+        #expect(model.state.stories.isEmpty)
+        #expect(model.state.loadError != nil)
+        #expect(model.state.isLoading == false)
+    }
+
+    @Test("toggleRead adds and removes")
+    func toggleRead_addsAndRemoves() async {
+        let model = AppModel()
+        #expect(model.state.read.contains("100") == false)
+
+        await model.dispatch(.toggleRead(id: "100"))
+        #expect(model.state.read.contains("100"))
+
+        await model.dispatch(.toggleRead(id: "100"))
+        #expect(model.state.read.contains("100") == false)
+    }
+
+    @Test("read state survives a refresh")
+    func toggleRead_survivesRefresh() async {
+        URLProtocolStub.responder = { request in
+            okResponse(twoStoriesFixture, for: request.url!)
+        }
+
+        let model = AppModel(client: HNClient(session: makeStubbedSession()))
+        await model.dispatch(.toggleRead(id: "100"))
+        #expect(model.state.read.contains("100"))
+
+        await model.dispatch(.refresh)
+        // The id is back in the freshly fetched list, AND still in read.
+        #expect(model.state.stories.contains(where: { $0.id == "100" }))
+        #expect(model.state.read.contains("100"))
+    }
+
+    @Test("setSearchQuery updates state without firing a fetch")
+    func setSearchQuery_localOnly() async {
+        var requestCount = 0
+        URLProtocolStub.requestRecorder = { _ in requestCount += 1 }
+
+        let model = AppModel(client: HNClient(session: makeStubbedSession()))
+        await model.dispatch(.setSearchQuery(value: "rust"))
+
+        #expect(model.state.searchQuery == "rust")
+        // No request fired — debouncing + fetch is the platform UI's job
+        // (`task(id:)` on iOS, `LaunchedEffect` on Android), which calls
+        // `.refresh` after the debounce.
+        #expect(requestCount == 0)
+        #expect(model.state.isLoading == false)
+    }
+
+    @Test("refresh uses search endpoint when searchQuery is non-empty")
+    func refresh_searchPath() async throws {
+        var lastURL: URL?
+        URLProtocolStub.responder = { request in
+            lastURL = request.url
+            return okResponse(twoStoriesFixture, for: request.url!)
+        }
+
+        let model = AppModel(client: HNClient(session: makeStubbedSession()))
+        await model.dispatch(.setSearchQuery(value: "rust"))
+        await model.dispatch(.refresh)
+
+        let url = try #require(lastURL)
+        #expect(url.path == "/api/v1/search")
+        #expect(url.absoluteString.contains("query=rust"))
+    }
+
+    @Test("dispatch resumes on caller's actor (SE-0461)")
+    @MainActor
+    func dispatch_runsOnCallersActor() async {
+        URLProtocolStub.responder = { request in
+            okResponse(twoStoriesFixture, for: request.url!)
+        }
+
+        let model = AppModel(client: HNClient(session: makeStubbedSession()))
+        await model.dispatch(.refresh)
+        // SE-0461: NonisolatedNonsendingByDefault means dispatch runs on
+        // the caller's actor (MainActor here) and the resumption after
+        // the await stays on it.
         MainActor.assertIsolated()
-    }
-
-    @Test("setSearchQuery filters cities case-insensitively")
-    func setSearchQuery_filters() async {
-        let model = AppModel()
-        let totalCount = model.state.cities.count
-
-        // "ne" matches Sydney, Melbourne, and New York (and only those).
-        await model.dispatch(.setSearchQuery(value: "NE"))
-        let names = model.state.cities.map(\.name)
-        #expect(names.allSatisfy { $0.localizedCaseInsensitiveContains("ne") })
-        #expect(Set(names) == ["Sydney", "Melbourne", "New York"])
-        #expect(model.state.cities.count < totalCount)
-
-        await model.dispatch(.setSearchQuery(value: ""))
-        #expect(model.state.cities.count == totalCount)
-    }
-
-    @Test("setSearchQuery treats whitespace-only as no filter")
-    func setSearchQuery_whitespaceOnly() async {
-        let model = AppModel()
-        let totalCount = model.state.cities.count
-
-        await model.dispatch(.setSearchQuery(value: "  \t\n "))
-        #expect(model.state.cities.count == totalCount)
-    }
-
-    @Test("toggling favourite while filtered keeps filter applied")
-    func toggleFavorite_preservesFilter() async {
-        let model = AppModel()
-        await model.dispatch(.setSearchQuery(value: "on"))
-        let filteredCount = model.state.cities.count
-        #expect(filteredCount > 0)
-
-        await model.dispatch(.toggleFavorite(id: "lon"))
-        #expect(model.state.cities.count == filteredCount)
-        #expect(model.state.cities.first?.id == "lon")
-    }
-
-    @Test("favourite status survives query changes")
-    func setSearchQuery_preservesFavourites() async {
-        let model = AppModel()
-        await model.dispatch(.toggleFavorite(id: "syd"))
-        #expect(model.state.favorites.contains("syd"))
-
-        await model.dispatch(.setSearchQuery(value: "paris"))
-        #expect(model.state.favorites.contains("syd"))
-        #expect(model.state.cities.contains(where: { $0.id == "syd" }) == false)
-
-        await model.dispatch(.setSearchQuery(value: ""))
-        #expect(model.state.favorites.contains("syd"))
-        #expect(model.state.cities.first?.id == "syd")
     }
 }
 
 @Suite("AppEvent JSON round-trip")
 struct AppEventTests {
 
-    @Test("toggleFavorite encodes with discriminator and id payload")
-    func toggleFavorite_wireShape() throws {
-        let event = AppEvent.toggleFavorite(id: "syd")
+    @Test("toggleRead encodes with discriminator and id payload")
+    func toggleRead_wireShape() throws {
+        let event = AppEvent.toggleRead(id: "39184235")
         let json = event.toJSON()
-        #expect(json.contains("\"type\":\"toggleFavorite\""))
-        #expect(json.contains("\"id\":\"syd\""))
+        #expect(json.contains("\"type\":\"toggleRead\""))
+        #expect(json.contains("\"id\":\"39184235\""))
 
         let decoded = try #require(AppEvent(json: json))
         #expect(decoded == event)
@@ -134,10 +166,10 @@ struct AppEventTests {
 
     @Test("setSearchQuery encodes with value payload")
     func setSearchQuery_wireShape() throws {
-        let event = AppEvent.setSearchQuery(value: "paris")
+        let event = AppEvent.setSearchQuery(value: "rust")
         let json = event.toJSON()
         #expect(json.contains("\"type\":\"setSearchQuery\""))
-        #expect(json.contains("\"value\":\"paris\""))
+        #expect(json.contains("\"value\":\"rust\""))
 
         let decoded = try #require(AppEvent(json: json))
         #expect(decoded == event)
@@ -147,14 +179,14 @@ struct AppEventTests {
     func decodes_handWrittenLiterals() throws {
         // These are the literal payloads the Kotlin side sends; if Swift
         // ever stops accepting them the cross-language contract has drifted.
-        let toggle = try #require(AppEvent(json: #"{"type":"toggleFavorite","id":"syd"}"#))
-        #expect(toggle == .toggleFavorite(id: "syd"))
+        let toggle = try #require(AppEvent(json: #"{"type":"toggleRead","id":"100"}"#))
+        #expect(toggle == .toggleRead(id: "100"))
 
         let refresh = try #require(AppEvent(json: #"{"type":"refresh"}"#))
         #expect(refresh == .refresh)
 
-        let query = try #require(AppEvent(json: #"{"type":"setSearchQuery","value":"par"}"#))
-        #expect(query == .setSearchQuery(value: "par"))
+        let query = try #require(AppEvent(json: #"{"type":"setSearchQuery","value":"rust"}"#))
+        #expect(query == .setSearchQuery(value: "rust"))
     }
 
     @Test("rejects unknown discriminators")

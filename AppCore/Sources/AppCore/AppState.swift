@@ -6,21 +6,27 @@ import Foundation
 /// wrapper that holds one of these and exposes a single `dispatch(_:)`
 /// entry point; the JNI bridge serialises this type as JSON.
 public struct AppState: Sendable, Codable, Equatable {
-    public var cities: [City]
-    public var favorites: Set<String>
-    public var globalFavoriteCount: Int
+    public var stories: [Story]
+    public var read: Set<String>
+    public var searchQuery: String
+    public var isLoading: Bool
     public var lastRefreshedAt: Date?
+    public var loadError: String?
 
     public init(
-        cities: [City] = .demoData,
-        favorites: Set<String> = [],
-        globalFavoriteCount: Int = 0,
-        lastRefreshedAt: Date? = nil
+        stories: [Story] = [],
+        read: Set<String> = [],
+        searchQuery: String = "",
+        isLoading: Bool = false,
+        lastRefreshedAt: Date? = nil,
+        loadError: String? = nil
     ) {
-        self.cities = cities
-        self.favorites = favorites
-        self.globalFavoriteCount = globalFavoriteCount
+        self.stories = stories
+        self.read = read
+        self.searchQuery = searchQuery
+        self.isLoading = isLoading
         self.lastRefreshedAt = lastRefreshedAt
+        self.loadError = loadError
     }
 }
 
