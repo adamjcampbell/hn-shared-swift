@@ -27,20 +27,24 @@ public final class AppModel {
     private let client: HNClient
 
     /// Bumped synchronously on every `.setSearchQuery` and `.refresh`.
-    /// After the debounce sleep, the dispatch checks that its captured
-    /// epoch is still current; if a newer event landed during the
-    /// sleep, the older dispatch returns without firing a fetch.
+    ///
+    /// Two callers read it:
+    ///
+    /// - The post-sleep guard in `.setSearchQuery` — older dispatches
+    ///   whose keystroke is no longer the latest return without firing
+    ///   a fetch.
+    /// - The post-fetch guard in `runFetch` — if a newer dispatch (any
+    ///   kind) bumped the epoch while we were awaiting `body()`, the
+    ///   newer one is what should win, so we drop our result silently.
+    ///
+    /// One counter handles both cases because the actor (MainActor on
+    /// iOS, `AndroidBridge` on Android) serialises synchronous code.
+    /// `queryEpoch &+= 1` and `let myEpoch = queryEpoch` are atomic
+    /// against each other; only `await` points let another dispatch
+    /// interleave, and at every such point the epoch invariant ("I'm
+    /// the latest iff `myEpoch == queryEpoch`") is what we want.
     @ObservationIgnored
     private var queryEpoch: UInt64 = 0
-
-    /// Bumped on every fetch start. `runFetch` only commits a result
-    /// if the epoch is still current when the response lands. Belt-
-    /// and-braces guard against a stale fetch that started before the
-    /// query changed (the common case is filtered by `queryEpoch`
-    /// above; this catches the rare gap where two dispatches both
-    /// pass their `queryEpoch` check before either commits).
-    @ObservationIgnored
-    private var requestEpoch: UInt64 = 0
 
     /// Debounce window for `.setSearchQuery`. Hard-coded; the test
     /// harness uses time-based timing assertions rather than mutating
@@ -117,25 +121,27 @@ public final class AppModel {
     /// The two synchronous mutations on success (`stories` + `lastRefreshedAt`)
     /// batch into one `Observations` transaction (SE-0475) on Android.
     private func runFetch(_ body: () async throws -> [Story]) async {
-        requestEpoch &+= 1
-        let myEpoch = requestEpoch
+        // Capture the epoch the calling dispatch arm just bumped. The
+        // capture is atomic with respect to other dispatches because the
+        // actor is still serialised between `dispatch`'s bump and the
+        // first `await` inside this method.
+        let myEpoch = queryEpoch
         state.isLoading = true
         state.loadError = nil
         do {
             let stories = try await body()
-            // Stale: a newer .refresh started while we were awaiting, so
+            // Stale: a newer dispatch started while we were awaiting, so
             // its result is what should win. Drop ours silently.
-            guard myEpoch == requestEpoch else { return }
+            guard myEpoch == queryEpoch else { return }
             state.stories = stories
             state.lastRefreshedAt = .now
             state.isLoading = false
         } catch is CancellationError {
-            // A new fetch is on its way (the platform UI re-fired refresh
-            // because the search text changed). Leave isLoading=true so
-            // the spinner stays until that fetch settles.
+            // A new fetch is on its way; leave isLoading=true so the
+            // spinner stays until that fetch settles.
             return
         } catch {
-            guard myEpoch == requestEpoch else { return }
+            guard myEpoch == queryEpoch else { return }
             state.loadError = error.localizedDescription
             state.isLoading = false
         }
