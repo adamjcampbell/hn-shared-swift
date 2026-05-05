@@ -5,6 +5,10 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
 
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+
 # Local SwiftPM dependency on the cross-platform AppCore package.
 packages:
   AppCore:
@@ -27,11 +31,14 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.appcore.ios
         TARGETED_DEVICE_FAMILY: "1,2"
-        SWIFT_VERSION: "5.0"
+        SWIFT_VERSION: "6.0"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         CODE_SIGN_STYLE: Automatic
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
+        SWIFT_APPROACHABLE_CONCURRENCY: YES
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+        SWIFT_STRICT_CONCURRENCY: complete
     dependencies:
       - package: AppCore
         product: AppCore

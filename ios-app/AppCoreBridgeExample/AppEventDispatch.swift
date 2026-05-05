@@ -23,12 +23,14 @@ struct AppEventDispatch: Equatable {
     }
 
     /// Fire-and-forget. Used by tap handlers and `onChange` call sites.
+    @MainActor
     func callAsFunction(_ event: AppEvent) {
-        Task { [model] in await model?.dispatch(event) }
+        Task { @MainActor [model] in await model?.dispatch(event) }
     }
 
     /// Awaitable. Use from `.refreshable` so the pull-to-refresh spinner
     /// stays visible until the dispatch actually completes.
+    @MainActor
     func run(_ event: AppEvent) async {
         await model?.dispatch(event)
     }
