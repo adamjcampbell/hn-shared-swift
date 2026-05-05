@@ -26,30 +26,13 @@ public final class AppModel {
     @ObservationIgnored
     private let client: HNClient
 
-    /// Bumped synchronously on every `.setSearchQuery` and `.refresh`.
-    ///
-    /// Two callers read it:
-    ///
-    /// - The post-sleep guard in `.setSearchQuery` — older dispatches
-    ///   whose keystroke is no longer the latest return without firing
-    ///   a fetch.
-    /// - The post-fetch guard in `runFetch` — if a newer dispatch (any
-    ///   kind) bumped the epoch while we were awaiting `body()`, the
-    ///   newer one is what should win, so we drop our result silently.
-    ///
-    /// One counter handles both cases because the actor (MainActor on
-    /// iOS, `AndroidBridge` on Android) serialises synchronous code.
-    /// `queryEpoch &+= 1` and `let myEpoch = queryEpoch` are atomic
-    /// against each other; only `await` points let another dispatch
-    /// interleave, and at every such point the epoch invariant ("I'm
-    /// the latest iff `myEpoch == queryEpoch`") is what we want.
+    /// In-flight network task. Replaced (and the predecessor cancelled)
+    /// on every `.refresh` and post-debounce `.setSearchQuery` — only one
+    /// fetch runs at a time, and the latest dispatch always wins.
     @ObservationIgnored
-    private var queryEpoch: UInt64 = 0
+    private var searchTask: Task<FetchOutcome, Never>?
 
-    /// Debounce window for `.setSearchQuery`. Hard-coded; the test
-    /// harness uses time-based timing assertions rather than mutating
-    /// this constant (so we don't need a strict-concurrency-unfriendly
-    /// `static var`).
+    /// Debounce window for `.setSearchQuery`.
     static let searchDebounce: Duration = .milliseconds(250)
 
     public init(client: HNClient = HNClient()) {
@@ -59,53 +42,26 @@ public final class AppModel {
     /// Single entry point for every user-driven mutation.
     ///
     /// `async` so callers that need completion (e.g. SwiftUI's
-    /// `.refreshable` to dismiss the pull-to-refresh spinner) can
-    /// `await` the call.
+    /// `.refreshable` to dismiss the pull-to-refresh spinner) can `await`
+    /// the call. Cross-platform: `dispatch` is statically nonisolated
+    /// under SE-0461 and runs on the caller's actor at runtime.
     ///
-    /// **Why debounce sleeps inline rather than spawning a Task.**
-    /// Under SE-0461 (`NonisolatedNonsendingByDefault`, enabled
-    /// package-wide) an unannotated `async` method is statically
-    /// `nonisolated(nonsending)` even though it runs on the caller's
-    /// actor at runtime. The proposal explicitly states *"unstructured
-    /// tasks created in nonisolated functions never run on an actor
-    /// unless explicitly specified."* `Task.init`'s
-    /// `@_inheritActorContext` only inherits *static* isolation, and
-    /// SE-0420's `#isolation`-defaulted `isolated` parameter — the
-    /// obvious "explicit specification" — does not (in Swift 6.3)
-    /// propagate into the Task closure's inheritance. So we don't
-    /// spawn a Task here; the caller's outer Task is the structural
-    /// unit. Each `.setSearchQuery` dispatch sleeps inline; the
-    /// `queryEpoch` check after the sleep filters out older dispatches
-    /// whose keystroke is no longer the latest. Multiple in-flight
-    /// dispatches sleep concurrently on the caller's actor (each
-    /// `Task.sleep` releases the actor), and only the latest survives
-    /// the epoch check.
+    /// **Why this works under Swift 6 strict concurrency.** The fetch
+    /// `Task` deliberately captures only Sendable values (`client`,
+    /// `value`) — never `self`. State commits happen back here in the
+    /// dispatch arm, after the `Task`'s value is awaited, so they run
+    /// on the caller's actor where `self` natively lives. That's how we
+    /// can have a stored `searchTask: Task<…>?` field on a non-Sendable
+    /// `@Observable` class without tripping the SE-0461 hole.
     public func dispatch(_ event: AppEvent) async {
         switch event {
         case .toggleRead(let id):
             toggleRead(id)
         case .refresh:
-            queryEpoch &+= 1
-            await runFetch {
-                self.state.searchQuery.isEmpty
-                    ? try await self.client.frontPage()
-                    : try await self.client.search(self.state.searchQuery)
-            }
+            await runFetch(debounce: .immediately)
         case .setSearchQuery(let value):
             state.searchQuery = value
-            queryEpoch &+= 1
-            let myEpoch = queryEpoch
-            do {
-                try await Task.sleep(for: Self.searchDebounce)
-            } catch {
-                return
-            }
-            guard myEpoch == queryEpoch else { return }
-            await runFetch {
-                value.isEmpty
-                    ? try await self.client.frontPage()
-                    : try await self.client.search(value)
-            }
+            await runFetch(debounce: .after(Self.searchDebounce))
         }
     }
 
@@ -117,33 +73,67 @@ public final class AppModel {
         }
     }
 
-    /// Run a network request, mirroring loading/error state into `AppState`.
-    /// The two synchronous mutations on success (`stories` + `lastRefreshedAt`)
-    /// batch into one `Observations` transaction (SE-0475) on Android.
-    private func runFetch(_ body: () async throws -> [Story]) async {
-        // Capture the epoch the calling dispatch arm just bumped. The
-        // capture is atomic with respect to other dispatches because the
-        // actor is still serialised between `dispatch`'s bump and the
-        // first `await` inside this method.
-        let myEpoch = queryEpoch
+    /// Cancel-and-replace a single in-flight fetch task.
+    ///
+    /// The Task body captures only Sendable values (`client`, `query`,
+    /// `debounce`). When a new dispatch arrives, it cancels the prior
+    /// task; that task's `URLSession.data(from:)` throws
+    /// `CancellationError`, the body returns `.cancelled`, and the prior
+    /// dispatch's `await searchTask?.value` here resolves to `.cancelled`
+    /// — at which point the prior dispatch returns without committing
+    /// anything to `state`.
+    private func runFetch(debounce: DebounceMode) async {
+        searchTask?.cancel()
+
+        let query = state.searchQuery
+        let task = Task<FetchOutcome, Never> { [client] in
+            if case .after(let duration) = debounce {
+                do {
+                    try await Task.sleep(for: duration)
+                } catch {
+                    return .cancelled
+                }
+            }
+            do {
+                let stories = query.isEmpty
+                    ? try await client.frontPage()
+                    : try await client.search(query)
+                return .success(stories)
+            } catch is CancellationError {
+                return .cancelled
+            } catch {
+                return .failure(error.localizedDescription)
+            }
+        }
+        searchTask = task
+
         state.isLoading = true
         state.loadError = nil
-        do {
-            let stories = try await body()
-            // Stale: a newer dispatch started while we were awaiting, so
-            // its result is what should win. Drop ours silently.
-            guard myEpoch == queryEpoch else { return }
+
+        switch await task.value {
+        case .cancelled:
+            // A newer dispatch superseded us. The newer one is responsible
+            // for committing its own result; leave isLoading=true so the
+            // spinner stays until that fetch settles.
+            return
+        case .success(let stories):
             state.stories = stories
             state.lastRefreshedAt = .now
             state.isLoading = false
-        } catch is CancellationError {
-            // A new fetch is on its way; leave isLoading=true so the
-            // spinner stays until that fetch settles.
-            return
-        } catch {
-            guard myEpoch == queryEpoch else { return }
-            state.loadError = error.localizedDescription
+        case .failure(let message):
+            state.loadError = message
             state.isLoading = false
         }
     }
+}
+
+private enum DebounceMode: Sendable {
+    case immediately
+    case after(Duration)
+}
+
+private enum FetchOutcome: Sendable {
+    case success([Story])
+    case failure(String)
+    case cancelled
 }

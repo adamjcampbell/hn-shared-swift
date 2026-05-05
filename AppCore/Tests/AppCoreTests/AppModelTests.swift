@@ -110,15 +110,23 @@ struct AppModelTests {
         #expect(model.state.isLoading == false)
     }
 
-    // The coalescing property of cooperative-epoch debouncing — three
-    // concurrent setSearchQuery dispatches collapse to one request — is
-    // not asserted here. Reliably reproducing concurrent dispatches in
-    // a test trips Swift Testing's region-isolation runtime checks
-    // under the project's strict-concurrency settings, and instrumenting
-    // around them adds more fragility than the assertion is worth. The
-    // property follows directly from the implementation: queryEpoch is
-    // bumped synchronously on entry, and after `Task.sleep` only the
-    // dispatch whose myEpoch still matches calls `runFetch`.
+    // The cancel-and-replace property — three concurrent
+    // `.setSearchQuery` dispatches collapse to one HTTP request, and a
+    // `.refresh` during a pending debounce cancels the pending search —
+    // is verifiable in code but flaky to test through `URLProtocolStub`,
+    // because the stub answers requests synchronously inside
+    // `startLoading`. By the time `searchTask?.cancel()` propagates, the
+    // about-to-be-cancelled task has often already received its response,
+    // so the request still counts as "fired" from the test's point of
+    // view. Real network calls are slow enough for cancellation to win;
+    // a stubbed test would need a sleeping responder to simulate that,
+    // which is its own can of worms.
+    //
+    // The property is argued from the code: every dispatch arm that
+    // wants to win calls `searchTask?.cancel()` before storing its own
+    // task; the prior task's `URLSession.data` throws `CancellationError`
+    // on cancel, which surfaces as `.cancelled` in the prior dispatch's
+    // `await searchTask.value` and skips the commit.
 
     @Test("refresh uses search endpoint when searchQuery is non-empty")
     func refresh_searchPath() async throws {

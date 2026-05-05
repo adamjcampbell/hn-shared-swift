@@ -15,18 +15,17 @@ import FoundationNetworking
 /// an actor would add two pointless hops per call without protecting
 /// anything.
 ///
-/// **Why no `Sendable` conformance:** `HNClient` is constructed once and
-/// injected via `AppModel.init(client:)`. `AppModel` is itself non-
-/// `Sendable` and lives on exactly one isolation domain for the whole
-/// process (MainActor on iOS, `AndroidBridge` on Android). Under SE-0414
-/// region-based isolation, anything `AppModel` transitively owns lives in
-/// that same region — the client never crosses an actor boundary, so the
-/// compiler never asks for `Sendable` proof.
+/// **`Sendable` conformance:** `HNClient` only holds `let` properties of
+/// thread-safe types (`URLSession`, `JSONDecoder`, static `URL`). Marking
+/// it `Sendable` is what makes the cancel-and-replace pattern in
+/// `AppModel` possible: the unstructured `Task` that issues the HTTP
+/// call captures `[client]` directly, with no `self` capture, so the
+/// closure has no non-Sendable region to send across.
 ///
 /// **Cancellation:** every method calls `URLSession.data(from:)`, which
 /// throws `CancellationError` when the surrounding `Task` is cancelled.
 /// `AppModel` relies on this for debounced search.
-public final class HNClient {
+public final class HNClient: Sendable {
     private static let baseURL = URL(string: "https://hn.algolia.com/api/v1/")!
 
     private static let decoder: JSONDecoder = {
