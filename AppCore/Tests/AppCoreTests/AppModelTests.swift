@@ -91,21 +91,34 @@ struct AppModelTests {
         #expect(model.state.read.contains("100"))
     }
 
-    @Test("setSearchQuery updates state without firing a fetch")
-    func setSearchQuery_localOnly() async {
+    @Test("setSearchQuery debounces, then fires one request")
+    func setSearchQuery_firesDebouncedRequest() async {
         var requestCount = 0
         URLProtocolStub.requestRecorder = { _ in requestCount += 1 }
+        URLProtocolStub.responder = { request in
+            okResponse(twoStoriesFixture, for: request.url!)
+        }
 
         let model = AppModel(client: HNClient(session: makeStubbedSession()))
         await model.dispatch(.setSearchQuery(value: "rust"))
 
         #expect(model.state.searchQuery == "rust")
-        // No request fired — debouncing + fetch is the platform UI's job
-        // (`task(id:)` on iOS, `LaunchedEffect` on Android), which calls
-        // `.refresh` after the debounce.
-        #expect(requestCount == 0)
+        // The single dispatch slept the debounce inline, then issued
+        // exactly one request. Result committed on completion.
+        #expect(requestCount == 1)
+        #expect(model.state.stories.count == 2)
         #expect(model.state.isLoading == false)
     }
+
+    // The coalescing property of cooperative-epoch debouncing — three
+    // concurrent setSearchQuery dispatches collapse to one request — is
+    // not asserted here. Reliably reproducing concurrent dispatches in
+    // a test trips Swift Testing's region-isolation runtime checks
+    // under the project's strict-concurrency settings, and instrumenting
+    // around them adds more fragility than the assertion is worth. The
+    // property follows directly from the implementation: queryEpoch is
+    // bumped synchronously on entry, and after `Task.sleep` only the
+    // dispatch whose myEpoch still matches calls `runFetch`.
 
     @Test("refresh uses search endpoint when searchQuery is non-empty")
     func refresh_searchPath() async throws {
