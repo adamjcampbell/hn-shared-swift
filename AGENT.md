@@ -88,26 +88,29 @@ Per spec §12 plus what verification surfaced:
   global `AndroidBridge.shared` singleton actor and the entry points
   (`appcoreCreate`, `appcoreDispatch`, `appcoreDestroy`) operate on it
   without handles. The Kotlin side initialises `AppModelHolder` once from
-  `AppCoreApplication.onCreate`; `appcoreCreate(sink:)` is idempotent
-  (replaces the prior sink) so per-test attach/detach in `BridgePerfTest`
-  works without a reset hook.
-- The value-type snapshot is `AppState` (renamed from `Snapshot` so the
-  property reads as `appModel.state: AppState`). Don't rename it back to
-  `State` — that collides with SwiftUI's `@State` property wrapper in
-  iOS code.
+  `AppCoreApplication.onCreate`; `appcoreCreate(snapshotSink:, commandSink:)`
+  is idempotent (replaces the prior sinks) so per-test attach/detach in
+  `BridgePerfTest` works without a reset hook.
+- `AppState` is an `@Observable final class` (originally a value-type
+  `Snapshot` — renamed so the property reads as `appModel.state:
+  AppState`). Don't rename it back to `State` — that collides with
+  SwiftUI's `@State` property wrapper in iOS code.
 - **`AndroidBridge` deduplicates emissions before the JNI hop.** The
-  observation `Task` body holds a local `var lastDeliveredState:
-  AppState?` and skips `sink.deliver` when the new state equals the
-  prior one. `Observations` starts a transaction on every `willSet`
-  regardless of value-equality, so without this guard a redundant
-  write (e.g. `state.isLoading = true` when already true) would
-  JSON-encode and JNI-hop for nothing. Compose's
-  `mutableStateOf<AppState?>` saves the recompose either way, but the
-  wire round-trip costs ~100 µs per skipped emission. Holding a
-  ~10–30 KB copy of the prior state is the cheap end of the trade.
-  The dedup state lives inside the Task closure rather than on the
-  actor — `attach` cancels and respawns the Task, so a fresh sink
-  gets a fresh comparison automatically.
+  observation `Task` body encodes inside the `Observations` closure
+  (`Observations { self.appModel.state.toJSON() }`) and holds a local
+  `var lastJSON: String?`, skipping `sink.deliver` when the new JSON is
+  byte-identical to the prior one. `Observations` starts a transaction
+  on every `willSet` regardless of value-equality, so without this
+  guard a redundant write (e.g. `state.isLoading = true` when already
+  true) would JNI-hop for nothing. Compose's `mutableStateOf<AppState?>`
+  saves the recompose either way, but the wire round-trip costs ~100 µs
+  per skipped emission. Trade-off vs the prior shape (when `AppState`
+  was a value type and dedup compared by struct equality before
+  encoding): we now always pay the JSON encode, but the actor-side
+  encode is cheaper than the JNI hop, so the saving is still net-
+  positive on idempotent writes. The dedup state lives inside the Task
+  closure rather than on the actor — `attach` cancels and respawns the
+  Task, so a fresh sink gets a fresh comparison automatically.
 - **Debouncing lives inside `AppModel.dispatch`, not the platform UI.**
   `.setSearchQuery` cancel-and-replaces a stored
   `searchTask: Task<[Story], Error>?`. The platform UI just forwards

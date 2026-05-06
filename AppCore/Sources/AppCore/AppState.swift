@@ -30,11 +30,11 @@ import Observation
 ///   render. Computed properties aren't seen by `Codable` synthesis,
 ///   so this is the one field `encode(to:)` writes by hand.
 ///
-/// `Encodable` (not `Codable`): the JSON only travels Swift → Kotlin.
-/// We never decode an `AppState` on the Swift side. Custom `encode(to:)`
-/// is required because the `@Observable` macro rewrites stored
-/// properties into `_foo` backing storage, which breaks the default
-/// synthesis path.
+/// `Encodable` rather than `Codable` because the JSON only travels
+/// Swift → Kotlin — we never decode an `AppState` on the Swift side.
+/// Separately, the `encode(to:)` body is written by hand because the
+/// `@Observable` macro rewrites stored properties into `_foo` backing
+/// storage, which breaks the default `Codable` synthesis path.
 @Observable
 public final class AppState: Encodable {
 

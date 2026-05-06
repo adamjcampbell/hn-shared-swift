@@ -81,9 +81,13 @@ project rules" section.
 
 ## Verified
 
-`xcodebuild` for `arm64-apple-ios17.0-simulator` succeeds; the app launches on
-the iPhone 17 simulator and renders the cities list with the favorites
-summary — visually equivalent to the Android variant (spec §10.7). The
-Compose-side behaviours (heart toggle reorders, pull-to-refresh updates
-header values) are implemented identically on iOS via `@Observable` +
-SwiftUI's built-in observation tracking.
+`xcodebuild` for `arm64-apple-ios17.0-simulator` succeeds; the app launches
+on the iPhone 17 simulator and renders the Hacker News front page with
+header card and search bar — visually equivalent to the Android variant
+(spec §10.7). Compose-side behaviours (toggle-read flips strikethrough,
+pull-to-refresh updates the timestamp, debounced search) are implemented
+identically on iOS via `@Observable` + SwiftUI's built-in observation
+tracking. iOS keeps an inline `ProgressView` in the header card because
+`.refreshable`'s spinner is gesture-driven only; Android dropped its
+inline indicator since `PullToRefreshBox(isRefreshing = …)` is
+programmatic and shows for cold-start fetches too.
