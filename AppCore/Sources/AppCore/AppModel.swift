@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Owns the app's `AppState` and the `dispatch(_:)` method that
 /// mutates it in response to user events.
@@ -132,6 +135,15 @@ public final class AppModel {
     /// query and commit stale data. Letting the throw propagate is what
     /// makes the cancel-and-replace property robust against any client
     /// implementation, mock or live.
+    ///
+    /// **`URLError(.cancelled)` is normalised to `CancellationError`
+    /// inside the Task body** — `URLSession` surfaces task cancellation
+    /// as `URLError.cancelled` rather than `CancellationError`, so a
+    /// fetch already in flight when a newer dispatch arrives would
+    /// otherwise fall through to the generic `catch` arm and surface as
+    /// a transient `loadError = "cancelled"` until the newer fetch
+    /// settles. Re-throwing as `CancellationError` keeps the dispatch
+    /// arm a single uniform "this run was superseded" path.
     private func runFetch(debounce: Duration? = nil) async {
         searchTask?.cancel()
 
@@ -140,9 +152,13 @@ public final class AppModel {
             if let debounce {
                 try await clock.sleep(for: debounce)
             }
-            return query.isEmpty
-                ? try await client.frontPage()
-                : try await client.search(query)
+            do {
+                return query.isEmpty
+                    ? try await client.frontPage()
+                    : try await client.search(query)
+            } catch let urlError as URLError where urlError.code == .cancelled {
+                throw CancellationError()
+            }
         }
         searchTask = task
 

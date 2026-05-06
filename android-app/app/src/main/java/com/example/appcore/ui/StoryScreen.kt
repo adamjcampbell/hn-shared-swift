@@ -58,6 +58,7 @@ import com.example.appcore.state.AppState
 import com.example.appcore.state.Story
 import com.example.appcore.state.rememberAppModel
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -128,10 +129,14 @@ private fun StoriesContent(
     // AppCore handles its own debounce inside `.setSearchQuery` —
     // Compose just forwards every keystroke.
     // distinctUntilChanged guards against snapshotFlow re-emitting on
-    // cursor / selection changes.
+    // cursor / selection changes. drop(1) skips the initial replayed
+    // empty value so the cold-start `.setSearchQuery("")` doesn't race
+    // with the `LaunchedEffect(Unit) { holder.dispatch(Refresh) }`
+    // above and cancel-and-replace its in-flight front-page fetch.
     LaunchedEffect(Unit) {
         snapshotFlow { textFieldState.text.toString() }
             .distinctUntilChanged()
+            .drop(1)
             .collect(onSearchTextChanged)
     }
 

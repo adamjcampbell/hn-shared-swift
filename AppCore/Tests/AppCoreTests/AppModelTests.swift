@@ -280,6 +280,29 @@ struct AppModelTests {
         await model.dispatch(.refresh)
         MainActor.assertIsolated()
     }
+
+    @Test("URLError(.cancelled) from a cancelled fetch is treated as cancellation")
+    @MainActor
+    func cancelledURLError_doesNotSurfaceAsLoadError() async {
+        // URLSession surfaces task cancellation as URLError.cancelled,
+        // not Swift's CancellationError. Without the in-Task
+        // normalisation, a cancel-and-replace would race the prior
+        // fetch's `URLError(.cancelled)` into the generic catch arm and
+        // briefly write `loadError = "cancelled"`. Cold-start on Android
+        // hits this when the search-bar's snapshotFlow initial empty
+        // value races the explicit `.refresh` LaunchedEffect.
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { throw URLError(.cancelled) },
+                search:    { _ in throw URLError(.cancelled) }
+            )
+        )
+
+        await model.dispatch(.refresh)
+
+        #expect(model.state.loadError == nil)
+        #expect(model.state.hits.isEmpty)
+    }
 }
 
 @Suite("AppEvent JSON round-trip")
