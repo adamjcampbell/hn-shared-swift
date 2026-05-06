@@ -53,8 +53,9 @@ class BridgePerfTest {
     // Hand-written wire literals avoid pulling kotlinx.serialization into
     // the hot path — these tests measure Swift-side cost only.
     private companion object {
+        // syncJniCall_overhead measures fire-and-forget JNI cost only,
+        // so the toggle id never has to match a real story.
         const val TOGGLE_FOO_JSON = """{"type":"toggleRead","id":"foo"}"""
-        const val TOGGLE_BAR_JSON = """{"type":"toggleRead","id":"bar"}"""
         const val REFRESH_JSON = """{"type":"refresh"}"""
         // First "id" key in the snapshot belongs to the first story (no
         // other Story field is named "id"). Lifted to a companion to
@@ -195,26 +196,45 @@ class BridgePerfTest {
         val sink = CapturingSink()
         AppCoreAndroid.appcoreCreate(sink, sink)
         try {
-            val first = withTimeout(5_000) { sink.channel.receive() }
-            println("[BridgePerf] snapshot JSON bytes (cold): ${first.toByteArray().size}")
-            println("[BridgePerf] snapshot JSON (cold): $first")
+            // Drain the initial Observations emission.
+            withTimeout(5_000) { sink.channel.receive() }
 
-            // Mark three stories read. Each toggle may or may not produce its
-            // own snapshot depending on Observations' transactional batching;
-            // we just measure the size of whichever snapshot lands last in a
-            // small window.
-            AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON)
-            AppCoreAndroid.appcoreDispatch(TOGGLE_BAR_JSON)
-            AppCoreAndroid.appcoreDispatch("""{"type":"toggleRead","id":"baz"}""")
+            // Refresh and capture the snapshot once stories have loaded.
+            // We can't characterise the cold-start (~340 B) shape here
+            // because the bridge is process-wide and prior tests will
+            // have warmed AppState; "loaded (no reads)" is the
+            // canonical baseline.
+            AppCoreAndroid.appcoreDispatch(REFRESH_JSON)
+            val loaded = withTimeout(10_000) {
+                var s = sink.channel.receive()
+                while (!s.contains("\"stories\":[{")) {
+                    s = sink.channel.receive()
+                }
+                s
+            }
+            val ids = FIRST_ID_REGEX.findAll(loaded).take(3).map { it.groupValues[1] }.toList()
+            assertTrue("expected at least 3 stories, got ${ids.size}", ids.size == 3)
 
-            var last = first
+            println("[BridgePerf] snapshot JSON bytes (loaded, no reads): ${loaded.toByteArray().size}")
+            println("[BridgePerf] snapshot JSON (loaded, no reads): $loaded")
+
+            // Toggle three real story ids — each flips Story.isRead in
+            // the encoded snapshot, so each emits a distinct payload.
+            ids.forEach { id ->
+                AppCoreAndroid.appcoreDispatch("""{"type":"toggleRead","id":"$id"}""")
+            }
+
+            // Drain to the last snapshot in a small window. Three
+            // synchronous willSets fire three transactions, but the
+            // bridge's String dedup may coalesce identical ones.
+            var withReads = loaded
             try {
                 withTimeout(500) {
-                    while (true) last = sink.channel.receive()
+                    while (true) withReads = sink.channel.receive()
                 }
             } catch (_: Exception) { /* timeout — channel idle */ }
 
-            println("[BridgePerf] snapshot JSON bytes (3 read): ${last.toByteArray().size}")
+            println("[BridgePerf] snapshot JSON bytes (3 read): ${withReads.toByteArray().size}")
         } finally {
             AppCoreAndroid.appcoreDestroy()
         }
