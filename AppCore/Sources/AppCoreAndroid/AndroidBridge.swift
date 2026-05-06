@@ -25,18 +25,22 @@ actor AndroidBridge {
     static let shared = AndroidBridge()
 
     private let appModel = AppModel()
-    private var sink: (any SnapshotSink)?
+    private var snapshotSink: (any SnapshotSink)?
+    private var commandSink: (any CommandSink)?
     private var observationTask: Task<Void, Never>?
+    private var commandTask: Task<Void, Never>?
 
     private init() {}
 
-    /// Attach a snapshot sink and (re)start the observation loop. Idempotent:
-    /// a second call cancels the prior observation task and replaces the
-    /// sink, which is what tests need to do between cases without a
-    /// dedicated reset hook.
-    func attach(sink: any SnapshotSink) {
+    /// Attach both sinks and (re)start the observation + command pumps.
+    /// Idempotent: a second call cancels the prior tasks and replaces
+    /// the sinks, which is what tests need to do between cases without
+    /// a dedicated reset hook.
+    func attach(snapshotSink: any SnapshotSink, commandSink: any CommandSink) {
         observationTask?.cancel()
-        self.sink = sink
+        commandTask?.cancel()
+        self.snapshotSink = snapshotSink
+        self.commandSink = commandSink
         #if canImport(Android)
         observationTask = Task { [self] in
             // `lastDeliveredState` skips the JSON-encode + JNI hop when
@@ -54,7 +58,16 @@ actor AndroidBridge {
             for await state in observations {
                 guard state != lastDeliveredState else { continue }
                 lastDeliveredState = state
-                self.sink?.deliver(snapshotJSON: state.toJSON())
+                self.snapshotSink?.deliver(snapshotJSON: state.toJSON())
+            }
+        }
+        commandTask = Task { [self] in
+            // One consumer per platform binary, so the single-iterator
+            // constraint of `AsyncStream` is respected. The model's
+            // continuation outlives the task; cancelling here leaves
+            // the stream open for a re-attach.
+            for await command in self.appModel.commands {
+                self.commandSink?.deliverCommand(commandJSON: command.toJSON())
             }
         }
         #endif
@@ -63,7 +76,10 @@ actor AndroidBridge {
     func detach() {
         observationTask?.cancel()
         observationTask = nil
-        sink = nil
+        commandTask?.cancel()
+        commandTask = nil
+        snapshotSink = nil
+        commandSink = nil
     }
 
     /// Forward a decoded `AppEvent` to the model. Runs on the bridge

@@ -18,12 +18,12 @@ import AppCore
 // `AppEvent` — adding a new mutation case in `AppCore` is the only thing
 // required to expose a new action to Kotlin.
 
-public func appcoreCreate(sink: some SnapshotSink) {
+public func appcoreCreate(snapshotSink: some SnapshotSink, commandSink: some CommandSink) {
     // Observations (SE-0475) only emits on mutation, so deliver an initial
     // snapshot synchronously before the actor task is scheduled. This is
     // the load-bearing path for `BridgePerfTest.a_coldStart_…`.
-    sink.deliver(snapshotJSON: AppState().toJSON())
-    Task { await AndroidBridge.shared.attach(sink: sink) }
+    snapshotSink.deliver(snapshotJSON: AppState().toJSON())
+    Task { await AndroidBridge.shared.attach(snapshotSink: snapshotSink, commandSink: commandSink) }
 }
 
 public func appcoreDispatch(eventJSON: String) {
