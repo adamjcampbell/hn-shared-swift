@@ -11,7 +11,17 @@ struct SafariView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
 
-struct IdentifiableURL: Identifiable {
+struct IdentifiedURL: Identifiable {
+    let id: String
     let url: URL
-    var id: URL { url }
+}
+
+extension IdentifiedURL {
+    init?(_ string: String) {
+        if let url = URL(string: string).map({ Self(id: string, url: $0) }) {
+            self = url
+        } else {
+            return nil
+        }
+    }
 }

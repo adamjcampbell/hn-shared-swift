@@ -3,7 +3,7 @@ import AppCore
 
 struct RootView: View {
     @State private var appModel = AppModel()
-    @State private var presented: IdentifiableURL?
+    @State private var presented: IdentifiedURL?
 
     var body: some View {
         NavigationStack { StoriesScreen(state: appModel.state) }
@@ -20,9 +20,7 @@ struct RootView: View {
                 for await command in appModel.commands {
                     switch command {
                     case .presentURL(let urlString):
-                        if let url = URL(string: urlString) {
-                            presented = IdentifiableURL(url: url)
-                        }
+                        presented = IdentifiedURL(urlString)
                     }
                 }
             }
