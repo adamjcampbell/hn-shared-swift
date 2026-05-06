@@ -43,22 +43,28 @@ actor AndroidBridge {
         self.commandSink = commandSink
         #if canImport(Android)
         observationTask = Task { [self] in
-            // `lastDeliveredState` skips the JSON-encode + JNI hop when
-            // an `Observations` emission is byte-identical to the prior
-            // one. `Observations` itself doesn't dedup (every `willSet`
-            // starts a transaction even if the value didn't change), and
-            // Compose's `mutableStateOf<AppState?>` only saves the
-            // recompose, not the wire round-trip. Holding a ~10–30 KB
-            // copy buys back ~100 µs of JNI per skipped emission.
+            // `lastJSON` skips the JNI hop when an `Observations`
+            // emission encodes to byte-identical JSON. `Observations`
+            // itself doesn't dedup (every `willSet` starts a transaction
+            // even if the value didn't change), and Compose's
+            // `mutableStateOf<AppState?>` only saves the recompose, not
+            // the wire round-trip. Holding the prior JSON string buys
+            // back ~100 µs of JNI per skipped emission.
+            //
+            // Encoding lives inside the closure so `Observations`
+            // captures a Sendable `String` per transaction (the
+            // `@Observable` `AppState` is a non-`Sendable` reference).
+            // `toJSON()` reads every wire-visible property, which is
+            // exactly the dependency set we want tracked.
             //
             // Local to the Task — re-attach cancels and respawns, so a
             // fresh sink gets a fresh comparison automatically.
-            var lastDeliveredState: AppState?
-            let observations = Observations { self.appModel.state }
-            for await state in observations {
-                guard state != lastDeliveredState else { continue }
-                lastDeliveredState = state
-                self.snapshotSink?.deliver(snapshotJSON: state.toJSON())
+            var lastJSON: String?
+            let observations = Observations { self.appModel.state.toJSON() }
+            for await json in observations {
+                guard json != lastJSON else { continue }
+                lastJSON = json
+                self.snapshotSink?.deliver(snapshotJSON: json)
             }
         }
         commandTask = Task { [self] in

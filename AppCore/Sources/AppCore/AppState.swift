@@ -1,100 +1,76 @@
 import Foundation
+import Observation
 
-/// A `Sendable` value-type snapshot of the app's state.
+/// The single source of truth for the example app.
 ///
-/// `AppState` is the mutable container. `AppModel` is a thin wrapper that
-/// holds one of these and exposes a single `dispatch(_:)` entry point;
-/// the JNI bridge serialises this snapshot as JSON to Android via
-/// `toJSON()`.
+/// `AppState` is an `@Observable final class` so SwiftUI views and the
+/// `Observations` async sequence on Android both track property reads
+/// directly. There's no separate value-type snapshot held alongside —
+/// the same instance flows from `AppModel` into the view layer; the
+/// JSON wire format is produced on demand by `toJSON()` whenever the
+/// Android bridge needs to ship a transaction across JNI.
 ///
 /// Fields fall into three categories:
 ///
-/// - **Stored** — wire-visible metadata grouped on `Stored`. Encoded by
-///   default `Codable` synthesis; flattened into the JSON object by
-///   `encode(to:)`. `AppState` forwards reads/writes via
-///   `@dynamicMemberLookup` so callers say `state.searchQuery`, not
-///   `state.stored.searchQuery`. Adding a new wire field is a one-line
-///   change to `Stored`.
+/// - **Wire-visible** — `searchQuery`, `isLoading`, `lastRefreshedAt`,
+///   `loadError`. Encoded by `encode(to:)` and consumed by the Kotlin
+///   `AppState` data class. Adding a new wire field is one new property
+///   plus one line in `encode(to:)`.
 ///
-/// - **Internal** — `hits` and `readIds`. Reducer-only kernel that
-///   never crosses the wire. Read state has a single source of truth in
+/// - **Internal kernel** — `hits` and `readIds`. Reducer-only state that
+///   never crosses the wire. Read-state has a single source of truth in
 ///   `readIds`; `Story.isRead` is a projection, not stored anywhere.
 ///
-/// - **Computed** — `stories`. The merged view-row projection of
-///   `hits` × `readIds`. Computed properties aren't seen by `Codable`
-///   synthesis, so this is the only field `encode(to:)` has to write
-///   by hand.
-@dynamicMemberLookup
-public struct AppState: Sendable, Equatable, Encodable {
+/// - **Computed projection** — `stories`. Maps `hits` × `readIds` into
+///   the view-row shape the UIs actually consume. Computed properties
+///   aren't seen by `Codable` synthesis; this is the only field
+///   `encode(to:)` writes by hand.
+///
+/// `Encodable` (not `Codable`): the JSON only travels Swift → Kotlin.
+/// We never decode an `AppState` on the Swift side. Custom `encode(to:)`
+/// is required because the `@Observable` macro rewrites stored
+/// properties into `_foo` backing storage, which breaks the default
+/// synthesis path.
+@Observable
+public final class AppState: Encodable {
 
-    // MARK: Stored (wire-visible, default-encoded)
+    // MARK: Wire-visible
 
-    public struct Stored: Sendable, Equatable, Codable {
-        public var searchQuery: String
-        public var isLoading: Bool
-        public var lastRefreshedAt: Date?
-        public var loadError: String?
+    public var searchQuery: String = ""
+    public var isLoading: Bool = false
+    public var lastRefreshedAt: Date? = nil
+    public var loadError: String? = nil
 
-        public init(
-            searchQuery: String = "",
-            isLoading: Bool = false,
-            lastRefreshedAt: Date? = nil,
-            loadError: String? = nil
-        ) {
-            self.searchQuery = searchQuery
-            self.isLoading = isLoading
-            self.lastRefreshedAt = lastRefreshedAt
-            self.loadError = loadError
-        }
-    }
+    // MARK: Internal kernel (off the wire)
 
-    public var stored: Stored
+    var hits: [HNHit] = []
+    var readIds: Set<String> = []
 
-    public subscript<T>(dynamicMember keyPath: WritableKeyPath<Stored, T>) -> T {
-        get { stored[keyPath: keyPath] }
-        set { stored[keyPath: keyPath] = newValue }
-    }
-
-    // MARK: Internal (reducer kernel, off the wire)
-
-    var hits: [HNHit]
-    var readIds: Set<String>
-
-    // MARK: Computed (projection — manually encoded below)
+    // MARK: Computed projection
 
     public var stories: [Story] {
         hits.map { Story(hit: $0, isRead: readIds.contains($0.id)) }
     }
 
-    // MARK: -
+    public init() {}
 
-    public init(
-        hits: [HNHit] = [],
-        readIds: Set<String> = [],
-        stored: Stored = Stored()
-    ) {
-        self.hits = hits
-        self.readIds = readIds
-        self.stored = stored
-    }
-}
+    // MARK: Encodable
 
-extension AppState {
-    /// Wire shape: `{ stories: [...], searchQuery: ..., isLoading: ..., ... }`.
-    /// `stories` is the only thing `encode(to:)` writes by hand because
-    /// it's computed and `Codable` synthesis can't see it. Everything in
-    /// `Stored` is emitted by delegating to `stored.encode(to:)`, which
-    /// flattens its keys into the same JSON object via the encoder's
-    /// shared coding path. Internal kernel fields (`hits`, `readIds`)
-    /// are never encoded.
     private enum WireKey: String, CodingKey {
         case stories
+        case searchQuery
+        case isLoading
+        case lastRefreshedAt
+        case loadError
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: WireKey.self)
         try container.encode(stories, forKey: .stories)
-        try stored.encode(to: encoder)
+        try container.encode(searchQuery, forKey: .searchQuery)
+        try container.encode(isLoading, forKey: .isLoading)
+        try container.encodeIfPresent(lastRefreshedAt, forKey: .lastRefreshedAt)
+        try container.encodeIfPresent(loadError, forKey: .loadError)
     }
 
     private static let encoder: JSONEncoder = {

@@ -39,10 +39,12 @@ Two source files, both in `AppCoreBridgeExample/`:
 
 - **`RootView.swift`** — the view tree. `RootView` owns the singleton
   `AppModel` (as `@State`) and installs `\.dispatch` on the
-  `NavigationStack`. Below it, every view takes either an `AppState`
-  forwarded whole (when all four fields flow downstream) or narrow
-  slices (e.g. `CityRows` stores only `cities` and `favorites`). No
-  view below `RootView` references `AppModel`.
+  `NavigationStack`. `AppState` itself is the `@Observable final
+  class`; descendants take it as a parameter and rely on per-property
+  tracking for invalidation. Leaf views that already work in terms of
+  value-type slices (e.g. `StoryRows` taking `[Story]`, `StoryRow`
+  taking `Story`) keep doing so — struct equality is the natural diff
+  signal there. No view below `RootView` references `AppModel`.
 - **`AppEventDispatch.swift`** — the `\.dispatch` capability action.
   An `Equatable` callable struct mirroring SwiftUI's `DismissAction`:
   child views call `dispatch(.toggleFavorite(id:))` (sync,
@@ -56,13 +58,14 @@ Performance corollaries reflected in the source:
 - Computed `private var foo: some View` properties are *not* used —
   SwiftUI can only diff stored properties on `View` structs, so
   computed properties get inlined into the parent body and lose
-  per-section skip behaviour. The two former computed properties on
-  the inner content view (`searchResults`, `fullList`) were extracted
-  into `SearchResults` and `FullCitiesList` structs.
-- Each child View stores only the fields its body reads — `CityRows`
-  takes `cities`/`favorites`, not the whole `AppState`, so refreshes
-  (which only mutate `globalFavoriteCount` / `lastRefreshedAt`) skip
-  `CityRows.body` entirely.
+  per-section skip behaviour. Each subview is a real `struct … : View`
+  so it gets its own diffing checkpoint.
+- With `AppState` as `@Observable`, the macro instruments each
+  property accessor — a body that reads `state.searchQuery` only
+  re-runs when `searchQuery` changes, regardless of how the parent
+  passes the reference. There's no benefit to splitting `AppState`
+  into per-field parameters; pass `state: AppState` and let SwiftUI
+  track per property. Reserve narrow value-type inputs for leaves.
 - Two-state surfaces use `.overlay { if cond { … } }`, not top-level
   `if/else`. `SearchResults` is mounted as an overlay over
   `FullCitiesList` whenever `\.isSearching` is true, so the main

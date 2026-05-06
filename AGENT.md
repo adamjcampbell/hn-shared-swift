@@ -17,9 +17,10 @@ both UIs only render the snapshot.
   `AppEvent` enum carries every user-driven mutation.
 - iOS: direct `@Observable` + SwiftUI; no JNI, no JSON. `RootView` owns
   the singleton `AppModel` and installs an `AppEventDispatch` action via
-  `\.dispatch`. Descendant views receive narrow `AppState` slices (often
-  just the fields they read) and fire events through `\.dispatch` — the
-  model is invisible below the root.
+  `\.dispatch`. `AppState` itself is the `@Observable final class`;
+  descendants take it as a parameter and rely on per-property tracking
+  for invalidation. Events flow back through `\.dispatch` — the model
+  is invisible below the root.
 - Android: `AndroidBridge` actor + `Observations` task → JSON snapshot →
   Java callback → Compose recomposition. Mutations go through one JNI
   entry point: `appcoreDispatch(eventJSON:)`.
@@ -183,8 +184,9 @@ Per spec §12 plus what verification surfaced:
   isolation without crossing actors.
 - **iOS view-layer rules** (enforced by `ios-app/AppCoreBridgeExample/RootView.swift` + `AppEventDispatch.swift`):
   - `AppModel` is held only by `RootView`. Below the root, views accept
-    `AppState` (or specific slices like `cities` / `favorites`) as
-    parameters; never `AppModel` itself.
+    `AppState` (the `@Observable final class`) as a parameter; never
+    `AppModel` itself. Per-property invalidation comes from `@Observable`
+    tracking, not from prop-drilling individual fields.
   - Events flow back via `@Environment(\.dispatch)`, an
     `AppEventDispatch` callable struct in the shape of SwiftUI's
     `DismissAction`. The struct is **`Equatable`** (`===` on the held
@@ -196,9 +198,12 @@ Per spec §12 plus what verification surfaced:
   - Don't write `private var foo: some View` on a View. SwiftUI can't
     diff computed properties — they inline into the parent body and
     lose per-section skip behaviour. Extract into a private `struct
-    Foo: View` so the child gets its own diffing checkpoint, and store
-    only the fields the body reads (narrow inputs let SwiftUI skip the
-    body when unrelated `AppState` fields mutate).
+    Foo: View` so the child gets its own diffing checkpoint. Pass
+    `state: AppState` directly; the `@Observable` macro instruments
+    each property read so SwiftUI re-runs the child body only when a
+    property it actually reads is mutated. Leaf views that already
+    take value-type slices (`Story`, `[Story]`) keep doing so —
+    parameter equality is the right diff signal there.
   - For views that toggle between two states of the *same* surface
     (empty/full, search/main), render the underlying view always and
     reveal the alternate via `.overlay { if cond { … } }`. Top-level

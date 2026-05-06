@@ -1,18 +1,6 @@
 import Foundation
-import Observation
 
-/// Tiny `@Observable` wrapper around `AppState`.
-///
-/// Lives between `AppModel` (which is deliberately *not* `@Observable`)
-/// and the SwiftUI/`Observations` consumers — observation tracking flows
-/// through the access path `appModel.state` → `_state.value` so callers
-/// don't need to know the wrapper exists.
-@Observable
-final class AppStateObservable {
-    var value: AppState = AppState()
-}
-
-/// The single source of truth for the example app.
+/// Owns the app's `AppState` and the reducer that mutates it.
 ///
 /// This type is deliberately platform-agnostic. It carries no isolation
 /// annotations and no `Sendable` conformance — its isolation is determined
@@ -23,6 +11,11 @@ final class AppStateObservable {
 /// - On Android, an `AndroidBridge` actor in `AppCoreAndroid` owns an
 ///   instance of this type and serialises all access through its executor.
 ///
+/// `AppState` is the `@Observable` reference; `AppModel` itself is not
+/// `@Observable` because its other fields (`client`, `clock`, `searchTask`,
+/// the commands continuation) aren't meant to be observed and adding
+/// `@ObservationIgnored` to each would only add noise.
+///
 /// All user-driven mutations enter through `dispatch(_:)`; both platforms
 /// build the same `AppEvent` and call the same method (iOS directly,
 /// Android via JSON over JNI).
@@ -31,14 +24,10 @@ final class AppStateObservable {
 /// (SE-0461 / `NonisolatedNonsendingByDefault`), so they don't introduce
 /// any cross-actor hops.
 public final class AppModel {
-    private let _state = AppStateObservable()
-
-    /// Read-only snapshot of the app state. Forwards to the inner
-    /// `@Observable` wrapper so SwiftUI / `Observations` track changes
-    /// through the same property access — `AppModel` itself doesn't
-    /// need `@Observable`, which is what keeps the field list below
-    /// free of `@ObservationIgnored` noise.
-    public var state: AppState { _state.value }
+    /// The single observable state instance. SwiftUI tracks property
+    /// reads on this directly; the Android bridge encodes it to JSON
+    /// at every `Observations` transaction.
+    public let state = AppState()
 
     /// One-shot commands from the model to the UI — the symmetric
     /// counterpart to `dispatch(_:)`. The reducer yields onto a single
@@ -87,9 +76,9 @@ public final class AppModel {
     ///
     /// **Why this works under Swift 6 strict concurrency.** The fetch
     /// `Task` deliberately captures only Sendable values (`client`,
-    /// `value`) — never `self`. State commits happen back here in the
-    /// dispatch arm, after the `Task`'s value is awaited, so they run
-    /// on the caller's actor where `self` natively lives.
+    /// `clock`, `query`) — never `self`. State commits happen back here
+    /// in the dispatch arm, after the `Task`'s value is awaited, so
+    /// they run on the caller's actor where `self` natively lives.
     public func dispatch(_ event: AppEvent) async {
         switch event {
         case .toggleRead(let id):
@@ -99,16 +88,16 @@ public final class AppModel {
         case .refresh:
             await runFetch()
         case .setSearchQuery(let value):
-            _state.value.searchQuery = value
+            state.searchQuery = value
             await runFetch(debounce: Self.searchDebounce)
         }
     }
 
     private func toggleRead(_ id: String) {
-        if _state.value.readIds.contains(id) {
-            _state.value.readIds.remove(id)
+        if state.readIds.contains(id) {
+            state.readIds.remove(id)
         } else {
-            _state.value.readIds.insert(id)
+            state.readIds.insert(id)
         }
     }
 
@@ -116,8 +105,8 @@ public final class AppModel {
     /// present it. Unknown ids are a no-op — guarding here keeps
     /// `readIds` from accumulating ids that never corresponded to a hit.
     private func openStory(_ id: String) {
-        guard let hit = _state.value.hits.first(where: { $0.id == id }) else { return }
-        _state.value.readIds.insert(id)
+        guard let hit = state.hits.first(where: { $0.id == id }) else { return }
+        state.readIds.insert(id)
         if let url = hit.url {
             commandsContinuation.yield(.presentURL(value: url))
         }
@@ -145,7 +134,7 @@ public final class AppModel {
     private func runFetch(debounce: Duration? = nil) async {
         searchTask?.cancel()
 
-        let query = _state.value.searchQuery
+        let query = state.searchQuery
         let task = Task<[HNHit], Error> { [client, clock] in
             if let debounce {
                 try await clock.sleep(for: debounce)
@@ -156,22 +145,22 @@ public final class AppModel {
         }
         searchTask = task
 
-        _state.value.isLoading = true
+        state.isLoading = true
 
         do {
             let hits = try await task.value
-            _state.value.hits = hits
-            _state.value.lastRefreshedAt = .now
-            _state.value.loadError = nil
-            _state.value.isLoading = false
+            state.hits = hits
+            state.lastRefreshedAt = .now
+            state.loadError = nil
+            state.isLoading = false
         } catch is CancellationError {
             // A newer dispatch superseded us. The newer one is responsible
             // for committing its own result; leave isLoading=true so the
             // spinner stays until that fetch settles.
             return
         } catch {
-            _state.value.loadError = error.localizedDescription
-            _state.value.isLoading = false
+            state.loadError = error.localizedDescription
+            state.isLoading = false
         }
     }
 }

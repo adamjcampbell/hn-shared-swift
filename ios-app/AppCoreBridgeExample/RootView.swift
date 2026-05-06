@@ -54,48 +54,38 @@ private struct StoriesContent: View {
     let state: AppState
 
     var body: some View {
-        StoriesList(
-            stories: state.stories,
-            searchQuery: state.searchQuery,
-            isLoading: state.isLoading,
-            lastRefreshedAt: state.lastRefreshedAt,
-            loadError: state.loadError
-        )
-        .overlay {
-            // Empty-results overlay (only meaningful for an active search;
-            // an empty front page would be a network failure handled via
-            // loadError instead).
-            if !state.isLoading
-                && state.stories.isEmpty
-                && !state.searchQuery.isEmpty {
-                EmptyResultsOverlay(query: state.searchQuery)
+        StoriesList(state: state)
+            .overlay {
+                // Empty-results overlay (only meaningful for an active search;
+                // an empty front page would be a network failure handled via
+                // loadError instead).
+                if !state.isLoading
+                    && state.stories.isEmpty
+                    && !state.searchQuery.isEmpty {
+                    EmptyResultsOverlay(query: state.searchQuery)
+                }
             }
-        }
-        .scrollDismissesKeyboard(.immediately)
+            .scrollDismissesKeyboard(.immediately)
     }
 }
 
 private struct StoriesList: View {
-    let stories: [Story]
-    let searchQuery: String
-    let isLoading: Bool
-    let lastRefreshedAt: Date?
-    let loadError: String?
+    let state: AppState
     @Environment(\.dispatch) private var dispatch
 
     var body: some View {
         List {
             Section {
                 HeaderCard(
-                    searchQuery: searchQuery,
-                    storyCount: stories.count,
-                    unreadCount: stories.lazy.filter { !$0.isRead }.count,
-                    isLoading: isLoading,
-                    lastRefreshedAt: lastRefreshedAt,
-                    loadError: loadError
+                    searchQuery: state.searchQuery,
+                    storyCount: state.stories.count,
+                    unreadCount: state.stories.lazy.filter { !$0.isRead }.count,
+                    isLoading: state.isLoading,
+                    lastRefreshedAt: state.lastRefreshedAt,
+                    loadError: state.loadError
                 )
             }
-            Section { StoryRows(stories: stories) }
+            Section { StoryRows(stories: state.stories) }
         }
         .listStyle(.insetGrouped)
         .refreshable { await dispatch.run(.refresh) }
