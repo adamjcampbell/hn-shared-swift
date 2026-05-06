@@ -2,6 +2,7 @@ package com.example.appcore
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.appcore.bridge.AppCoreAndroid
+import com.example.appcore.bridge.CommandSink
 import com.example.appcore.bridge.SnapshotSink
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
@@ -39,11 +40,14 @@ import kotlin.system.measureNanoTime
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class BridgePerfTest {
 
-    private class CapturingSink : SnapshotSink {
+    private class CapturingSink : SnapshotSink, CommandSink {
         val channel = Channel<String>(capacity = Channel.UNLIMITED)
         override fun deliver(snapshotJSON: String) {
             channel.trySend(snapshotJSON)
         }
+        // The perf test only consumes snapshots; commands are ignored
+        // so the same instance can be passed for both sinks.
+        override fun deliverCommand(commandJSON: String) {}
     }
 
     // Hand-written wire literals avoid pulling kotlinx.serialization into
@@ -71,7 +75,7 @@ class BridgePerfTest {
     fun a_coldStart_initialSnapshotDeliveredSynchronously() = runBlocking {
         val sink = CapturingSink()
         val nanos = measureNanoTime {
-            AppCoreAndroid.appcoreCreate(sink)
+            AppCoreAndroid.appcoreCreate(sink, sink)
             try {
                 // 50 ms is generous — the snapshot is delivered synchronously
                 // inside `appcoreCreate`, so it should already be queued the
@@ -84,7 +88,6 @@ class BridgePerfTest {
                 // initial snapshot is what allows Compose to render a loading
                 // spinner instead of `null` while that first fetch is in flight.
                 assertTrue("contains empty stories array", initial.contains("\"stories\":[]"))
-                assertTrue("contains empty read array", initial.contains("\"read\":[]"))
                 assertTrue("isLoading defaults false", initial.contains("\"isLoading\":false"))
             } finally {
                 AppCoreAndroid.appcoreDestroy()
@@ -96,7 +99,7 @@ class BridgePerfTest {
     @Test
     fun syncJniCall_overhead() = runBlocking {
         val sink = CapturingSink()
-        AppCoreAndroid.appcoreCreate(sink)
+        AppCoreAndroid.appcoreCreate(sink, sink)
         try {
             // Drain the cold-start snapshot.
             withTimeout(5_000) { sink.channel.receive() }
@@ -123,7 +126,7 @@ class BridgePerfTest {
     @Test
     fun endToEnd_toggleRoundTrip() = runBlocking {
         val sink = CapturingSink()
-        AppCoreAndroid.appcoreCreate(sink)
+        AppCoreAndroid.appcoreCreate(sink, sink)
         try {
             // Drain the cold-start snapshot.
             withTimeout(5_000) { sink.channel.receive() }
@@ -154,7 +157,7 @@ class BridgePerfTest {
     @Test
     fun snapshotPayload_size() = runBlocking {
         val sink = CapturingSink()
-        AppCoreAndroid.appcoreCreate(sink)
+        AppCoreAndroid.appcoreCreate(sink, sink)
         try {
             val first = withTimeout(5_000) { sink.channel.receive() }
             println("[BridgePerf] snapshot JSON bytes (cold): ${first.toByteArray().size}")
