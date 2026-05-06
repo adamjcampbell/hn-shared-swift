@@ -177,13 +177,11 @@ private struct StoryRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
-            Button {
+            Button(
+                isRead ? "Mark Unread" : "Mark Read",
+                systemImage: isRead ? "circle" : "checkmark.circle.fill"
+            ) {
                 dispatch(.toggleRead(id: story.id))
-            } label: {
-                Label(
-                    isRead ? "Mark Unread" : "Mark Read",
-                    systemImage: isRead ? "circle" : "checkmark.circle.fill"
-                )
             }
             .tint(.blue)
         }
