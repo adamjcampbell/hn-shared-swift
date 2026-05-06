@@ -56,7 +56,6 @@ private struct StoriesContent: View {
     var body: some View {
         StoriesList(
             stories: state.stories,
-            read: state.read,
             searchQuery: state.searchQuery,
             isLoading: state.isLoading,
             lastRefreshedAt: state.lastRefreshedAt,
@@ -78,7 +77,6 @@ private struct StoriesContent: View {
 
 private struct StoriesList: View {
     let stories: [Story]
-    let read: Set<String>
     let searchQuery: String
     let isLoading: Bool
     let lastRefreshedAt: Date?
@@ -91,13 +89,13 @@ private struct StoriesList: View {
                 HeaderCard(
                     searchQuery: searchQuery,
                     storyCount: stories.count,
-                    unreadCount: stories.lazy.filter { !read.contains($0.id) }.count,
+                    unreadCount: stories.lazy.filter { !$0.isRead }.count,
                     isLoading: isLoading,
                     lastRefreshedAt: lastRefreshedAt,
                     loadError: loadError
                 )
             }
-            Section { StoryRows(stories: stories, read: read) }
+            Section { StoryRows(stories: stories) }
         }
         .listStyle(.insetGrouped)
         .refreshable { await dispatch.run(.refresh) }
@@ -106,11 +104,10 @@ private struct StoriesList: View {
 
 private struct StoryRows: View {
     let stories: [Story]
-    let read: Set<String>
 
     var body: some View {
         ForEach(stories) { story in
-            StoryRow(story: story, isRead: read.contains(story.id))
+            StoryRow(story: story)
         }
     }
 }
@@ -166,7 +163,6 @@ private struct HeaderCard: View {
 
 private struct StoryRow: View {
     let story: Story
-    let isRead: Bool
     @Environment(\.dispatch) private var dispatch
 
     var body: some View {
@@ -177,14 +173,14 @@ private struct StoryRow: View {
                 } label: {
                     Text(story.title)
                         .font(.body)
-                        .foregroundStyle(isRead ? .secondary : .primary)
+                        .foregroundStyle(story.isRead ? .secondary : .primary)
                         .multilineTextAlignment(.leading)
                 }
                 .buttonStyle(.plain)
             } else {
                 Text(story.title)
                     .font(.body)
-                    .foregroundStyle(isRead ? .secondary : .primary)
+                    .foregroundStyle(story.isRead ? .secondary : .primary)
             }
             Text(metaLine)
                 .font(.caption)
@@ -193,8 +189,8 @@ private struct StoryRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
             Button(
-                isRead ? "Mark Unread" : "Mark Read",
-                systemImage: isRead ? "circle" : "checkmark.circle.fill"
+                story.isRead ? "Mark Unread" : "Mark Read",
+                systemImage: story.isRead ? "circle" : "checkmark.circle.fill"
             ) {
                 dispatch(.toggleRead(id: story.id))
             }
