@@ -3,13 +3,13 @@ import Foundation
 import Testing
 @testable import AppCore
 
-private let storyA = Story(
+private let storyA = HNHit(
     id: "100", title: "Top story", author: "alice",
     points: 50, commentCount: 10,
     url: "https://example.com/a",
     createdAt: Date(timeIntervalSince1970: 1)
 )
-private let storyB = Story(
+private let storyB = HNHit(
     id: "101", title: "Second story", author: "bob",
     points: 20, commentCount: 3,
     url: nil,
@@ -71,15 +71,18 @@ struct AppModelTests {
     @Test("toggleRead adds and removes")
     func toggleRead_addsAndRemoves() async {
         let model = AppModel(
-            client: HNClient(frontPage: { [] }, search: { _ in [] })
+            client: HNClient(frontPage: { [storyA] }, search: { _ in [] })
         )
-        #expect(model.state.read.contains("100") == false)
+        await model.dispatch(.refresh)
+        #expect(model.state.stories.first?.isRead == false)
 
-        await model.dispatch(.toggleRead(id: "100"))
-        #expect(model.state.read.contains("100"))
+        await model.dispatch(.toggleRead(id: storyA.id))
+        #expect(model.state.stories.first?.isRead == true)
+        #expect(model.state.readIds.contains(storyA.id))
 
-        await model.dispatch(.toggleRead(id: "100"))
-        #expect(model.state.read.contains("100") == false)
+        await model.dispatch(.toggleRead(id: storyA.id))
+        #expect(model.state.stories.first?.isRead == false)
+        #expect(model.state.readIds.contains(storyA.id) == false)
     }
 
     @Test("openStory marks read and emits presentURL command")
@@ -95,7 +98,7 @@ struct AppModelTests {
         var iterator = model.commands.makeAsyncIterator()
         await model.dispatch(.openStory(id: storyA.id))
 
-        #expect(model.state.read.contains(storyA.id))
+        #expect(model.state.stories.first(where: { $0.id == storyA.id })?.isRead == true)
         let command = await iterator.next()
         #expect(command == .presentURL(value: storyA.url!))
     }
@@ -117,7 +120,7 @@ struct AppModelTests {
         await model.dispatch(.openStory(id: storyB.id))
         await model.dispatch(.openStory(id: storyA.id))
 
-        #expect(model.state.read.contains(storyB.id))
+        #expect(model.state.stories.first(where: { $0.id == storyB.id })?.isRead == true)
         let command = await iterator.next()
         #expect(command == .presentURL(value: storyA.url!))
     }
@@ -131,14 +134,14 @@ struct AppModelTests {
             )
         )
         await model.dispatch(.refresh)
-        let readBefore = model.state.read
+        let readBefore = model.state.readIds
 
         var iterator = model.commands.makeAsyncIterator()
         await model.dispatch(.openStory(id: "does-not-exist"))
         // Follow with a known-good open so we have something to await.
         await model.dispatch(.openStory(id: storyA.id))
 
-        #expect(model.state.read == readBefore.union([storyA.id]))
+        #expect(model.state.readIds == readBefore.union([storyA.id]))
         let command = await iterator.next()
         #expect(command == .presentURL(value: storyA.url!))
     }
@@ -151,12 +154,16 @@ struct AppModelTests {
                 search: { _ in [] }
             )
         )
+        // Toggle before any stories are loaded — the kernel still records
+        // it; the projection has nothing to map onto yet.
         await model.dispatch(.toggleRead(id: "100"))
-        #expect(model.state.read.contains("100"))
+        #expect(model.state.readIds.contains("100"))
+        #expect(model.state.stories.isEmpty)
 
         await model.dispatch(.refresh)
-        #expect(model.state.stories.contains(where: { $0.id == "100" }))
-        #expect(model.state.read.contains("100"))
+        let projected = model.state.stories.first(where: { $0.id == "100" })
+        #expect(projected != nil)
+        #expect(projected?.isRead == true)
     }
 
     @Test("setSearchQuery debounces, then fires one request")
@@ -374,5 +381,36 @@ struct AppCommandTests {
         #expect(AppCommand(json: #"{"type":"unknown"}"#) == nil)
         #expect(AppCommand(json: #"{}"#) == nil)
         #expect(AppCommand(json: "garbage") == nil)
+    }
+}
+
+@Suite("AppState JSON wire shape")
+struct AppStateWireTests {
+
+    @Test("snapshot omits internal storage and embeds isRead on each story")
+    func snapshot_omitsInternalStorage_andEmbedsIsReadOnStory() async {
+        let model = AppModel(
+            client: HNClient(
+                frontPage: {
+                    [
+                        HNHit(id: "100", title: "A", author: "x", points: 1, commentCount: 0, url: nil, createdAt: Date(timeIntervalSince1970: 1)),
+                        HNHit(id: "101", title: "B", author: "y", points: 2, commentCount: 0, url: nil, createdAt: Date(timeIntervalSince1970: 2)),
+                    ]
+                },
+                search: { _ in [] }
+            )
+        )
+        await model.dispatch(.refresh)
+        await model.dispatch(.toggleRead(id: "100"))
+
+        let json = model.state.toJSON()
+
+        // Internal storage never crosses the wire.
+        #expect(!json.contains("\"hits\""))
+        #expect(!json.contains("\"readIds\""))
+        // The merged stories list is what Android sees.
+        #expect(json.contains("\"stories\""))
+        #expect(json.contains("\"isRead\":true"))
+        #expect(json.contains("\"isRead\":false"))
     }
 }

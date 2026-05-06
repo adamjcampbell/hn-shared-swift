@@ -24,12 +24,12 @@ import FoundationNetworking
 /// cancelled. Test closures use the project's `TestClock` to make
 /// cancellation deterministic.
 public struct HNClient: Sendable {
-    public var frontPage: @Sendable () async throws -> [Story]
-    public var search: @Sendable (_ query: String) async throws -> [Story]
+    public var frontPage: @Sendable () async throws -> [HNHit]
+    public var search: @Sendable (_ query: String) async throws -> [HNHit]
 
     public init(
-        frontPage: @escaping @Sendable () async throws -> [Story],
-        search: @escaping @Sendable (_ query: String) async throws -> [Story]
+        frontPage: @escaping @Sendable () async throws -> [HNHit],
+        search: @escaping @Sendable (_ query: String) async throws -> [HNHit]
     ) {
         self.frontPage = frontPage
         self.search = search
@@ -93,7 +93,7 @@ extension HNClient {
         session: URLSession,
         path: String,
         queryItems: [URLQueryItem]
-    ) async throws -> [Story] {
+    ) async throws -> [HNHit] {
         var components = URLComponents(
             url: HNClient.baseURL.appendingPathComponent(path),
             resolvingAgainstBaseURL: false
@@ -101,15 +101,15 @@ extension HNClient {
         components.queryItems = queryItems
         let (data, _) = try await session.data(from: components.url!)
         let response = try HNClient.decoder.decode(HNSearchResponse.self, from: data)
-        return response.hits.compactMap(Story.init(hit:))
+        return response.hits.compactMap(HNHit.init(payload:))
     }
 }
 
 private struct HNSearchResponse: Decodable {
-    let hits: [HNStoryHit]
+    let hits: [HNStoryPayload]
 }
 
-private struct HNStoryHit: Decodable {
+private struct HNStoryPayload: Decodable {
     let objectID: String
     let title: String?
     let author: String?
@@ -119,17 +119,17 @@ private struct HNStoryHit: Decodable {
     let created_at: Date
 }
 
-private extension Story {
-    init?(hit: HNStoryHit) {
-        guard let title = hit.title, let author = hit.author else { return nil }
+private extension HNHit {
+    init?(payload: HNStoryPayload) {
+        guard let title = payload.title, let author = payload.author else { return nil }
         self.init(
-            id: hit.objectID,
+            id: payload.objectID,
             title: title,
             author: author,
-            points: hit.points ?? 0,
-            commentCount: hit.num_comments ?? 0,
-            url: hit.url,
-            createdAt: hit.created_at
+            points: payload.points ?? 0,
+            commentCount: payload.num_comments ?? 0,
+            url: payload.url,
+            createdAt: payload.created_at
         )
     }
 }

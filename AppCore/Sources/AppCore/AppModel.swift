@@ -1,6 +1,17 @@
 import Foundation
 import Observation
 
+/// Tiny `@Observable` wrapper around `AppState`.
+///
+/// Lives between `AppModel` (which is deliberately *not* `@Observable`)
+/// and the SwiftUI/`Observations` consumers — observation tracking flows
+/// through the access path `appModel.state` → `_state.value` so callers
+/// don't need to know the wrapper exists.
+@Observable
+final class AppStateObservable {
+    var value: AppState = AppState()
+}
+
 /// The single source of truth for the example app.
 ///
 /// This type is deliberately platform-agnostic. It carries no isolation
@@ -19,9 +30,15 @@ import Observation
 /// Async methods declared here run on the caller's actor by default
 /// (SE-0461 / `NonisolatedNonsendingByDefault`), so they don't introduce
 /// any cross-actor hops.
-@Observable
 public final class AppModel {
-    public private(set) var state: AppState = AppState()
+    private let _state = AppStateObservable()
+
+    /// Read-only snapshot of the app state. Forwards to the inner
+    /// `@Observable` wrapper so SwiftUI / `Observations` track changes
+    /// through the same property access — `AppModel` itself doesn't
+    /// need `@Observable`, which is what keeps the field list below
+    /// free of `@ObservationIgnored` noise.
+    public var state: AppState { _state.value }
 
     /// One-shot commands from the model to the UI — the symmetric
     /// counterpart to `dispatch(_:)`. The reducer yields onto a single
@@ -29,26 +46,21 @@ public final class AppModel {
     /// `AndroidBridge` subscribes from a Task that forwards JSON over JNI
     /// to a `CommandSink`. There is one consumer per platform binary, so
     /// the single-iterator constraint of `AsyncStream` is respected.
-    @ObservationIgnored
     public let commands: AsyncStream<AppCommand>
 
-    @ObservationIgnored
     private let commandsContinuation: AsyncStream<AppCommand>.Continuation
 
-    @ObservationIgnored
     private let client: HNClient
 
     /// Driver of the debounce sleep. `ContinuousClock()` in production;
     /// tests inject a `TestClock` so the 250 ms debounce doesn't translate
     /// into 250 ms of real-clock waiting per test.
-    @ObservationIgnored
     private let clock: any Clock<Duration>
 
     /// In-flight network task. Replaced (and the predecessor cancelled)
     /// on every `.refresh` and post-debounce `.setSearchQuery` — only one
     /// fetch runs at a time, and the latest dispatch always wins.
-    @ObservationIgnored
-    private var searchTask: Task<[Story], Error>?
+    private var searchTask: Task<[HNHit], Error>?
 
     /// Debounce window for `.setSearchQuery`. Exposed (rather than
     /// inlined) so tests can name the same duration when advancing
@@ -77,9 +89,7 @@ public final class AppModel {
     /// `Task` deliberately captures only Sendable values (`client`,
     /// `value`) — never `self`. State commits happen back here in the
     /// dispatch arm, after the `Task`'s value is awaited, so they run
-    /// on the caller's actor where `self` natively lives. That's how we
-    /// can have a stored `searchTask: Task<…>?` field on a non-Sendable
-    /// `@Observable` class without tripping the SE-0461 hole.
+    /// on the caller's actor where `self` natively lives.
     public func dispatch(_ event: AppEvent) async {
         switch event {
         case .toggleRead(let id):
@@ -89,27 +99,26 @@ public final class AppModel {
         case .refresh:
             await runFetch()
         case .setSearchQuery(let value):
-            state.searchQuery = value
+            _state.value.searchQuery = value
             await runFetch(debounce: Self.searchDebounce)
         }
     }
 
     private func toggleRead(_ id: String) {
-        if state.read.contains(id) {
-            state.read.remove(id)
+        if _state.value.readIds.contains(id) {
+            _state.value.readIds.remove(id)
         } else {
-            state.read.insert(id)
+            _state.value.readIds.insert(id)
         }
     }
 
     /// Mark a known story as read and, if it has a URL, ask the UI to
-    /// present it. Unknown ids are a no-op — the reducer only acts on
-    /// stories it knows about, which keeps `state.read` from
-    /// accumulating ids that no longer correspond to anything.
+    /// present it. Unknown ids are a no-op — guarding here keeps
+    /// `readIds` from accumulating ids that never corresponded to a hit.
     private func openStory(_ id: String) {
-        guard let story = state.stories.first(where: { $0.id == id }) else { return }
-        state.read.insert(id)
-        if let url = story.url {
+        guard let hit = _state.value.hits.first(where: { $0.id == id }) else { return }
+        _state.value.readIds.insert(id)
+        if let url = hit.url {
             commandsContinuation.yield(.presentURL(value: url))
         }
     }
@@ -136,8 +145,8 @@ public final class AppModel {
     private func runFetch(debounce: Duration? = nil) async {
         searchTask?.cancel()
 
-        let query = state.searchQuery
-        let task = Task<[Story], Error> { [client, clock] in
+        let query = _state.value.searchQuery
+        let task = Task<[HNHit], Error> { [client, clock] in
             if let debounce {
                 try await clock.sleep(for: debounce)
             }
@@ -147,22 +156,22 @@ public final class AppModel {
         }
         searchTask = task
 
-        state.isLoading = true
+        _state.value.isLoading = true
 
         do {
-            let stories = try await task.value
-            state.stories = stories
-            state.lastRefreshedAt = .now
-            state.loadError = nil
-            state.isLoading = false
+            let hits = try await task.value
+            _state.value.hits = hits
+            _state.value.lastRefreshedAt = .now
+            _state.value.loadError = nil
+            _state.value.isLoading = false
         } catch is CancellationError {
             // A newer dispatch superseded us. The newer one is responsible
             // for committing its own result; leave isLoading=true so the
             // spinner stays until that fetch settles.
             return
         } catch {
-            state.loadError = error.localizedDescription
-            state.isLoading = false
+            _state.value.loadError = error.localizedDescription
+            _state.value.isLoading = false
         }
     }
 }
