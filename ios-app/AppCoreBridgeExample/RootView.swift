@@ -154,38 +154,38 @@ private struct StoryRow: View {
     @State private var presented: IdentifiableURL?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                if let urlString = story.url, let url = URL(string: urlString) {
-                    Button {
-                        dispatch(.markRead(id: story.id))
-                        presented = IdentifiableURL(url: url)
-                    } label: {
-                        Text(story.title)
-                            .font(.body)
-                            .foregroundStyle(isRead ? .secondary : .primary)
-                            .multilineTextAlignment(.leading)
-                    }
-                    .buttonStyle(.plain)
-                } else {
+        VStack(alignment: .leading, spacing: 4) {
+            if let urlString = story.url, let url = URL(string: urlString) {
+                Button {
+                    dispatch(.markRead(id: story.id))
+                    presented = IdentifiableURL(url: url)
+                } label: {
                     Text(story.title)
                         .font(.body)
                         .foregroundStyle(isRead ? .secondary : .primary)
+                        .multilineTextAlignment(.leading)
                 }
-                Text(metaLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .buttonStyle(.plain)
+            } else {
+                Text(story.title)
+                    .font(.body)
+                    .foregroundStyle(isRead ? .secondary : .primary)
             }
-            Spacer(minLength: 0)
+            Text(metaLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
             Button {
                 dispatch(.toggleRead(id: story.id))
             } label: {
-                Image(systemName: isRead ? "circle.fill" : "circle.dotted")
-                    .foregroundStyle(isRead ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                    .contentTransition(.symbolEffect(.replace))
+                Label(
+                    isRead ? "Mark Unread" : "Mark Read",
+                    systemImage: isRead ? "circle" : "checkmark.circle.fill"
+                )
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isRead ? "Mark unread" : "Mark read")
+            .tint(.blue)
         }
         .sheet(item: $presented) { item in
             SafariView(url: item.url)
