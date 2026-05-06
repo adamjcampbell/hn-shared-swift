@@ -3,28 +3,32 @@ import Observation
 
 /// The single source of truth for the example app.
 ///
-/// `AppState` is an `@Observable final class` so SwiftUI views and the
-/// `Observations` async sequence on Android both track property reads
-/// directly. There's no separate value-type snapshot held alongside —
-/// the same instance flows from `AppModel` into the view layer; the
-/// JSON wire format is produced on demand by `toJSON()` whenever the
-/// Android bridge needs to ship a transaction across JNI.
+/// `AppState` is an `@Observable final class` so SwiftUI's fine-grained
+/// invalidation (and the `Observations` async sequence on Android) track
+/// property reads directly. There's no separate value-type snapshot held
+/// alongside — the same instance flows from `AppModel` into the view
+/// layer; the JSON snapshot is produced on demand by `toJSON()` whenever
+/// the Android bridge needs to ship a transaction across JNI.
 ///
-/// Fields fall into three categories:
+/// Properties fall into two groups, in the data-flow vocabulary of
+/// WWDC19's *Data Flow Through SwiftUI*:
 ///
-/// - **Wire-visible** — `searchQuery`, `isLoading`, `lastRefreshedAt`,
-///   `loadError`. Encoded by `encode(to:)` and consumed by the Kotlin
-///   `AppState` data class. Adding a new wire field is one new property
-///   plus one line in `encode(to:)`.
+/// - **Stored sources of truth (encoded)** — `searchQuery`,
+///   `isLoading`, `lastRefreshedAt`, `loadError`. Stored properties
+///   that `encode(to:)` writes into the JSON snapshot the Kotlin
+///   `AppState` data class consumes. Adding a new encoded field is
+///   one new property plus one line in `encode(to:)`.
 ///
-/// - **Internal kernel** — `hits` and `readIds`. Reducer-only state that
-///   never crosses the wire. Read-state has a single source of truth in
-///   `readIds`; `Story.isRead` is a projection, not stored anywhere.
+/// - **Stored sources of truth (internal — not encoded)** — `hits`
+///   and `readIds`. The working set behind `dispatch(_:)`; never
+///   encoded. `Story.isRead` is **derived** from `readIds` rather
+///   than stored separately, which keeps read-state's single source
+///   of truth in `readIds`.
 ///
-/// - **Computed projection** — `stories`. Maps `hits` × `readIds` into
-///   the view-row shape the UIs actually consume. Computed properties
-///   aren't seen by `Codable` synthesis; this is the only field
-///   `encode(to:)` writes by hand.
+/// - **Derived state** — `stories`. A computed property over
+///   `hits` × `readIds` projecting into the view-row shape both UIs
+///   render. Computed properties aren't seen by `Codable` synthesis,
+///   so this is the one field `encode(to:)` writes by hand.
 ///
 /// `Encodable` (not `Codable`): the JSON only travels Swift → Kotlin.
 /// We never decode an `AppState` on the Swift side. Custom `encode(to:)`
@@ -34,19 +38,19 @@ import Observation
 @Observable
 public final class AppState: Encodable {
 
-    // MARK: Wire-visible
+    // MARK: Stored sources of truth (encoded)
 
     public var searchQuery: String = ""
     public var isLoading: Bool = false
     public var lastRefreshedAt: Date? = nil
     public var loadError: String? = nil
 
-    // MARK: Internal kernel (off the wire)
+    // MARK: Stored sources of truth (internal — not encoded)
 
     var hits: [HNHit] = []
     var readIds: Set<String> = []
 
-    // MARK: Computed projection
+    // MARK: Derived state
 
     public var stories: [Story] {
         hits.map { Story(hit: $0, isRead: readIds.contains($0.id)) }

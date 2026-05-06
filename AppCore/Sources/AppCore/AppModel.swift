@@ -1,6 +1,7 @@
 import Foundation
 
-/// Owns the app's `AppState` and the reducer that mutates it.
+/// Owns the app's `AppState` and the `dispatch(_:)` method that
+/// mutates it in response to user events.
 ///
 /// This type is deliberately platform-agnostic. It carries no isolation
 /// annotations and no `Sendable` conformance — its isolation is determined
@@ -30,7 +31,7 @@ public final class AppModel {
     public let state = AppState()
 
     /// One-shot commands from the model to the UI — the symmetric
-    /// counterpart to `dispatch(_:)`. The reducer yields onto a single
+    /// counterpart to `dispatch(_:)`. `dispatch(_:)` yields onto a single
     /// continuation; iOS subscribes from a long-lived `.task`, Android's
     /// `AndroidBridge` subscribes from a Task that forwards JSON over JNI
     /// to a `CommandSink`. There is one consumer per platform binary, so

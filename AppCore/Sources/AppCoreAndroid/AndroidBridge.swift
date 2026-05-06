@@ -43,19 +43,21 @@ actor AndroidBridge {
         self.commandSink = commandSink
         #if canImport(Android)
         observationTask = Task { [self] in
-            // `lastJSON` skips the JNI hop when an `Observations`
-            // emission encodes to byte-identical JSON. `Observations`
-            // itself doesn't dedup (every `willSet` starts a transaction
-            // even if the value didn't change), and Compose's
-            // `mutableStateOf<AppState?>` only saves the recompose, not
-            // the wire round-trip. Holding the prior JSON string buys
-            // back ~100 µs of JNI per skipped emission.
+            // `lastJSON` coalesces emissions that encode to a
+            // byte-identical snapshot. `Observations` already coalesces
+            // synchronous `willSet`s within a transaction, but starts a
+            // fresh transaction on every `willSet` regardless of whether
+            // the property's value actually changed; Compose's
+            // `mutableStateOf<AppState?>` saves the recompose, not the
+            // JNI round-trip. Holding the prior JSON string buys back
+            // ~100 µs of JNI per skipped emission.
             //
             // Encoding lives inside the closure so `Observations`
-            // captures a Sendable `String` per transaction (the
-            // `@Observable` `AppState` is a non-`Sendable` reference).
-            // `toJSON()` reads every wire-visible property, which is
-            // exactly the dependency set we want tracked.
+            // delivers a Sendable `String` representing a consistent
+            // snapshot per transaction (the `@Observable` `AppState`
+            // is itself a non-`Sendable` reference). `toJSON()` reads
+            // every encoded property, which is exactly the dependency
+            // set we want tracked.
             //
             // Local to the Task — re-attach cancels and respawns, so a
             // fresh sink gets a fresh comparison automatically.
