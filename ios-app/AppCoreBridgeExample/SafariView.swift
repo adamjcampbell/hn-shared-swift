@@ -18,10 +18,7 @@ struct IdentifiedURL: Identifiable {
 
 extension IdentifiedURL {
     init?(_ string: String) {
-        if let url = URL(string: string).map({ Self(id: string, url: $0) }) {
-            self = url
-        } else {
-            return nil
-        }
+        guard let url = URL(string: string) else { return nil }
+        self = Self(id: string, url: url)
     }
 }
