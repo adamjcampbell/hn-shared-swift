@@ -50,7 +50,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.example.appcore.R
 import com.example.appcore.state.AppCommand
@@ -342,7 +341,6 @@ private fun StoryRow(
                 Text(
                     text = "by ${story.author} · ${story.points} pts · ${story.commentCount} comments · $host",
                     style = MaterialTheme.typography.bodySmall,
-                    textDecoration = if (isRead) TextDecoration.LineThrough else TextDecoration.None,
                 )
             },
             colors = ListItemDefaults.colors(
