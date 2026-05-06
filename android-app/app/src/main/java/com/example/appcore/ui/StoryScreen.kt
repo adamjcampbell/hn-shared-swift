@@ -56,7 +56,7 @@ import com.example.appcore.state.AppState
 import com.example.appcore.state.Story
 import com.example.appcore.state.rememberAppModel
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.dropWhile
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -127,14 +127,21 @@ private fun StoriesContent(
     // AppCore handles its own debounce inside `.setSearchQuery` —
     // Compose just forwards every keystroke.
     // distinctUntilChanged guards against snapshotFlow re-emitting on
-    // cursor / selection changes. drop(1) skips the initial replayed
-    // empty value so the cold-start `.setSearchQuery("")` doesn't race
-    // with the `LaunchedEffect(Unit) { holder.dispatch(Refresh) }`
-    // above and cancel-and-replace its in-flight front-page fetch.
+    // cursor / selection changes. dropWhile { it.isEmpty() } skips
+    // *leading* empty replays so the cold-start `.setSearchQuery("")`
+    // doesn't race with the `LaunchedEffect(Unit) { holder.dispatch(
+    // Refresh) }` above and cancel-and-replace its in-flight front-page
+    // fetch. Crucially this only suppresses leading empties — once any
+    // non-empty value passes through, the operator goes inert and a
+    // subsequent clear-to-empty (e.g. user wipes the search field while
+    // focused) flows through as `setSearchQuery("")` and switches the
+    // list back to the front page, matching iOS. It also handles the
+    // saver-restored case after rotation: a restored non-empty value
+    // is the first emission and passes through immediately.
     LaunchedEffect(Unit) {
         snapshotFlow { textFieldState.text.toString() }
             .distinctUntilChanged()
-            .drop(1)
+            .dropWhile { it.isEmpty() }
             .collect(onSearchTextChanged)
     }
 
