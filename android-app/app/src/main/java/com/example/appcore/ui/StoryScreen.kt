@@ -26,7 +26,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SearchBar
@@ -40,10 +39,11 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberSearchBarState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -285,16 +285,22 @@ private fun StoryRow(
         }
     } ?: Modifier
 
-    val host = story.url?.let { runCatching { java.net.URI(it).host }.getOrNull() }
-        ?: "news.ycombinator.com"
+    val host = remember(story.url) {
+        story.url?.let { runCatching { java.net.URI(it).host }.getOrNull() }
+            ?: "news.ycombinator.com"
+    }
 
     val swipeLabel = stringResource(
         if (isRead) R.string.mark_unread_action else R.string.mark_read_action,
     )
+    // rememberSwipeToDismissBoxState captures confirmValueChange at first
+    // construction; rememberUpdatedState lets the captured lambda reach the
+    // latest onToggle without re-keying (and resetting) the swipe state.
+    val currentOnToggle by rememberUpdatedState(onToggle)
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             if (value == SwipeToDismissBoxValue.StartToEnd) {
-                onToggle()
+                currentOnToggle()
             }
             false
         },
@@ -319,24 +325,22 @@ private fun StoryRow(
             }
         },
     ) {
-        CompositionLocalProvider(LocalContentColor provides contentColor) {
-            ListItem(
-                modifier = rowModifier,
-                headlineContent = { Text(story.title) },
-                supportingContent = {
-                    Text(
-                        text = "by ${story.author} · ${story.points} pts · ${story.commentCount} comments · $host",
-                        style = MaterialTheme.typography.bodySmall,
-                        textDecoration = if (isRead) TextDecoration.LineThrough else TextDecoration.None,
-                    )
-                },
-                colors = ListItemDefaults.colors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    headlineColor = contentColor,
-                    supportingColor = contentColor,
-                ),
-            )
-        }
+        ListItem(
+            modifier = rowModifier,
+            headlineContent = { Text(story.title) },
+            supportingContent = {
+                Text(
+                    text = "by ${story.author} · ${story.points} pts · ${story.commentCount} comments · $host",
+                    style = MaterialTheme.typography.bodySmall,
+                    textDecoration = if (isRead) TextDecoration.LineThrough else TextDecoration.None,
+                )
+            },
+            colors = ListItemDefaults.colors(
+                containerColor = MaterialTheme.colorScheme.surface,
+                headlineColor = contentColor,
+                supportingColor = contentColor,
+            ),
+        )
     }
 }
 
