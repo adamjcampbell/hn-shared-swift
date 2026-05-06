@@ -23,12 +23,12 @@ data class Story(
     val commentCount: Int,
     val url: String? = null,
     val createdAt: String,
+    val isRead: Boolean = false,
 )
 
 @Serializable
 data class AppState(
     val stories: List<Story> = emptyList(),
-    val read: Set<String> = emptySet(),
     val searchQuery: String = "",
     val isLoading: Boolean = false,
     val lastRefreshedAt: String? = null,

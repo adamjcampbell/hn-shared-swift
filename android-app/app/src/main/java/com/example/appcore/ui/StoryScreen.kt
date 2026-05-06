@@ -136,7 +136,6 @@ private fun StoriesContent(
     }
 
     val stories = state?.stories ?: emptyList()
-    val read = state?.read ?: emptySet()
     val isLoading = state?.isLoading ?: false
 
     val inputField: @Composable () -> Unit = remember(textFieldState, searchBarState, scope) {
@@ -172,13 +171,13 @@ private fun StoriesContent(
                         HeaderCard(
                             searchQuery = state?.searchQuery.orEmpty(),
                             storyCount = stories.size,
-                            unreadCount = stories.count { !read.contains(it.id) },
+                            unreadCount = stories.count { !it.isRead },
                             isLoading = isLoading,
                             lastRefreshedAt = state?.lastRefreshedAt,
                             loadError = state?.loadError,
                         )
                     }
-                    storyRows(stories, read, onToggleRead, onOpenStory)
+                    storyRows(stories, onToggleRead, onOpenStory)
                 }
             }
 
@@ -192,20 +191,18 @@ private fun StoriesContent(
     }
 
     ExpandedFullScreenSearchBar(state = searchBarState, inputField = inputField) {
-        LazyColumn { storyRows(stories, read, onToggleRead, onOpenStory) }
+        LazyColumn { storyRows(stories, onToggleRead, onOpenStory) }
     }
 }
 
 private fun LazyListScope.storyRows(
     stories: List<Story>,
-    read: Set<String>,
     onToggleRead: (String) -> Unit,
     onOpenStory: (String) -> Unit,
 ) {
     items(stories, key = { it.id }) { story ->
         StoryRow(
             story = story,
-            isRead = read.contains(story.id),
             onToggle = { onToggleRead(story.id) },
             onOpen = { onOpenStory(story.id) },
         )
@@ -279,11 +276,10 @@ private fun HeaderCard(
 @Composable
 private fun StoryRow(
     story: Story,
-    isRead: Boolean,
     onToggle: () -> Unit,
     onOpen: () -> Unit,
 ) {
-    val contentColor = if (isRead) {
+    val contentColor = if (story.isRead) {
         MaterialTheme.colorScheme.onSurfaceVariant
     } else {
         MaterialTheme.colorScheme.onSurface
@@ -300,7 +296,7 @@ private fun StoryRow(
     }
 
     val swipeLabel = stringResource(
-        if (isRead) R.string.mark_unread_action else R.string.mark_read_action,
+        if (story.isRead) R.string.mark_unread_action else R.string.mark_read_action,
     )
     // rememberSwipeToDismissBoxState captures confirmValueChange at first
     // construction; rememberUpdatedState lets the captured lambda reach the
@@ -327,7 +323,7 @@ private fun StoryRow(
                 contentAlignment = Alignment.CenterStart,
             ) {
                 Icon(
-                    imageVector = if (isRead) Icons.Outlined.Circle else Icons.Filled.CheckCircle,
+                    imageVector = if (story.isRead) Icons.Outlined.Circle else Icons.Filled.CheckCircle,
                     contentDescription = swipeLabel,
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
