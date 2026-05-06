@@ -56,9 +56,13 @@ Per spec §12 plus what verification surfaced:
 - **No support for low-end / Intel Mac AVDs.** Only arm64-v8a is built.
 - **Not a published package.** `swift-java` is a path dependency; nothing
   here is meant to be `swift package add`-ed.
-- **Not a test of `Observations`'s cold-start emission semantics.** It
-  doesn't emit on cold start; we deliver the initial snapshot eagerly
-  (see `appcoreCreate` in `AppCoreNative.swift`).
+- **Cold-start initial snapshot comes from `Observations` itself.**
+  Per WWDC25 *What's new in Swift*, an `Observations` sequence emits
+  the initial value as well as future ones. The bridge actor's
+  `attach()` task therefore delivers a cold-start snapshot ~1–2 ms
+  after `appcoreCreate` returns; Compose's `mutableStateOf<AppState?>`
+  bridges that small `null` window. `BridgePerfTest.a_coldStart_…`
+  is the regression guard.
 
 ## Non-obvious project rules
 
@@ -165,7 +169,8 @@ Per spec §12 plus what verification surfaced:
   build` from inside `core-jni/build.gradle.kts`.
 - `BridgePerfTest`'s cold-start test (`a_coldStart_…`) uses an `a_`
   prefix to run first under `@FixMethodOrder(NAME_ASCENDING)` — earlier
-  toggling tests would mask a regression of the eager-delivery path.
+  toggling tests would mask a regression of `Observations`' initial-
+  value emission by warming the executor.
 - The iOS `.xcodeproj` is generated from `ios-app/project.yml` via
   `xcodegen` and gitignored.
 - The iOS target builds in **Swift 6** with **Approachable Concurrency**

@@ -19,10 +19,14 @@ import AppCore
 // required to expose a new action to Kotlin.
 
 public func appcoreCreate(snapshotSink: some SnapshotSink, commandSink: some CommandSink) {
-    // Observations (SE-0475) only emits on mutation, so deliver an initial
-    // snapshot synchronously before the actor task is scheduled. This is
-    // the load-bearing path for `BridgePerfTest.a_coldStart_…`.
-    snapshotSink.deliver(snapshotJSON: AppState().toJSON())
+    // `Observations` (Swift 6.2+) emits an initial value as well as all
+    // future ones (see WWDC25 *What's new in Swift*), so the bridge
+    // actor's `attach()` already delivers a cold-start snapshot ~1–2 ms
+    // after this call returns. `BridgePerfTest.a_coldStart_…` is the
+    // regression guard. Compose reads `AppModelHolder.state` as a
+    // nullable `AppState?`, so the brief window before that emission
+    // lands renders the same empty-state UI as the initial snapshot
+    // would have.
     Task { await AndroidBridge.shared.attach(snapshotSink: snapshotSink, commandSink: commandSink) }
 }
 

@@ -59,12 +59,12 @@ class BridgePerfTest {
 
     /**
      * Regression test: the initial snapshot must be delivered without any
-     * mutation having occurred — synchronously, inside `appcoreCreate`.
+     * mutation having occurred, via `Observations`'s initial-value
+     * emission (Swift 6.2+; see WWDC25 *What's new in Swift*).
      *
-     * Why this matters: `Observations` (SE-0475) only emits after a property
-     * mutation. Without an explicit eager delivery on the Swift side, the
-     * Compose UI would render with `snapshot == null` until the user did
-     * something (heart tap or pull-to-refresh).
+     * Why this matters: if a future toolchain ever stops emitting an
+     * initial value, the Compose UI would render with `snapshot == null`
+     * until the user did something (refresh or first search keystroke).
      *
      * The `a_` prefix puts this first under `@FixMethodOrder(NAME_ASCENDING)`
      * so it runs before any other test toggles state. This matters because
@@ -72,21 +72,22 @@ class BridgePerfTest {
      * mask a regression by warming the executor.
      */
     @Test
-    fun a_coldStart_initialSnapshotDeliveredSynchronously() = runBlocking {
+    fun a_coldStart_initialSnapshotDelivered() = runBlocking {
         val sink = CapturingSink()
         val nanos = measureNanoTime {
             AppCoreAndroid.appcoreCreate(sink, sink)
             try {
-                // 50 ms is generous — the snapshot is delivered synchronously
-                // inside `appcoreCreate`, so it should already be queued the
-                // moment the call returns. Anything longer indicates the
-                // eager-delivery path is broken.
+                // 50 ms is generous — the bridge actor's attach() task
+                // spawns and emits the initial Observations value within
+                // a couple of ms in practice. Anything longer indicates
+                // Observations stopped emitting an initial value.
                 val initial = withTimeout(50) { sink.channel.receive() }
                 assertNotNull("first snapshot JSON", initial)
                 // The HN reader starts with empty AppCore state — front page
-                // gets fetched once the UI dispatches `.refresh`. The eager
-                // initial snapshot is what allows Compose to render a loading
-                // spinner instead of `null` while that first fetch is in flight.
+                // gets fetched once the UI dispatches `.refresh`. The
+                // initial Observations emission lets Compose move past
+                // `null` and render an empty list before the first fetch
+                // settles.
                 assertTrue("contains empty stories array", initial.contains("\"stories\":[]"))
                 assertTrue("isLoading defaults false", initial.contains("\"isLoading\":false"))
             } finally {
