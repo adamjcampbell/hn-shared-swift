@@ -3,10 +3,29 @@ import AppCore
 
 struct RootView: View {
     @State private var appModel = AppModel()
+    @State private var presented: IdentifiableURL?
 
     var body: some View {
         NavigationStack { StoriesScreen(state: appModel.state) }
             .environment(\.dispatch, AppEventDispatch(appModel))
+            .sheet(item: $presented) { item in
+                SafariView(url: item.url)
+                    .ignoresSafeArea()
+            }
+            .task {
+                // Single long-lived consumer of AppCommand. The sheet
+                // binding lives here in the SwiftUI tree; user-driven
+                // dismissal sets `presented = nil` without touching
+                // AppCore.
+                for await command in appModel.commands {
+                    switch command {
+                    case .presentURL(let urlString):
+                        if let url = URL(string: urlString) {
+                            presented = IdentifiableURL(url: url)
+                        }
+                    }
+                }
+            }
     }
 }
 
@@ -151,14 +170,12 @@ private struct StoryRow: View {
     let story: Story
     let isRead: Bool
     @Environment(\.dispatch) private var dispatch
-    @State private var presented: IdentifiableURL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let urlString = story.url, let url = URL(string: urlString) {
+            if story.url != nil {
                 Button {
-                    dispatch(.markRead(id: story.id))
-                    presented = IdentifiableURL(url: url)
+                    dispatch(.openStory(id: story.id))
                 } label: {
                     Text(story.title)
                         .font(.body)
@@ -184,10 +201,6 @@ private struct StoryRow: View {
                 dispatch(.toggleRead(id: story.id))
             }
             .tint(.blue)
-        }
-        .sheet(item: $presented) { item in
-            SafariView(url: item.url)
-                .ignoresSafeArea()
         }
     }
 
