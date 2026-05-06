@@ -3,7 +3,6 @@ package com.example.appcore.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -20,7 +19,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExpandedFullScreenSearchBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -177,7 +175,6 @@ private fun StoriesContent(
                             searchQuery = state?.searchQuery.orEmpty(),
                             storyCount = stories.size,
                             unreadCount = stories.count { !it.isRead },
-                            isLoading = isLoading,
                             lastRefreshedAt = state?.lastRefreshedAt,
                             loadError = state?.loadError,
                         )
@@ -219,7 +216,6 @@ private fun HeaderCard(
     searchQuery: String,
     storyCount: Int,
     unreadCount: Int,
-    isLoading: Boolean,
     lastRefreshedAt: String?,
     loadError: String?,
 ) {
@@ -249,19 +245,10 @@ private fun HeaderCard(
             .padding(horizontal = 16.dp, vertical = 16.dp),
     ) {
         Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.padding(start = 8.dp),
-                        strokeWidth = 2.dp,
-                    )
-                }
-            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+            )
             Text(
                 text = meta,
                 style = MaterialTheme.typography.bodySmall,
