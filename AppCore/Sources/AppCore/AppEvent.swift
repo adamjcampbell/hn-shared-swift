@@ -30,7 +30,7 @@ import MetaCodable
 @CodedAt("type")
 public enum AppEvent: Sendable, Equatable {
     case toggleRead(id: String)
-    case markRead(id: String)
+    case openStory(id: String)
     case refresh
     case setSearchQuery(value: String)
 }

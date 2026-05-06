@@ -82,19 +82,65 @@ struct AppModelTests {
         #expect(model.state.read.contains("100") == false)
     }
 
-    @Test("markRead inserts and is idempotent")
-    func markRead_insertsAndIsIdempotent() async {
+    @Test("openStory marks read and emits presentURL command")
+    func openStory_marksReadAndEmitsPresentURL() async {
         let model = AppModel(
-            client: HNClient(frontPage: { [] }, search: { _ in [] })
+            client: HNClient(
+                frontPage: { [storyA, storyB] },
+                search: { _ in [] }
+            )
         )
-        #expect(model.state.read.contains("100") == false)
+        await model.dispatch(.refresh)
 
-        await model.dispatch(.markRead(id: "100"))
-        #expect(model.state.read.contains("100"))
+        var iterator = model.commands.makeAsyncIterator()
+        await model.dispatch(.openStory(id: storyA.id))
 
-        await model.dispatch(.markRead(id: "100"))
-        #expect(model.state.read.contains("100"))
-        #expect(model.state.read.count == 1)
+        #expect(model.state.read.contains(storyA.id))
+        let command = await iterator.next()
+        #expect(command == .presentURL(value: storyA.url!))
+    }
+
+    @Test("openStory on a story without a URL marks read but emits nothing")
+    func openStory_withoutURL_marksReadOnly() async {
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { [storyA, storyB] },
+                search: { _ in [] }
+            )
+        )
+        await model.dispatch(.refresh)
+
+        // Open storyA first so we have a known emission to wait on, then
+        // open storyB (no URL). The next iteration should yield storyA's
+        // command — proving storyB emitted nothing in between.
+        var iterator = model.commands.makeAsyncIterator()
+        await model.dispatch(.openStory(id: storyB.id))
+        await model.dispatch(.openStory(id: storyA.id))
+
+        #expect(model.state.read.contains(storyB.id))
+        let command = await iterator.next()
+        #expect(command == .presentURL(value: storyA.url!))
+    }
+
+    @Test("openStory with unknown id is a no-op")
+    func openStory_unknownId_isNoop() async {
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { [storyA] },
+                search: { _ in [] }
+            )
+        )
+        await model.dispatch(.refresh)
+        let readBefore = model.state.read
+
+        var iterator = model.commands.makeAsyncIterator()
+        await model.dispatch(.openStory(id: "does-not-exist"))
+        // Follow with a known-good open so we have something to await.
+        await model.dispatch(.openStory(id: storyA.id))
+
+        #expect(model.state.read == readBefore.union([storyA.id]))
+        let command = await iterator.next()
+        #expect(command == .presentURL(value: storyA.url!))
     }
 
     @Test("read state survives a refresh")
@@ -243,11 +289,11 @@ struct AppEventTests {
         #expect(decoded == event)
     }
 
-    @Test("markRead encodes with discriminator and id payload")
-    func markRead_wireShape() throws {
-        let event = AppEvent.markRead(id: "39184235")
+    @Test("openStory encodes with discriminator and id payload")
+    func openStory_wireShape() throws {
+        let event = AppEvent.openStory(id: "39184235")
         let json = event.toJSON()
-        #expect(json.contains("\"type\":\"markRead\""))
+        #expect(json.contains("\"type\":\"openStory\""))
         #expect(json.contains("\"id\":\"39184235\""))
 
         let decoded = try #require(AppEvent(json: json))
@@ -282,8 +328,8 @@ struct AppEventTests {
         let toggle = try #require(AppEvent(json: #"{"type":"toggleRead","id":"100"}"#))
         #expect(toggle == .toggleRead(id: "100"))
 
-        let mark = try #require(AppEvent(json: #"{"type":"markRead","id":"100"}"#))
-        #expect(mark == .markRead(id: "100"))
+        let open = try #require(AppEvent(json: #"{"type":"openStory","id":"100"}"#))
+        #expect(open == .openStory(id: "100"))
 
         let refresh = try #require(AppEvent(json: #"{"type":"refresh"}"#))
         #expect(refresh == .refresh)
@@ -297,5 +343,36 @@ struct AppEventTests {
         #expect(AppEvent(json: #"{"type":"unknown"}"#) == nil)
         #expect(AppEvent(json: #"{}"#) == nil)
         #expect(AppEvent(json: "garbage") == nil)
+    }
+}
+
+@Suite("AppCommand JSON round-trip")
+struct AppCommandTests {
+
+    @Test("presentURL encodes with discriminator and value payload")
+    func presentURL_wireShape() throws {
+        let command = AppCommand.presentURL(value: "https://example.com/a")
+        let json = command.toJSON()
+        #expect(json.contains("\"type\":\"presentURL\""))
+        #expect(json.contains("\"value\":\"https:\\/\\/example.com\\/a\""))
+
+        let decoded = try #require(AppCommand(json: json))
+        #expect(decoded == command)
+    }
+
+    @Test("decodes hand-written wire literals")
+    func decodes_handWrittenLiterals() throws {
+        // The literal payload Kotlin's kotlinx-serialization will receive
+        // through the JNI CommandSink. If Swift ever stops accepting it,
+        // the cross-language contract has drifted.
+        let present = try #require(AppCommand(json: #"{"type":"presentURL","value":"https://example.com"}"#))
+        #expect(present == .presentURL(value: "https://example.com"))
+    }
+
+    @Test("rejects unknown discriminators")
+    func rejects_unknownDiscriminator() {
+        #expect(AppCommand(json: #"{"type":"unknown"}"#) == nil)
+        #expect(AppCommand(json: #"{}"#) == nil)
+        #expect(AppCommand(json: "garbage") == nil)
     }
 }

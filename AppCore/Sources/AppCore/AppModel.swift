@@ -23,6 +23,18 @@ import Observation
 public final class AppModel {
     public private(set) var state: AppState = AppState()
 
+    /// One-shot commands from the model to the UI — the symmetric
+    /// counterpart to `dispatch(_:)`. The reducer yields onto a single
+    /// continuation; iOS subscribes from a long-lived `.task`, Android's
+    /// `AndroidBridge` subscribes from a Task that forwards JSON over JNI
+    /// to a `CommandSink`. There is one consumer per platform binary, so
+    /// the single-iterator constraint of `AsyncStream` is respected.
+    @ObservationIgnored
+    public let commands: AsyncStream<AppCommand>
+
+    @ObservationIgnored
+    private let commandsContinuation: AsyncStream<AppCommand>.Continuation
+
     @ObservationIgnored
     private let client: HNClient
 
@@ -49,6 +61,9 @@ public final class AppModel {
     ) {
         self.client = client
         self.clock = clock
+        let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
+        self.commands = stream
+        self.commandsContinuation = continuation
     }
 
     /// Single entry point for every user-driven mutation.
@@ -69,8 +84,8 @@ public final class AppModel {
         switch event {
         case .toggleRead(let id):
             toggleRead(id)
-        case .markRead(let id):
-            state.read.insert(id)
+        case .openStory(let id):
+            openStory(id)
         case .refresh:
             await runFetch()
         case .setSearchQuery(let value):
@@ -84,6 +99,18 @@ public final class AppModel {
             state.read.remove(id)
         } else {
             state.read.insert(id)
+        }
+    }
+
+    /// Mark a known story as read and, if it has a URL, ask the UI to
+    /// present it. Unknown ids are a no-op — the reducer only acts on
+    /// stories it knows about, which keeps `state.read` from
+    /// accumulating ids that no longer correspond to anything.
+    private func openStory(_ id: String) {
+        guard let story = state.stories.first(where: { $0.id == id }) else { return }
+        state.read.insert(id)
+        if let url = story.url {
+            commandsContinuation.yield(.presentURL(value: url))
         }
     }
 
