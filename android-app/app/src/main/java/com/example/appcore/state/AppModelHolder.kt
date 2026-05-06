@@ -5,7 +5,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.appcore.bridge.AppCoreAndroid
+import com.example.appcore.bridge.CommandSink
 import com.example.appcore.bridge.SnapshotSink
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -43,8 +47,8 @@ sealed class AppEvent {
     data class ToggleRead(val id: String) : AppEvent()
 
     @Serializable
-    @SerialName("markRead")
-    data class MarkRead(val id: String) : AppEvent()
+    @SerialName("openStory")
+    data class OpenStory(val id: String) : AppEvent()
 
     @Serializable
     @SerialName("refresh")
@@ -53,6 +57,22 @@ sealed class AppEvent {
     @Serializable
     @SerialName("setSearchQuery")
     data class SetSearchQuery(val value: String) : AppEvent()
+}
+
+/**
+ * Mirrors the Swift `AppCommand` enum — the Core → UI direction. Wire
+ * shape is `{"type":"...", ...}`, matching `AppCore/Sources/AppCore/AppCommand.swift`.
+ *
+ * Where `AppEvent` is the UI asking the core to mutate state, `AppCommand`
+ * is the core asking the UI to perform a one-shot presentation that the
+ * platform owns (Chrome Custom Tab, share sheet, etc.). Delivered through
+ * `AppModelHolder.commands`.
+ */
+@Serializable
+sealed class AppCommand {
+    @Serializable
+    @SerialName("presentURL")
+    data class PresentURL(val value: String) : AppCommand()
 }
 
 /**
@@ -79,7 +99,7 @@ sealed class AppEvent {
  * straight from Swift — no Kotlin-side timer. Pull-to-refresh's spinner
  * just observes `state.isLoading`.
  */
-object AppModelHolder : SnapshotSink {
+object AppModelHolder : SnapshotSink, CommandSink {
     var state by mutableStateOf<AppState?>(null)
         private set
 
@@ -88,13 +108,29 @@ object AppModelHolder : SnapshotSink {
         ignoreUnknownKeys = true
     }
 
+    /**
+     * One-shot commands from the Swift core to the UI. Channel-backed so
+     * cold-start emissions (commands that fire before the screen-level
+     * collector has attached) are buffered rather than dropped. The
+     * single-event Channel.receiveAsFlow pattern is the canonical Compose
+     * answer for "execute this once" — recomposition can't replay it.
+     */
+    private val _commands = Channel<AppCommand>(capacity = Channel.BUFFERED)
+    val commands: Flow<AppCommand> get() = _commands.receiveAsFlow()
+
     fun start() {
-        AppCoreAndroid.appcoreCreate(this)
+        AppCoreAndroid.appcoreCreate(this, this)
     }
 
     /** Called from Swift via JNI on every Observations transaction. */
     override fun deliver(snapshotJSON: String) {
         state = json.decodeFromString<AppState>(snapshotJSON)
+    }
+
+    /** Called from Swift via JNI on every yield from `AppModel.commands`. */
+    override fun deliverCommand(commandJSON: String) {
+        val command = json.decodeFromString<AppCommand>(commandJSON)
+        _commands.trySend(command)
     }
 
     fun dispatch(event: AppEvent) {

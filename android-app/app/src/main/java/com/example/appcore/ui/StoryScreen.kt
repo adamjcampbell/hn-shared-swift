@@ -53,6 +53,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.example.appcore.R
+import com.example.appcore.state.AppCommand
 import com.example.appcore.state.AppEvent
 import com.example.appcore.state.AppState
 import com.example.appcore.state.Story
@@ -66,11 +67,22 @@ fun StoryScreen() {
     val holder = rememberAppModel()
     val state = holder.state
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
     // Initial fetch: front page on first composition.
     LaunchedEffect(Unit) {
         holder.dispatch(AppEvent.Refresh)
+    }
+
+    // One-shot commands from the core. Each emission is consumed exactly
+    // once by the receiveAsFlow channel — recomposition can't replay it.
+    LaunchedEffect(holder) {
+        holder.commands.collect { command ->
+            when (command) {
+                is AppCommand.PresentURL -> context.launchCustomTab(command.value)
+            }
+        }
     }
 
     Scaffold(
@@ -90,7 +102,7 @@ fun StoryScreen() {
             onRefresh = { scope.launch { holder.dispatch(AppEvent.Refresh) } },
             onSearchTextChanged = { holder.dispatch(AppEvent.SetSearchQuery(it)) },
             onToggleRead = { holder.dispatch(AppEvent.ToggleRead(it)) },
-            onMarkRead = { holder.dispatch(AppEvent.MarkRead(it)) },
+            onOpenStory = { holder.dispatch(AppEvent.OpenStory(it)) },
             modifier = Modifier
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
@@ -106,7 +118,7 @@ private fun StoriesContent(
     onRefresh: () -> Unit,
     onSearchTextChanged: (String) -> Unit,
     onToggleRead: (String) -> Unit,
-    onMarkRead: (String) -> Unit,
+    onOpenStory: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val searchBarState = rememberSearchBarState()
@@ -167,7 +179,7 @@ private fun StoriesContent(
                             loadError = state?.loadError,
                         )
                     }
-                    storyRows(stories, read, onToggleRead, onMarkRead)
+                    storyRows(stories, read, onToggleRead, onOpenStory)
                 }
             }
 
@@ -181,7 +193,7 @@ private fun StoriesContent(
     }
 
     ExpandedFullScreenSearchBar(state = searchBarState, inputField = inputField) {
-        LazyColumn { storyRows(stories, read, onToggleRead, onMarkRead) }
+        LazyColumn { storyRows(stories, read, onToggleRead, onOpenStory) }
     }
 }
 
@@ -189,14 +201,14 @@ private fun LazyListScope.storyRows(
     stories: List<Story>,
     read: Set<String>,
     onToggleRead: (String) -> Unit,
-    onMarkRead: (String) -> Unit,
+    onOpenStory: (String) -> Unit,
 ) {
     items(stories, key = { it.id }) { story ->
         StoryRow(
             story = story,
             isRead = read.contains(story.id),
             onToggle = { onToggleRead(story.id) },
-            onOpen = { onMarkRead(story.id) },
+            onOpen = { onOpenStory(story.id) },
         )
     }
 }
@@ -272,18 +284,16 @@ private fun StoryRow(
     onToggle: () -> Unit,
     onOpen: () -> Unit,
 ) {
-    val context = LocalContext.current
     val contentColor = if (isRead) {
         MaterialTheme.colorScheme.onSurfaceVariant
     } else {
         MaterialTheme.colorScheme.onSurface
     }
-    val rowModifier = story.url?.let { url ->
-        Modifier.clickable {
-            onOpen()
-            context.launchCustomTab(url)
-        }
-    } ?: Modifier
+    val rowModifier = if (story.url != null) {
+        Modifier.clickable { onOpen() }
+    } else {
+        Modifier
+    }
 
     val host = remember(story.url) {
         story.url?.let { runCatching { java.net.URI(it).host }.getOrNull() }
