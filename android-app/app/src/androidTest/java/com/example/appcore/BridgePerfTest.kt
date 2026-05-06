@@ -55,6 +55,32 @@ class BridgePerfTest {
     private companion object {
         const val TOGGLE_FOO_JSON = """{"type":"toggleRead","id":"foo"}"""
         const val TOGGLE_BAR_JSON = """{"type":"toggleRead","id":"bar"}"""
+        const val REFRESH_JSON = """{"type":"refresh"}"""
+        // First "id" key in the snapshot belongs to the first story (no
+        // other Story field is named "id"). Lifted to a companion to
+        // avoid recompiling the regex per call.
+        val FIRST_ID_REGEX = Regex("\"id\":\"([^\"]+)\"")
+    }
+
+    /** Drains snapshots until one with a non-empty `stories` array is
+     * received, then returns its first story id. Used by tests that
+     * exercise toggleRead — toggling a read for an id without a matching
+     * Story produces no encoded change (`readIds` is off the wire,
+     * `Story.isRead` is the projection), so the bridge dedup correctly
+     * skips the emission and the test would never see a per-toggle
+     * snapshot.
+     */
+    private suspend fun firstStoryIdAfterRefresh(sink: CapturingSink): String {
+        AppCoreAndroid.appcoreDispatch(REFRESH_JSON)
+        val withStories = withTimeout(10_000) {
+            var s = sink.channel.receive()
+            while (!s.contains("\"stories\":[{")) {
+                s = sink.channel.receive()
+            }
+            s
+        }
+        return FIRST_ID_REGEX.find(withStories)?.groupValues?.get(1)
+            ?: error("could not parse first story id from $withStories")
     }
 
     /**
@@ -132,16 +158,25 @@ class BridgePerfTest {
             // Drain the cold-start snapshot.
             withTimeout(5_000) { sink.channel.receive() }
 
-            // Warm-up so the dispatcher and JIT are settled.
+            // Refresh and grab a real story id. Toggling a read for an id
+            // that doesn't match any Story changes only `readIds` (off the
+            // wire) and the bridge dedup correctly skips the emission, so
+            // we'd never see a per-toggle snapshot to await on.
+            val storyId = firstStoryIdAfterRefresh(sink)
+            val toggleStory = """{"type":"toggleRead","id":"$storyId"}"""
+
+            // Warm-up so the dispatcher and JIT are settled. Each toggle
+            // flips Story.isRead in the encoded snapshot, so each one
+            // produces a distinct emission.
             repeat(20) {
-                AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON)
+                AppCoreAndroid.appcoreDispatch(toggleStory)
                 withTimeout(1_000) { sink.channel.receive() }
             }
 
             val samples = mutableListOf<Long>()
-            repeat(100) { i ->
+            repeat(100) {
                 val t0 = System.nanoTime()
-                AppCoreAndroid.appcoreDispatch(TOGGLE_BAR_JSON)
+                AppCoreAndroid.appcoreDispatch(toggleStory)
                 // Wait for the corresponding snapshot.
                 withTimeout(1_000) { sink.channel.receive() }
                 samples += System.nanoTime() - t0
