@@ -286,11 +286,8 @@ struct AppModelTests {
     func cancelledURLError_doesNotSurfaceAsLoadError() async {
         // URLSession surfaces task cancellation as URLError.cancelled,
         // not Swift's CancellationError. Without the in-Task
-        // normalisation, a cancel-and-replace would race the prior
-        // fetch's `URLError(.cancelled)` into the generic catch arm and
-        // briefly write `loadError = "cancelled"`. Cold-start on Android
-        // hits this when the search-bar's snapshotFlow initial empty
-        // value races the explicit `.refresh` LaunchedEffect.
+        // normalisation, the dispatch arm's generic `catch` would write
+        // `loadError = "cancelled"`. Direct contract test.
         let model = AppModel(
             client: HNClient(
                 frontPage: { throw URLError(.cancelled) },
@@ -302,6 +299,49 @@ struct AppModelTests {
 
         #expect(model.state.loadError == nil)
         #expect(model.state.hits.isEmpty)
+    }
+
+    @Test("cancel-and-replace through URLError(.cancelled) doesn't surface")
+    @MainActor
+    func cancelAndReplace_throughURLErrorCancelled_silent() async {
+        // Reproduces the cold-start race that motivated the URLError
+        // normalisation: a slow `.refresh` fetch is in flight when a
+        // `.setSearchQuery` arrives, runFetch cancel-and-replaces the
+        // task, and the URLSession-style mock surfaces URLError.cancelled
+        // as the task throws. Without the normalisation the prior
+        // dispatch's catch arm would have written `loadError = "cancelled"`
+        // until the search-query fetch settled.
+        let clock = TestClock()
+        let model = AppModel(
+            client: HNClient(
+                frontPage: {
+                    // Park until the calling Task is cancelled, then
+                    // throw URLError(.cancelled) like URLSession does.
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(5))
+                    }
+                    throw URLError(.cancelled)
+                },
+                search: { _ in [storyA] }
+            ),
+            clock: clock
+        )
+
+        let refreshTask = Task { @MainActor in await model.dispatch(.refresh) }
+        await Task.megaYield()
+
+        // .setSearchQuery cancels the in-flight refresh task; debounce
+        // sleep is released by advancing the TestClock.
+        let queryTask = Task { @MainActor in await model.dispatch(.setSearchQuery(value: "rust")) }
+        await Task.megaYield()
+        await clock.advance(by: AppModel.searchDebounce)
+
+        await refreshTask.value
+        await queryTask.value
+
+        #expect(model.state.loadError == nil)
+        #expect(model.state.searchQuery == "rust")
+        #expect(model.state.stories.map(\.id) == ["100"])
     }
 }
 
@@ -431,6 +471,11 @@ struct AppStateWireTests {
         // Internal storage never crosses the wire.
         #expect(!json.contains("\"hits\""))
         #expect(!json.contains("\"readIds\""))
+        // No underscore-prefixed key — guards against the @Observable
+        // macro's `_searchQuery`-style backing storage leaking into the
+        // wire if anyone accidentally restores default `Codable`
+        // synthesis instead of the hand-written `encode(to:)`.
+        #expect(!json.contains("\"_"))
         // The merged stories list is what Android sees.
         #expect(json.contains("\"stories\""))
         #expect(json.contains("\"isRead\":true"))
