@@ -69,12 +69,23 @@ Per spec §12 plus what verification surfaced:
 - **Never use `@unchecked Sendable` or `nonisolated(unsafe)` in
   `AppCore/Sources/`.** The architecture is built around proper isolation
   (actors, value types, single-instance singletons), and a hand-rolled
-  unsafe escape hatch usually means the design is wrong. The single
-  exception is `Sources/AppCoreAndroid/JavaInterop.swift`, which adopts
-  `@unchecked Sendable` for the jextract-generated `JavaSnapshotSink`
-  wrapper — swift-java does not yet mark `@JavaInterface` types as
-  `Sendable`, but the underlying JNI handle is safe to share. If you add
-  another exception, document the why in the same file.
+  unsafe escape hatch usually means the design is wrong. There are two
+  documented exceptions, both for tooling/stdlib gaps rather than
+  design wrong-ness:
+  - `Sources/AppCoreAndroid/JavaInterop.swift` adopts `@unchecked
+    Sendable` for the jextract-generated `Java*Sink` wrappers —
+    swift-java does not yet mark `@JavaInterface` types as `Sendable`,
+    but the underlying JNI handle is safe to share.
+  - `Sources/AppCore/Observed.swift` adopts `@unchecked Sendable` for
+    the `_ResumeOnce` coordinator that bridges `withTaskCancellationHandler`
+    and `withCheckedContinuation` (so `ObservedKeyPath`'s wait is
+    cancellable without a write to wake it). It wraps an `NSLock` +
+    `Bool` + `Optional<CheckedContinuation>`; the unchecked is purely
+    a Swift 6 stdlib gap (no `Sendable` lock primitive that ships on
+    iOS 17 *and* swift-corelibs-foundation). Drop it once
+    `Synchronization.Mutex` is iOS-18-floor accessible.
+
+  If you add another exception, document the why in the same file.
 - `AppCoreAndroid` user-facing sources (`AppCoreNative.swift`,
   `AndroidBridge.swift`) are *not* wrapped in `#if canImport(Android)`
   because jextract runs on the macOS host and silently skips functions
@@ -127,15 +138,21 @@ Per spec §12 plus what verification surfaced:
   `withObservationTracking` for a single key path; modelled after
   Apple's `Observations` (SE-0475 / iOS 26+) but available on iOS 17+.
   Each `next()` re-arms by re-iterating, so the spec §13 fallback's
-  recursion-from-`@Sendable onChange` isn't needed. The iterator
-  yields `Task.yield()` once after the suspension point so the
-  writer's `willSet` → assignment → `didSet` frame completes before
-  reading the post-write value (Apple's `Observations` solves the same
-  "willSet fires before mutation" problem by emitting at "transaction
-  end"). Iterator is non-Sendable; iteration must stay in a single
-  isolation domain (MainActor on iOS, the bridge actor on Android) —
-  same constraint Apple's `Observations` has. Drop this type and use
-  `Observations` directly when iOS 26 becomes the deployment floor.
+  recursion-from-`@Sendable onChange` isn't needed. The wait is
+  `withCheckedContinuation` wrapped in `withTaskCancellationHandler`
+  so the iterator exits cleanly when its surrounding task is cancelled
+  even if no further `willSet` is coming. A `_ResumeOnce` coordinator
+  (lock-based; the file's documented `@unchecked Sendable` exception)
+  guarantees the `onChange`/`onCancel` race resumes the continuation
+  exactly once. The iterator yields `Task.yield()` once after the
+  suspension so the writer's `willSet` → assignment → `didSet` frame
+  completes before reading the post-write value (Apple's `Observations`
+  solves the same "willSet fires before mutation" problem by emitting
+  at "transaction end"). Iterator is non-Sendable; iteration must stay
+  in a single isolation domain (MainActor on iOS, the bridge actor on
+  Android) — same constraint Apple's `Observations` has. Drop this
+  type and use `Observations` directly when iOS 26 becomes the
+  deployment floor.
 - **The watcher loop body lives on AppModel; the Task lifetime lives on
   the host.** AppModel exposes `runSearchQueryWatcher() async` and
   hosts call `await appModel.runSearchQueryWatcher()` from inside their
