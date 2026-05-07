@@ -81,6 +81,20 @@ public func appcoreSetSearchQuery(value: String) {
     #endif
 }
 
+/// Per-property getter for `state.searchQuery`. Used by the Compose
+/// `BridgedSource` wrapper as `produceState`'s initial value, so the
+/// first composition reads the live Swift value (correct under future
+/// process-death restoration) rather than a hardcoded `""`. Sync
+/// because the thunk is on the UI thread and so is the bridge actor's
+/// executor — `assumeIsolated` is just a property read.
+public func appcoreGetSearchQuery() -> String {
+    #if canImport(Android)
+    return AndroidBridge.shared.assumeIsolated { $0.getSearchQuery() }
+    #else
+    return ""
+    #endif
+}
+
 public func appcoreDestroy() {
     #if canImport(Android)
     AndroidBridge.shared.assumeIsolated { $0.detach() }

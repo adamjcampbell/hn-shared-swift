@@ -107,16 +107,18 @@ object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink {
         private set
 
     /**
-     * Per-property bridged `searchQuery`. Compose binds to it via
-     * `holder.searchQuery.asMutableState()`; user typing flows through
-     * `BridgedSource.set` → `appcoreSetSearchQuery` → Swift; cold-start
-     * + programmatic Swift writes flow back via [deliver]. Echoes of
+     * Per-property bridged `searchQuery`. Compose binds via
+     * `holder.searchQuery.asState()`; user typing flows through
+     * `BridgedSource.set` → `appcoreSetSearchQuery` → Swift (sync);
+     * cold-start + programmatic Swift writes flow back via [deliver].
+     * Reads come through JNI (`appcoreGetSearchQuery`) — no Kotlin-side
+     * mirror — so Swift is the single source of truth. Echoes of
      * user-typed writes are suppressed on the Swift bridge actor's
      * `lastSetterValue` dedup so they never reach this sink.
      */
     val searchQuery = BridgedSource<String>(
-        initial = "",
-        writeThrough = { AppCoreAndroid.appcoreSetSearchQuery(it) },
+        readThrough = AppCoreAndroid::appcoreGetSearchQuery,
+        writeThrough = AppCoreAndroid::appcoreSetSearchQuery,
     )
 
     private val json = Json {
@@ -160,7 +162,7 @@ object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink {
      * `deliver(String)` would conflict.
      */
     override fun deliverSearchQuery(value: String) {
-        searchQuery.deliverFromBridge(value)
+        searchQuery.deliver(value)
     }
 
     fun dispatch(event: AppEvent) {

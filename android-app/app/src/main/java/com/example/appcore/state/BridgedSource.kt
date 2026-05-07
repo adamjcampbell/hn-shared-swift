@@ -10,40 +10,46 @@ import java.util.concurrent.CopyOnWriteArrayList
 /**
  * A platform-bridged primitive exposed as a Compose-friendly state.
  *
- * Two write paths feed it:
- *   1. [set] — Compose-side write. Updates [current] synchronously,
- *      calls [writeThrough] (the JNI setter), and notifies listeners.
- *   2. [deliverFromBridge] — push from the platform (cold-start initial
- *      + programmatic Swift writes). Updates [current] and notifies
- *      listeners; echoes of [set]-originated writes are filtered on the
- *      bridge actor (`lastSetterValue` dedup) before reaching here.
+ * No Kotlin-side mirror: [current] reads through JNI on every access,
+ * so the Swift bridge actor's value is the single source of truth.
+ * Two paths feed Compose state through this wrapper:
  *
- * [current] is updated synchronously on the local-write path so any
- * Compose State produced from [asState] reflects user typing
- * immediately, even though the bridge dedup absorbs the round-trip
- * echo. This is "trust boundary dedup" applied symmetrically: Swift
- * dedups what crosses JNI; Kotlin dedups within Compose.
+ *   1. [set] — Compose-side write. Calls [writeThrough] (the JNI
+ *      setter, sync via `Actor.assumeIsolated`) and returns. Listeners
+ *      are NOT notified locally — the Swift bridge's `lastSetterValue`
+ *      echo dedup suppresses the round-trip back through [deliver],
+ *      and Compose's authoritative typing buffer (TextFieldState)
+ *      already owns the in-progress text. The Compose [State] produced
+ *      by [asState] therefore only reflects out-of-band Swift writes
+ *      (cold-start initial + future programmatic clears), which is
+ *      what `authoritativeSearchQuery` is conceptually for.
+ *   2. [deliver] — push from the platform (cold-start initial +
+ *      programmatic Swift writes). Notifies all registered listeners
+ *      so the [State] from [asState] updates. Echoes of [set]-originated
+ *      writes are filtered on the Swift bridge actor's `lastSetterValue`
+ *      dedup before reaching here.
  *
- * Listeners use [CopyOnWriteArrayList] because [deliverFromBridge] is
- * called from the JNI thread while [addListener] / unregister happen
- * on the main thread (Compose's Composable scope).
+ * Listeners use [CopyOnWriteArrayList] for defence-in-depth: the bridge
+ * pins callbacks to the UI thread today (via `LooperExecutor`), but the
+ * COW list keeps `addListener`/`removeListener` correct even if a
+ * future change re-introduces off-UI deliveries.
  */
 class BridgedSource<T>(
-    initial: T,
+    private val readThrough: () -> T,
     private val writeThrough: (T) -> Unit,
 ) {
-    @Volatile
-    var current: T = initial
-        private set
+    /**
+     * Latest value, read through JNI on every access. Used by [asState]'s
+     * `produceState(initialValue = …)`, which evaluates this once per
+     * composition.
+     */
+    val current: T get() = readThrough()
 
     private val listeners = CopyOnWriteArrayList<(T) -> Unit>()
 
-    /** Compose-side write: optimistic local update + write-through. */
+    /** Compose-side write: sync JNI. See class doc for why no local notify. */
     fun set(value: T) {
-        if (current == value) return
-        current = value
         writeThrough(value)
-        notifyListeners(value)
     }
 
     /**
@@ -52,26 +58,21 @@ class BridgedSource<T>(
      * (`lastSetterValue` on `AndroidBridge`), so by the time this fires
      * the value is genuinely new.
      */
-    fun deliverFromBridge(value: T) {
-        if (current == value) return
-        current = value
-        notifyListeners(value)
+    fun deliver(value: T) {
+        listeners.forEach { it(value) }
     }
 
     fun addListener(listener: (T) -> Unit): () -> Unit {
         listeners.add(listener)
         return { listeners.remove(listener) }
     }
-
-    private fun notifyListeners(value: T) {
-        listeners.forEach { it(value) }
-    }
 }
 
 /**
  * Project [BridgedSource] as a read-only Compose [State]. The producer
  * registers a listener for the lifetime of the call site; on dispose
- * (recomposition leaving) the listener is removed.
+ * (recomposition leaving) the listener is removed. Initial value is
+ * read synchronously through JNI via [BridgedSource.current].
  */
 @Composable
 fun <T> BridgedSource<T>.asState(): State<T> = produceState(initialValue = current) {
@@ -81,9 +82,7 @@ fun <T> BridgedSource<T>.asState(): State<T> = produceState(initialValue = curre
 
 /**
  * Project [BridgedSource] as a [MutableState]. Reads come from
- * [asState]; writes go through [BridgedSource.set] (which updates
- * `current` synchronously, fires the JNI setter, and notifies
- * listeners — feeding the State).
+ * [asState]; writes go through [BridgedSource.set] (sync JNI).
  */
 @Composable
 fun <T> BridgedSource<T>.asMutableState(): MutableState<T> {
@@ -97,9 +96,9 @@ fun <T> BridgedSource<T>.asMutableState(): MutableState<T> {
  * and reusable for any "read state + write callback" pair.
  *
  * The setter does NOT touch the underlying State directly — it relies
- * on the write callback to invoke the listener that drives the State.
- * For [BridgedSource] specifically, that's the synchronous
- * `notifyListeners` inside `set`.
+ * on the write callback to drive the listener that updates the State.
+ * For [BridgedSource] specifically, that's the [BridgedSource.deliver]
+ * path triggered by Swift's out-of-band writes.
  */
 class MutableStateAdapter<T>(
     private val state: State<T>,

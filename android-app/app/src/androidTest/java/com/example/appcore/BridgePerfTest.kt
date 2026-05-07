@@ -298,6 +298,37 @@ class BridgePerfTest {
     }
 
     @Test
+    fun getSearchQuery_returnsCurrentSwiftValue() = runBlocking {
+        // Locks in the contract that `appcoreGetSearchQuery` reads
+        // through the bridge synchronously: after `appcoreSetSearchQuery("hello")`
+        // returns, `appcoreGetSearchQuery()` returns "hello" without
+        // waiting on any async round-trip. The Kotlin `BridgedSource`
+        // relies on this for `produceState`'s initial-value seeding.
+        val sink = CapturingSink()
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
+        try {
+            // Drain cold-start.
+            withTimeout(5_000) { sink.channel.receive() }
+            withTimeout(5_000) { sink.searchQueryChannel.receive() }
+
+            assertEquals(
+                "cold-start getter is empty",
+                "",
+                onMainResult { AppCoreAndroid.appcoreGetSearchQuery() }
+            )
+
+            onMain { AppCoreAndroid.appcoreSetSearchQuery("hello") }
+            assertEquals(
+                "getter returns the value just set, synchronously",
+                "hello",
+                onMainResult { AppCoreAndroid.appcoreGetSearchQuery() }
+            )
+        } finally {
+            onMain { AppCoreAndroid.appcoreDestroy() }
+        }
+    }
+
+    @Test
     fun searchQueryRoundTrip_throughSetterAndSink() = runBlocking {
         // Two-way bridge contract:
         //   1. `appcoreSetSearchQuery("rust")` reaches the Swift side;

@@ -176,6 +176,14 @@ actor AndroidBridge {
         appModel.state.searchQuery = value
     }
 
+    /// Sync getter for `state.searchQuery`. Called from the Kotlin
+    /// `BridgedSource`'s `readThrough` to seed `produceState`'s
+    /// initial value with Swift's current truth (no Kotlin-side
+    /// mirror).
+    func getSearchQuery() -> String {
+        appModel.state.searchQuery
+    }
+
     // MARK: - Watcher actor-hop wrapper
     //
     // The `queryWatcherTask`'s body captures only `self` (the actor,

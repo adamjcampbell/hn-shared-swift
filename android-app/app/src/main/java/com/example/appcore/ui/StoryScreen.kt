@@ -134,8 +134,11 @@ private fun StoriesContent(
     val textFieldState = rememberTextFieldState(initialText = authoritativeSearchQuery)
     val scope = rememberCoroutineScope()
 
-    // User typing → AppCore (BridgedSource.set updates `current`
-    // synchronously, calls the JNI setter, and notifies listeners).
+    // User typing → AppCore. `BridgedSource.set` calls the JNI setter
+    // synchronously (Swift bridge has the new value before this
+    // returns); listeners are NOT notified locally because the Swift
+    // `lastSetterValue` echo dedup suppresses the round-trip and
+    // `textFieldState` already owns the typing buffer.
     LaunchedEffect(Unit) {
         snapshotFlow { textFieldState.text.toString() }
             .distinctUntilChanged()

@@ -117,8 +117,16 @@ Per spec §12 plus what verification surfaced:
 - **Search-query writes are NOT events — they're per-property bridged.**
   Both platforms drive `state.searchQuery` directly: iOS via `@Bindable`
   + `$state.searchQuery`, Android via `BridgedSource` + the per-property
-  JNI setter `appcoreSetSearchQuery`. `AppEvent` retains only the
-  command-shaped mutations (`toggleRead`, `openStory`, `refresh`).
+  JNI setter `appcoreSetSearchQuery` and getter `appcoreGetSearchQuery`.
+  Swift is the single source of truth; the Kotlin `BridgedSource` keeps
+  no local mirror — `current` reads through the JNI getter, `set`
+  writes through the JNI setter (sync, via `Actor.assumeIsolated`),
+  and `deliver` is the platform-push path for cold-start +
+  programmatic Swift writes (Kotlin-originated writes don't fire it
+  because of the bridge actor's `lastSetterValue` echo dedup;
+  Compose's `TextFieldState` owns the typing buffer anyway).
+  `AppEvent` retains only the command-shaped mutations (`toggleRead`,
+  `openStory`, `refresh`).
   `AppModel.runSearchQueryWatcher` is an `async` method that iterates
   `state.observe(\.searchQuery).dropFirst()` and calls
   `runFetch(debounce: 250 ms)` on every willSet. `runFetch` keeps its
@@ -283,12 +291,12 @@ Per spec §12 plus what verification surfaced:
     control, like `searchQuery`): (a) make the `@Observable` property
     publicly settable on `AppState`; (b) drop it from `encode(to:)` so
     it doesn't ride the snapshot; (c) on Android, a new `XSink`
-    Sendable protocol + entry in `appcoreCreate`'s parameter list, a
-    new `appcoreSetX` JNI entry point, a new bridge actor field for
-    `lastSetterValue`, a new `Observations { state.x }` task with the
-    echo dedup; (d) on Kotlin, `BridgedSource<X>` constructed in
-    `AppModelHolder` + a new sink override; (e) on iOS, just bind via
-    `$state.x`. The host's existing `searchQuery` watcher loop
+    Sendable protocol + entry in `appcoreCreate`'s parameter list,
+    `appcoreSetX` and `appcoreGetX` JNI entry points, a new bridge
+    actor field for `lastSetterValue`, a new `Observations { state.x }`
+    task with the echo dedup; (d) on Kotlin, `BridgedSource<X>(readThrough = …, writeThrough = …)`
+    constructed in `AppModelHolder` + a new sink override calling
+    `bridgedSource.deliver`; (e) on iOS, just bind via `$state.x`. The host's existing `searchQuery` watcher loop
     automatically picks up new properties only if you wire them through
     `runFetch` or another shared trigger — usually each per-property
     primitive wants its own host-side reaction.
