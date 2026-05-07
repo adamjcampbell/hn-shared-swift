@@ -62,10 +62,7 @@ public func appcoreCreate(
 }
 
 public func appcoreDispatch(eventJSON: String) {
-    guard let event = AppEvent(json: eventJSON) else {
-        print("appcoreDispatch: failed to decode AppEvent from \(eventJSON)")
-        return
-    }
+    guard let event: AppEvent = JNICoder.decode(from: eventJSON) else { return }
     #if canImport(Android)
     AndroidBridge.shared.assumeIsolated { $0.enqueueDispatch(event) }
     #endif

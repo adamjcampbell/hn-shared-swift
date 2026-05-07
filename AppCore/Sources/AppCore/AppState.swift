@@ -7,8 +7,9 @@ import Observation
 /// invalidation (and the `Observations` async sequence on Android) track
 /// property reads directly. There's no separate value-type snapshot held
 /// alongside — the same instance flows from `AppModel` into the view
-/// layer; the JSON snapshot is produced on demand by `toJSON()` whenever
-/// the Android bridge needs to ship a transaction across JNI.
+/// layer; the JSON snapshot is produced on demand by `JNICoder.encode`
+/// (in `AppCoreAndroid`) whenever the Android bridge needs to ship a
+/// transaction across JNI.
 ///
 /// Properties fall into two groups, in the data-flow vocabulary of
 /// WWDC19's *Data Flow Through SwiftUI*:
@@ -89,19 +90,5 @@ public final class AppState: Encodable {
         // searchQuery is intentionally absent — see the type-level
         // doc-comment. It crosses JNI via its own setter + sink, not
         // via this snapshot.
-    }
-
-    private static let encoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        return encoder
-    }()
-
-    public func toJSON() -> String {
-        guard let data = try? Self.encoder.encode(self),
-              let json = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return json
     }
 }

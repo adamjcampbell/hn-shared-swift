@@ -31,24 +31,3 @@ import MetaCodable
 public enum AppCommand: Sendable, Equatable {
     case presentURL(value: String)
 }
-
-extension AppCommand {
-    private static let encoder = JSONEncoder()
-    private static let decoder = JSONDecoder()
-
-    public func toJSON() -> String {
-        guard let data = try? Self.encoder.encode(self),
-              let json = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return json
-    }
-
-    public init?(json: String) {
-        guard let data = json.data(using: .utf8),
-              let command = try? Self.decoder.decode(AppCommand.self, from: data) else {
-            return nil
-        }
-        self = command
-    }
-}

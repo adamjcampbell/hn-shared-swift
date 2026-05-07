@@ -85,14 +85,14 @@ actor AndroidBridge {
             // Encoding lives inside the closure so `Observations`
             // delivers a Sendable `String` representing a consistent
             // snapshot per transaction (the `@Observable` `AppState`
-            // is itself a non-`Sendable` reference). `toJSON()` reads
-            // every encoded property *except* `searchQuery`, which is
-            // bridged separately via `searchQueryTask`.
+            // is itself a non-`Sendable` reference). `JNICoder.encode`
+            // reads every encoded property *except* `searchQuery`,
+            // which is bridged separately via `searchQueryTask`.
             //
             // Local to the Task — re-attach cancels and respawns, so a
             // fresh sink gets a fresh comparison automatically.
             var lastJSON: String?
-            let observations = Observations { self.appModel.state.toJSON() }
+            let observations = Observations { JNICoder.encode(self.appModel.state) }
             for await json in observations {
                 guard json != lastJSON else { continue }
                 lastJSON = json
@@ -105,7 +105,7 @@ actor AndroidBridge {
             // continuation outlives the task; cancelling here leaves
             // the stream open for a re-attach.
             for await command in self.appModel.commands {
-                self.commandSink?.deliverCommand(commandJSON: command.toJSON())
+                self.commandSink?.deliverCommand(commandJSON: JNICoder.encode(command))
             }
         }
         searchQueryTask = Task { [self] in

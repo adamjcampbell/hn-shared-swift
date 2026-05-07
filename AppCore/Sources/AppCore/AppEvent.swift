@@ -41,24 +41,3 @@ public enum AppEvent: Sendable, Equatable {
     case openStory(id: String)
     case refresh
 }
-
-extension AppEvent {
-    private static let encoder = JSONEncoder()
-    private static let decoder = JSONDecoder()
-
-    public func toJSON() -> String {
-        guard let data = try? Self.encoder.encode(self),
-              let json = String(data: data, encoding: .utf8) else {
-            return "{}"
-        }
-        return json
-    }
-
-    public init?(json: String) {
-        guard let data = json.data(using: .utf8),
-              let event = try? Self.decoder.decode(AppEvent.self, from: data) else {
-            return nil
-        }
-        self = event
-    }
-}

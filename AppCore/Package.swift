@@ -62,5 +62,10 @@ let package = Package(
             ],
             swiftSettings: sharedSettings
         ),
+        .testTarget(
+            name: "AppCoreAndroidTests",
+            dependencies: ["AppCoreAndroid"],
+            swiftSettings: sharedSettings
+        ),
     ]
 )
