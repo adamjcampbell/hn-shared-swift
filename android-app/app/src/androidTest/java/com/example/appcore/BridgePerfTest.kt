@@ -3,10 +3,12 @@ package com.example.appcore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.CommandSink
+import com.example.appcore.bridge.SearchQuerySink
 import com.example.appcore.bridge.SnapshotSink
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.FixMethodOrder
@@ -40,14 +42,20 @@ import kotlin.system.measureNanoTime
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class BridgePerfTest {
 
-    private class CapturingSink : SnapshotSink, CommandSink {
+    private class CapturingSink : SnapshotSink, CommandSink, SearchQuerySink {
         val channel = Channel<String>(capacity = Channel.UNLIMITED)
+        val searchQueryChannel = Channel<String>(capacity = Channel.UNLIMITED)
         override fun deliver(snapshotJSON: String) {
             channel.trySend(snapshotJSON)
         }
         // The perf test only consumes snapshots; commands are ignored
         // so the same instance can be passed for both sinks.
         override fun deliverCommand(commandJSON: String) {}
+        // Per-property `searchQuery` deliveries — exposed separately so
+        // the searchQuery-specific tests can await them.
+        override fun deliverSearchQuery(value: String) {
+            searchQueryChannel.trySend(value)
+        }
     }
 
     // Hand-written wire literals avoid pulling kotlinx.serialization into
@@ -99,10 +107,27 @@ class BridgePerfTest {
      * mask a regression by warming the executor.
      */
     @Test
+    fun a_coldStart_searchQueryDelivered() = runBlocking {
+        // Per-property push channel mirrors the snapshot one — `Observations`'
+        // initial-value semantics deliver the cold-start `state.searchQuery`
+        // (initially "") within ~ms of `appcoreCreate`. This test pairs
+        // with `a_coldStart_initialSnapshotDelivered` to guard the second
+        // half of the bridge's two-channel cold-start contract.
+        val sink = CapturingSink()
+        AppCoreAndroid.appcoreCreate(sink, sink, sink)
+        try {
+            val initial = withTimeout(50) { sink.searchQueryChannel.receive() }
+            assertEquals("cold-start searchQuery is empty", "", initial)
+        } finally {
+            AppCoreAndroid.appcoreDestroy()
+        }
+    }
+
+    @Test
     fun a_coldStart_initialSnapshotDelivered() = runBlocking {
         val sink = CapturingSink()
         val nanos = measureNanoTime {
-            AppCoreAndroid.appcoreCreate(sink, sink)
+            AppCoreAndroid.appcoreCreate(sink, sink, sink)
             try {
                 // 50 ms is generous — the bridge actor's attach() task
                 // spawns and emits the initial Observations value within
@@ -127,7 +152,7 @@ class BridgePerfTest {
     @Test
     fun syncJniCall_overhead() = runBlocking {
         val sink = CapturingSink()
-        AppCoreAndroid.appcoreCreate(sink, sink)
+        AppCoreAndroid.appcoreCreate(sink, sink, sink)
         try {
             // Drain the cold-start snapshot.
             withTimeout(5_000) { sink.channel.receive() }
@@ -154,7 +179,7 @@ class BridgePerfTest {
     @Test
     fun endToEnd_toggleRoundTrip() = runBlocking {
         val sink = CapturingSink()
-        AppCoreAndroid.appcoreCreate(sink, sink)
+        AppCoreAndroid.appcoreCreate(sink, sink, sink)
         try {
             // Drain the cold-start snapshot.
             withTimeout(5_000) { sink.channel.receive() }
@@ -194,7 +219,7 @@ class BridgePerfTest {
     @Test
     fun snapshotPayload_size() = runBlocking {
         val sink = CapturingSink()
-        AppCoreAndroid.appcoreCreate(sink, sink)
+        AppCoreAndroid.appcoreCreate(sink, sink, sink)
         try {
             // Drain the initial Observations emission.
             withTimeout(5_000) { sink.channel.receive() }
@@ -235,6 +260,55 @@ class BridgePerfTest {
             } catch (_: Exception) { /* timeout — channel idle */ }
 
             println("[BridgePerf] snapshot JSON bytes (3 read): ${withReads.toByteArray().size}")
+        } finally {
+            AppCoreAndroid.appcoreDestroy()
+        }
+    }
+
+    @Test
+    fun searchQueryRoundTrip_throughSetterAndSink() = runBlocking {
+        // Two-way bridge contract:
+        //   1. `appcoreSetSearchQuery("rust")` reaches the Swift side;
+        //      the watcher fires runFetch which produces a snapshot
+        //      with stories matching "rust".
+        //   2. The bridge's `lastSetterValue` dedup suppresses the echo
+        //      — the SearchQuerySink does NOT deliver "rust" back. (This
+        //      is what prevents Compose's local mirror from getting
+        //      clobbered by echoes of writes it just sent.)
+        val sink = CapturingSink()
+        AppCoreAndroid.appcoreCreate(sink, sink, sink)
+        try {
+            // Drain cold-start snapshot + cold-start searchQuery emission.
+            withTimeout(5_000) { sink.channel.receive() }
+            withTimeout(5_000) { sink.searchQueryChannel.receive() }
+
+            AppCoreAndroid.appcoreSetSearchQuery("rust")
+
+            // Watcher → runFetch → search succeeds → snapshot arrives.
+            // 10s budget covers HTTP latency for the Algolia API.
+            val snapshot = withTimeout(10_000) {
+                var s = sink.channel.receive()
+                while (!s.contains("\"stories\":[{")) {
+                    s = sink.channel.receive()
+                }
+                s
+            }
+            assertTrue(
+                "snapshot contains stories after setSearchQuery: $snapshot",
+                snapshot.contains("\"stories\":[{")
+            )
+
+            // Echo dedup canary: no SearchQuerySink delivery within a
+            // generous window. If `lastSetterValue` is removed, the
+            // Observations loop emits "rust" back through the sink.
+            var sawEcho = false
+            try {
+                withTimeout(500) {
+                    val v = sink.searchQueryChannel.receive()
+                    if (v == "rust") sawEcho = true
+                }
+            } catch (_: Exception) { /* expected timeout */ }
+            assertEquals("bridge dedup must suppress the echo", false, sawEcho)
         } finally {
             AppCoreAndroid.appcoreDestroy()
         }
