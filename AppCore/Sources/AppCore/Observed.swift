@@ -1,5 +1,12 @@
-import Foundation
 import Observation
+
+#if canImport(os)
+import os
+private typealias _ResumeLock = OSAllocatedUnfairLock<_ResumeState>
+#else
+import Synchronization
+private typealias _ResumeLock = Mutex<_ResumeState>
+#endif
 
 /// A small `AsyncSequence` that yields the value of a single key path on
 /// an `@Observable` reference each time the property changes (and once
@@ -137,50 +144,71 @@ extension Observable {
     }
 }
 
+/// State machine for a single-resume continuation. Transitions:
+///
+/// - `.idle` → `.waiting(cont)` — continuation registered before any resume
+/// - `.idle` → `.resumed`       — resume fired before the continuation was registered
+/// - `.waiting(cont)` → `.resumed` — resume fired after registration; `cont` is returned for resumption
+/// - `.resumed` → `.resumed`    — subsequent resumes are no-ops
+private enum _ResumeState: Sendable {
+    case idle
+    case waiting(CheckedContinuation<Void, Never>)
+    case resumed
+}
+
 /// Coordinates a single-resume `CheckedContinuation<Void, Never>` shared
 /// between `withObservationTracking`'s `@Sendable onChange` callback and
-/// `withTaskCancellationHandler`'s `@Sendable onCancel` callback. Either
-/// path may fire first — whichever does resumes the continuation; the
-/// other is a no-op. `CheckedContinuation` traps on double-resume, so
-/// the single-resume invariant is load-bearing.
+/// `withTaskCancellationHandler`'s `@Sendable onCancel` callback. Whichever
+/// callback fires first resumes the continuation; the other is a no-op.
+/// `CheckedContinuation` traps on double-resume, so the single-resume
+/// invariant is load-bearing.
 ///
-/// **`@unchecked Sendable` rationale:** Swift 6 stdlib's
-/// `Synchronization.Mutex` is iOS 18+ and `os.OSAllocatedUnfairLock` is
-/// Apple-only. `Foundation.NSLock` is the lowest-common-denominator
-/// thread-safe primitive that compiles on Apple platforms *and* on
-/// swift-corelibs-foundation (the Android target's Foundation), but
-/// `NSLock` itself doesn't conform to `Sendable`. The wrapper here holds
-/// only `NSLock` (thread-safe), a `Bool`, and an
-/// `Optional<CheckedContinuation>` (Sendable), and mutates them only
-/// under the lock — the conformance is safe in practice; the
-/// `@unchecked` is purely a tooling-gap workaround. Drop in favour of
-/// `Synchronization.Mutex` once iOS 18 is the deployment floor.
+/// The lock is platform-conditional:
+/// - Apple platforms use `os.OSAllocatedUnfairLock<_ResumeState>` (iOS 16+).
+/// - Other targets (the Android cross-compile) use
+///   `Synchronization.Mutex<_ResumeState>` (Swift 6+ stdlib).
 ///
-/// This is the second documented exception to the "no `@unchecked
-/// Sendable` in `AppCore/Sources/`" rule (alongside `JavaInterop.swift`).
-private final class _ResumeOnce: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var resumed = false
+/// Both lock types are `Sendable`, so this class auto-conforms to
+/// `Sendable` without `@unchecked` — the entire stored state is the
+/// single `let lock` of a Sendable type.
+private final class _ResumeOnce: Sendable {
+    #if canImport(os)
+    private let lock = _ResumeLock(initialState: .idle)
+    #else
+    private let lock = _ResumeLock(.idle)
+    #endif
 
     func setContinuation(_ cont: CheckedContinuation<Void, Never>) {
-        lock.lock()
-        if resumed {
-            lock.unlock()
-            cont.resume()
-            return
+        // Compute under the lock; resume *outside* it. We don't want
+        // arbitrary continuation-resumption work running under an
+        // unfair lock.
+        let toResume: CheckedContinuation<Void, Never>? = lock.withLock { state in
+            switch state {
+            case .idle:
+                state = .waiting(cont)
+                return nil
+            case .resumed:
+                return cont
+            case .waiting:
+                fatalError("_ResumeOnce.setContinuation called more than once")
+            }
         }
-        continuation = cont
-        lock.unlock()
+        toResume?.resume()
     }
 
     func resume() {
-        lock.lock()
-        guard !resumed else { lock.unlock(); return }
-        resumed = true
-        let cont = continuation
-        continuation = nil
-        lock.unlock()
-        cont?.resume()
+        let toResume: CheckedContinuation<Void, Never>? = lock.withLock { state in
+            switch state {
+            case .idle:
+                state = .resumed
+                return nil
+            case .waiting(let cont):
+                state = .resumed
+                return cont
+            case .resumed:
+                return nil
+            }
+        }
+        toResume?.resume()
     }
 }

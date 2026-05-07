@@ -69,23 +69,12 @@ Per spec §12 plus what verification surfaced:
 - **Never use `@unchecked Sendable` or `nonisolated(unsafe)` in
   `AppCore/Sources/`.** The architecture is built around proper isolation
   (actors, value types, single-instance singletons), and a hand-rolled
-  unsafe escape hatch usually means the design is wrong. There are two
-  documented exceptions, both for tooling/stdlib gaps rather than
-  design wrong-ness:
-  - `Sources/AppCoreAndroid/JavaInterop.swift` adopts `@unchecked
-    Sendable` for the jextract-generated `Java*Sink` wrappers —
-    swift-java does not yet mark `@JavaInterface` types as `Sendable`,
-    but the underlying JNI handle is safe to share.
-  - `Sources/AppCore/Observed.swift` adopts `@unchecked Sendable` for
-    the `_ResumeOnce` coordinator that bridges `withTaskCancellationHandler`
-    and `withCheckedContinuation` (so `ObservedKeyPath`'s wait is
-    cancellable without a write to wake it). It wraps an `NSLock` +
-    `Bool` + `Optional<CheckedContinuation>`; the unchecked is purely
-    a Swift 6 stdlib gap (no `Sendable` lock primitive that ships on
-    iOS 17 *and* swift-corelibs-foundation). Drop it once
-    `Synchronization.Mutex` is iOS-18-floor accessible.
-
-  If you add another exception, document the why in the same file.
+  unsafe escape hatch usually means the design is wrong. The single
+  exception is `Sources/AppCoreAndroid/JavaInterop.swift`, which adopts
+  `@unchecked Sendable` for the jextract-generated `Java*Sink` wrappers —
+  swift-java does not yet mark `@JavaInterface` types as `Sendable`,
+  but the underlying JNI handle is safe to share. If you add another
+  exception, document the why in the same file.
 - `AppCoreAndroid` user-facing sources (`AppCoreNative.swift`,
   `AndroidBridge.swift`) are *not* wrapped in `#if canImport(Android)`
   because jextract runs on the macOS host and silently skips functions
@@ -142,9 +131,9 @@ Per spec §12 plus what verification surfaced:
   `withCheckedContinuation` wrapped in `withTaskCancellationHandler`
   so the iterator exits cleanly when its surrounding task is cancelled
   even if no further `willSet` is coming. A `_ResumeOnce` coordinator
-  (lock-based; the file's documented `@unchecked Sendable` exception)
-  guarantees the `onChange`/`onCancel` race resumes the continuation
-  exactly once. The iterator yields `Task.yield()` once after the
+  (a small enum-state machine over an `OSAllocatedUnfairLock` on Apple
+  / `Synchronization.Mutex` on Android) guarantees the
+  `onChange`/`onCancel` race resumes the continuation exactly once. The iterator yields `Task.yield()` once after the
   suspension so the writer's `willSet` → assignment → `didSet` frame
   completes before reading the post-write value (Apple's `Observations`
   solves the same "willSet fires before mutation" problem by emitting
