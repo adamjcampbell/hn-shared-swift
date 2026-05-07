@@ -54,9 +54,9 @@ import com.example.appcore.state.AppCommand
 import com.example.appcore.state.AppEvent
 import com.example.appcore.state.AppState
 import com.example.appcore.state.Story
+import com.example.appcore.state.asState
 import com.example.appcore.state.rememberAppModel
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.dropWhile
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -95,10 +95,20 @@ fun StoryScreen() {
             )
         },
     ) { innerPadding ->
+        // searchQuery flows through the per-property bridge: typing
+        // pushes through `holder.searchQuery.set` → AppCoreAndroid; the
+        // SearchQuerySink-driven `holder.searchQuery` State pushes back
+        // for cold-start + programmatic Swift writes (echoes of typing
+        // are filtered on the bridge actor's `lastSetterValue` dedup).
+        // Compose's TextFieldState owns the in-progress typing buffer —
+        // we sync it to/from `holder.searchQuery` via two snapshotFlow
+        // collectors below.
+        val authoritativeSearchQuery by holder.searchQuery.asState()
         StoriesContent(
             state = state,
+            authoritativeSearchQuery = authoritativeSearchQuery,
+            onSearchQueryWrite = holder.searchQuery::set,
             onRefresh = { scope.launch { holder.dispatch(AppEvent.Refresh) } },
-            onSearchTextChanged = { holder.dispatch(AppEvent.SetSearchQuery(it)) },
             onToggleRead = { holder.dispatch(AppEvent.ToggleRead(it)) },
             onOpenStory = { holder.dispatch(AppEvent.OpenStory(it)) },
             modifier = Modifier
@@ -113,38 +123,43 @@ fun StoryScreen() {
 @Composable
 private fun StoriesContent(
     state: AppState?,
+    authoritativeSearchQuery: String,
+    onSearchQueryWrite: (String) -> Unit,
     onRefresh: () -> Unit,
-    onSearchTextChanged: (String) -> Unit,
     onToggleRead: (String) -> Unit,
     onOpenStory: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val searchBarState = rememberSearchBarState()
-    val textFieldState = rememberTextFieldState()
+    val textFieldState = rememberTextFieldState(initialText = authoritativeSearchQuery)
     val scope = rememberCoroutineScope()
 
-    // Pipe textfield changes into AppCore as `setSearchQuery` events.
-    // AppCore handles its own debounce inside `.setSearchQuery` —
-    // Compose just forwards every keystroke.
-    // distinctUntilChanged guards against snapshotFlow re-emitting on
-    // cursor / selection changes. dropWhile { it.isEmpty() } skips
-    // *leading* empty replays so the cold-start `.setSearchQuery("")`
-    // doesn't race with the `LaunchedEffect(Unit) { holder.dispatch(
-    // Refresh) }` above and cancel-and-replace its in-flight front-page
-    // fetch. Crucially this only suppresses leading empties — once any
-    // non-empty value passes through, the operator goes inert and a
-    // subsequent clear-to-empty (e.g. user wipes the search field while
-    // focused) flows through as `setSearchQuery("")` and switches the
-    // list back to the front page, matching iOS. It also handles the
-    // saver-restored case after rotation: a restored non-empty value
-    // is the first emission and passes through immediately.
+    // User typing → AppCore (BridgedSource.set updates `current`
+    // synchronously, calls the JNI setter, and notifies listeners).
     LaunchedEffect(Unit) {
         snapshotFlow { textFieldState.text.toString() }
             .distinctUntilChanged()
-            .dropWhile { it.isEmpty() }
-            .collect(onSearchTextChanged)
+            .collect(onSearchQueryWrite)
+    }
+    // Authoritative writes from AppCore (cold-start initial,
+    // future programmatic clears) → TextFieldState. The
+    // `lastSetterValue` dedup on the Swift bridge filters echoes of
+    // user-typed writes, so this only fires for genuine
+    // out-of-band updates. The dropWhile-guarded race in the
+    // event-dispatch architecture doesn't exist here: Compose's
+    // initial textFieldState text == bridge's cold-start emission ""
+    // by construction, so the conditional below skips it.
+    LaunchedEffect(Unit) {
+        snapshotFlow { authoritativeSearchQuery }
+            .distinctUntilChanged()
+            .collect { value ->
+                if (textFieldState.text.toString() != value) {
+                    textFieldState.edit { replace(0, length, value) }
+                }
+            }
     }
 
+    val searchQuery = textFieldState.text.toString()
     val stories = state?.stories ?: emptyList()
     val isLoading = state?.isLoading ?: false
 
@@ -179,7 +194,7 @@ private fun StoriesContent(
                 LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)) {
                     item(key = "header") {
                         HeaderCard(
-                            searchQuery = state?.searchQuery.orEmpty(),
+                            searchQuery = searchQuery,
                             storyCount = stories.size,
                             unreadCount = stories.count { !it.isRead },
                             lastRefreshedAt = state?.lastRefreshedAt,
@@ -190,11 +205,8 @@ private fun StoriesContent(
                 }
             }
 
-            if (!isLoading
-                && stories.isEmpty()
-                && state?.searchQuery?.isNotEmpty() == true
-            ) {
-                EmptyResultsOverlay(query = state.searchQuery)
+            if (!isLoading && stories.isEmpty() && searchQuery.isNotEmpty()) {
+                EmptyResultsOverlay(query = searchQuery)
             }
         }
     }

@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.CommandSink
+import com.example.appcore.bridge.SearchQuerySink
 import com.example.appcore.bridge.SnapshotSink
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -29,7 +30,8 @@ data class Story(
 @Serializable
 data class AppState(
     val stories: List<Story> = emptyList(),
-    val searchQuery: String = "",
+    // searchQuery is intentionally absent — bridged per-property via
+    // SearchQuerySink + BridgedSource. See AppModelHolder.searchQuery.
     val isLoading: Boolean = false,
     val lastRefreshedAt: String? = null,
     val loadError: String? = null,
@@ -39,6 +41,11 @@ data class AppState(
  * Mirrors the Swift `AppEvent` enum. Wire shape is `{"type":"...", ...}`,
  * matching `AppCore/Sources/AppCore/AppEvent.swift`'s `@Codable` +
  * `@CodedAt("type")` MetaCodable annotations.
+ *
+ * `searchQuery` writes don't go through this enum — they ride a
+ * dedicated per-property setter (`AppCoreAndroid.appcoreSetSearchQuery`)
+ * with a matching `SearchQuerySink` push channel. Events stay the path
+ * for command-shaped mutations (toggle, open, refresh).
  */
 @Serializable
 sealed class AppEvent {
@@ -53,10 +60,6 @@ sealed class AppEvent {
     @Serializable
     @SerialName("refresh")
     data object Refresh : AppEvent()
-
-    @Serializable
-    @SerialName("setSearchQuery")
-    data class SetSearchQuery(val value: String) : AppEvent()
 }
 
 /**
@@ -99,9 +102,22 @@ sealed class AppCommand {
  * straight from Swift — no Kotlin-side timer. Pull-to-refresh's spinner
  * just observes `state.isLoading`.
  */
-object AppModelHolder : SnapshotSink, CommandSink {
+object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink {
     var state by mutableStateOf<AppState?>(null)
         private set
+
+    /**
+     * Per-property bridged `searchQuery`. Compose binds to it via
+     * `holder.searchQuery.asMutableState()`; user typing flows through
+     * `BridgedSource.set` → `appcoreSetSearchQuery` → Swift; cold-start
+     * + programmatic Swift writes flow back via [deliver]. Echoes of
+     * user-typed writes are suppressed on the Swift bridge actor's
+     * `lastSetterValue` dedup so they never reach this sink.
+     */
+    val searchQuery = BridgedSource<String>(
+        initial = "",
+        writeThrough = { AppCoreAndroid.appcoreSetSearchQuery(it) },
+    )
 
     private val json = Json {
         classDiscriminator = "type"
@@ -119,7 +135,7 @@ object AppModelHolder : SnapshotSink, CommandSink {
     val commands: Flow<AppCommand> get() = _commands.receiveAsFlow()
 
     fun start() {
-        AppCoreAndroid.appcoreCreate(this, this)
+        AppCoreAndroid.appcoreCreate(this, this, this)
     }
 
     /** Called from Swift via JNI on every Observations transaction. */
@@ -131,6 +147,20 @@ object AppModelHolder : SnapshotSink, CommandSink {
     override fun deliverCommand(commandJSON: String) {
         val command = json.decodeFromString<AppCommand>(commandJSON)
         _commands.trySend(command)
+    }
+
+    /**
+     * Called from Swift via JNI when `state.searchQuery` changes — but
+     * the bridge's `lastSetterValue` dedup filters echoes of writes
+     * Compose just sent, so this fires only for the cold-start initial
+     * value and genuine programmatic Swift writes.
+     *
+     * Uses a distinct method name from `SnapshotSink.deliver` because
+     * Kotlin doesn't differentiate overloads by parameter name —
+     * `deliver(String)` would conflict.
+     */
+    override fun deliverSearchQuery(value: String) {
+        searchQuery.deliverFromBridge(value)
     }
 
     fun dispatch(event: AppEvent) {
