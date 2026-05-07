@@ -1230,3 +1230,64 @@ the front page or search results. The spec's §2.6 reasoning ("JSON is
 fast enough at the demo's payload scale") still holds for this size,
 but the threshold is no longer a single-digit-cities budget — re-
 evaluate if pagination ever lands.
+
+## 16. Addendum: `AndroidBridge` pinned to Android's main `Looper`
+
+§9 (Threading contract) said: "JNI mutation entry points are sync and
+fire-and-forget — they spawn an unstructured Task on the actor and
+return immediately, so the JVM caller doesn't wait for the Swift
+mutation to complete."
+
+That paragraph is now outdated. `AndroidBridge` adopts a custom
+`SerialExecutor` (`LooperExecutor`, in
+`AppCore/Sources/AppCoreAndroid/LooperExecutor.swift`) via
+`nonisolated var unownedExecutor` (SE-0392). The executor's
+`enqueue(_:)` JNI-calls a Kotlin `LooperPoster.postToMain(jobPointer)`
+static method, which `Handler(Looper.getMainLooper()).post { … }`s
+back into Swift via the `Java_com_example_appcore_bridge_LooperPoster_runSwiftJob`
+`@_cdecl`. The runtime then calls `unownedJob.runSynchronously(...)`
+on the UI thread.
+
+Two consequences:
+
+- **Sink callbacks fire on the UI thread.** `SnapshotSink.deliver`,
+  `CommandSink.deliverCommand`, `SearchQuerySink.deliverSearchQuery`
+  all execute synchronously on Android's main `Looper`. Compose's
+  `mutableStateOf<…>` updates land directly there with no internal
+  cross-thread post; `JavaVirtualMachine.shared().environment()`
+  inside `deliver` becomes a fast-path no-op because the executing
+  thread is always JNI-attached.
+- **JNI mutation thunks are now strict-sync.** `appcoreCreate`,
+  `appcoreSetSearchQuery`, and `appcoreDestroy` use
+  `Actor.assumeIsolated` to enter the bridge actor synchronously
+  (Compose always calls them from the UI thread, which *is* the
+  actor's executor); the mutation has taken effect by the time the
+  JNI call returns. The old "spawn a Task and return" gap is closed.
+  `appcoreDispatch` keeps fire-and-forget semantics for the body
+  (the underlying `AppModel.dispatch` is `async` because of the
+  `.refresh` arm) via a new `AndroidBridge.enqueueDispatch(_:)`
+  method that internally spawns a Task on the actor — the
+  contract is "sync return, async completion", mirroring iOS's
+  `AppEventDispatch.callAsFunction(_:)` / `run(_:)` split.
+
+The async snapshot *delivery* path (Observations → JSON →
+`SnapshotSink`) is unchanged.
+
+Trap contract (intentional): `assumeIsolated` requires the calling
+thread to be the actor's executor's thread. Compose dispatches all
+user events from the UI thread, so this holds for every existing
+caller. A future background-coroutine caller would trap loudly,
+which is the right failure mode — silently re-scheduling onto a
+different thread would hide a real bug. If a future use case
+genuinely needs an off-UI JNI caller, add a separate variant that
+wraps the actor call in `Task { await … }`; don't relax the
+`assumeIsolated` contract on the existing thunks.
+
+`LooperExecutor.swift`'s body, `AndroidBridge.unownedExecutor`, and
+each JNI thunk's body are all `#if canImport(Android)`-gated. On
+macOS host, `AndroidBridge` falls through to Swift's default actor
+executor (a real `SerialExecutor`) and the thunks are no-ops. We
+don't need a fake macOS implementation because `AppCoreTests` only
+depends on `AppCore`, not `AppCoreAndroid` — the macOS compile of
+`AppCoreAndroid` exists only so jextract can scan the public-API
+signatures.

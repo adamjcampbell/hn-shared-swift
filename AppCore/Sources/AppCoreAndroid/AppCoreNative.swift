@@ -18,6 +18,22 @@ import AppCore
 // `AppEvent`. Continuously-bound primitives (currently `searchQuery`) get
 // dedicated per-property setters and matching push sinks; adding a new
 // mutation case in `AppCore` covers both shapes.
+//
+// **Sync entry via `assumeIsolated`.** `AndroidBridge`'s custom executor
+// (`LooperExecutor`) pins it to Android's main `Looper`. Compose always
+// calls these thunks from the UI thread, which *is* the bridge actor's
+// executor, so `Actor.assumeIsolated` (SE-0392 + Swift 6) lets the thunks
+// enter the actor synchronously without `Task { await … }` allocation.
+// `enqueueDispatch` is the sync, fire-and-forget cousin of `dispatch(_:)`
+// (mirroring the iOS `AppEventDispatch.callAsFunction(_:)` / `run(_:)`
+// split) for the case where the model method itself is `async`.
+//
+// **Contract.** Calling these thunks off the UI thread on Android, or
+// at all on the macOS host, will trap inside `assumeIsolated`. Compose
+// only ever calls them from the UI thread; the macOS host build never
+// invokes them (the JNI runtime isn't present). On macOS the bodies
+// are `#if canImport(Android)`-gated to no-ops so jextract still sees
+// the public-API signatures. See AGENT.md.
 
 public func appcoreCreate(
     snapshotSink: some SnapshotSink,
@@ -34,13 +50,15 @@ public func appcoreCreate(
     // would have. The `searchQuerySink` similarly emits the cold-start
     // value of `state.searchQuery` (initially `""`) within the same
     // window.
-    Task {
-        await AndroidBridge.shared.attach(
+    #if canImport(Android)
+    AndroidBridge.shared.assumeIsolated { bridge in
+        bridge.attach(
             snapshotSink: snapshotSink,
             commandSink: commandSink,
             searchQuerySink: searchQuerySink
         )
     }
+    #endif
 }
 
 public func appcoreDispatch(eventJSON: String) {
@@ -48,7 +66,9 @@ public func appcoreDispatch(eventJSON: String) {
         print("appcoreDispatch: failed to decode AppEvent from \(eventJSON)")
         return
     }
-    Task { await AndroidBridge.shared.dispatch(event) }
+    #if canImport(Android)
+    AndroidBridge.shared.assumeIsolated { $0.enqueueDispatch(event) }
+    #endif
 }
 
 /// Per-property setter for `state.searchQuery`. Compose calls this on
@@ -56,9 +76,13 @@ public func appcoreDispatch(eventJSON: String) {
 /// the value Compose just typed isn't pushed back through `SearchQuerySink`
 /// to clobber the in-progress text.
 public func appcoreSetSearchQuery(value: String) {
-    Task { await AndroidBridge.shared.handleSetSearchQuery(value) }
+    #if canImport(Android)
+    AndroidBridge.shared.assumeIsolated { $0.handleSetSearchQuery(value) }
+    #endif
 }
 
 public func appcoreDestroy() {
-    Task { await AndroidBridge.shared.detach() }
+    #if canImport(Android)
+    AndroidBridge.shared.assumeIsolated { $0.detach() }
+    #endif
 }

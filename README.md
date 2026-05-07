@@ -64,13 +64,17 @@ real differences from spec §1–§13:
    the target compiles to an empty module on macOS. Lets us run
    `swift build`/`swift test` against the package on macOS without the
    Platform.swift `#error` aborting the build.
-2. **No hand-written `@_cdecl` annotations.** Spec §5.7 sketched a
+2. **Almost no hand-written `@_cdecl` annotations.** Spec §5.7 sketched a
    `@_cdecl("Java_…")` design; in reality `swift-java`'s `JExtractSwiftPlugin`
    is a SwiftPM build-tool plugin driven by `swift-java.config`, and it
    generates both the Java surface *and* the `@_cdecl` glue from friendly
    Swift signatures. `JNIBridge.swift` was deleted; `AppCoreNative.swift`
-   exposes `appcoreCreate / appcoreToggleFavorite / appcoreRefresh /
-   appcoreDestroy` as plain public functions.
+   exposes `appcoreCreate / appcoreDispatch / appcoreSetSearchQuery /
+   appcoreDestroy` as plain public functions. The single hand-written
+   `@_cdecl` is `Java_com_example_appcore_bridge_LooperPoster_runSwiftJob`
+   in `LooperExecutor.swift` — the upcall that runs a queued Swift job
+   on Android's main `Looper`. jextract doesn't (yet) generate this
+   shape, so the JNI naming is hand-mangled.
 3. **`enableJavaCallbacks: true`** turns the Swift `protocol SnapshotSink`
    into a Java interface; Kotlin's `AppStateHolder` implements it directly.
    No hand-rolled Swift→Java JNI calls.

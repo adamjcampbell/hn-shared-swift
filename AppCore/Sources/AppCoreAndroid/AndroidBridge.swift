@@ -1,3 +1,4 @@
+#if canImport(Android)
 import Foundation
 import Observation
 import AppCore
@@ -16,13 +17,25 @@ import AppCore
 /// calls — the actor reference is the handle, and actors are inherently
 /// `Sendable`.
 ///
-/// The `Observations` machinery is only available on the Android-target
-/// build (and on Apple toolchains newer than this package's macOS
-/// deployment target), so the body of `attach(sink:)` is gated on
-/// `canImport(Android)`. On macOS the bridge compiles as a no-op so that
-/// jextract can still see the public entry points in `AppCoreNative.swift`.
+/// **Android-only.** This file is `#if canImport(Android)`-gated end-to-end.
+/// It's `internal` so jextract doesn't scan it for a Java surface; the
+/// JNI thunks in `AppCoreNative.swift` are the public-facing API and
+/// have their own per-body Android gates so jextract still sees their
+/// signatures on macOS host. On macOS this file compiles to nothing,
+/// and `swift test` doesn't pull `AppCoreAndroid` either way.
 actor AndroidBridge {
     static let shared = AndroidBridge()
+
+    /// Pin the actor's executor to Android's main `Looper` (SE-0392).
+    /// Every method on `AndroidBridge` — including the sink callbacks
+    /// invoked from inside `attach`'s loops — runs on the UI thread.
+    /// JNI thunks called from Compose (always on the UI thread) can
+    /// then enter the actor synchronously via `Actor.assumeIsolated`,
+    /// avoiding the per-call `Task { await … }` allocation and the
+    /// `AttachCurrentThread` cost on each sink delivery.
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+        LooperExecutor.shared.asUnownedSerialExecutor()
+    }
 
     private let appModel = AppModel()
     private var snapshotSink: (any SnapshotSink)?
@@ -59,7 +72,6 @@ actor AndroidBridge {
         self.commandSink = commandSink
         self.searchQuerySink = searchQuerySink
         lastSetterValue = nil
-        #if canImport(Android)
         observationTask = Task { [self] in
             // `lastJSON` coalesces emissions that encode to a
             // byte-identical snapshot. `Observations` already coalesces
@@ -120,7 +132,6 @@ actor AndroidBridge {
             // captures only `self` (the actor, Sendable).
             await self.runSearchQueryWatcher()
         }
-        #endif
     }
 
     func detach() {
@@ -142,6 +153,17 @@ actor AndroidBridge {
     /// actor's executor; subsequent `dispatch` calls queue behind it.
     func dispatch(_ event: AppEvent) async {
         await appModel.dispatch(event)
+    }
+
+    /// Sync, fire-and-forget cousin of `dispatch(_:)`. The spawned Task
+    /// inherits this actor's isolation (SE-0461 + `@isolated(any)`), so
+    /// `await self.appModel.dispatch(event)` runs on the bridge actor's
+    /// executor (UI thread) — no extra hop. JNI thunks (which can't
+    /// `await`) use `Actor.assumeIsolated` and call this directly.
+    /// Mirrors iOS's `AppEventDispatch.callAsFunction(_:)` — the sync
+    /// side of the sync/async dispatch duality.
+    func enqueueDispatch(_ event: AppEvent) {
+        Task { await self.appModel.dispatch(event) }
     }
 
     /// Per-property setter for `state.searchQuery`. Records the value
@@ -166,3 +188,4 @@ actor AndroidBridge {
         await appModel.runSearchQueryWatcher()
     }
 }
+#endif

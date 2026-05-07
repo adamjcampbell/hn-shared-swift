@@ -75,15 +75,18 @@ Per spec §12 plus what verification surfaced:
   swift-java does not yet mark `@JavaInterface` types as `Sendable`,
   but the underlying JNI handle is safe to share. If you add another
   exception, document the why in the same file.
-- `AppCoreAndroid` user-facing sources (`AppCoreNative.swift`,
-  `AndroidBridge.swift`) are *not* wrapped in `#if canImport(Android)`
-  because jextract runs on the macOS host and silently skips functions
-  that sit inside such a guard — the generated Java module class would
-  end up with no `appcoreCreate` / `appcoreToggleFavorite` / … methods.
-  AndroidBridge gates only its `Observations` usage on
-  `canImport(Android)` since `Observations` (SE-0475) requires a Swift
-  toolchain newer than this package's macOS deployment target; on macOS
-  the actor still compiles as a no-op.
+- `AppCoreNative.swift`'s entry-point *signatures* are unconditional —
+  jextract runs on the macOS host and silently skips functions sitting
+  inside a `#if canImport(Android)` guard, so gating the signatures
+  would empty out the generated Java module class. The function
+  *bodies* are `#if canImport(Android)`-gated (no-ops on macOS); only
+  the signatures need to compile cross-platform.
+  `AndroidBridge.swift` and `LooperExecutor.swift` are wrapped end-to-end
+  in `#if canImport(Android)` — they're `internal`, not jextract-scanned,
+  and only referenced from the gated thunk bodies, so they don't need
+  to exist on macOS at all. On the macOS host build `AppCoreAndroid`
+  collapses to the public-API signatures + the cross-platform `*Sink`
+  protocols.
 - There is exactly one `AppModel` per process. `AppCoreNative` exposes a
   global `AndroidBridge.shared` singleton actor and the entry points
   (`appcoreCreate`, `appcoreDispatch`, `appcoreDestroy`) operate on it
@@ -171,12 +174,71 @@ Per spec §12 plus what verification surfaced:
     concern (snapshot, command, searchQueryTask, queryWatcherTask),
     spawned in `attach()` and cancelled in `detach()`. Inside the
     actor `[self]` capture is Sendable, so this is the cheap path.
+- **`AndroidBridge` runs on Android's main `Looper` (custom executor).**
+  `AndroidBridge` is an `actor` with a `nonisolated var unownedExecutor`
+  pointing at `LooperExecutor.shared` (SE-0392 custom actor executors).
+  `LooperExecutor` (`Sources/AppCoreAndroid/LooperExecutor.swift`) is a
+  `SerialExecutor` whose `enqueue(_:)` JNI-calls
+  `LooperPoster.postToMain(jobPointer)` (Kotlin object in
+  `android-app/app/.../bridge/LooperPoster.kt`), which
+  `Handler(Looper.getMainLooper()).post { … }`s back into Swift via
+  the `Java_com_example_appcore_bridge_LooperPoster_runSwiftJob`
+  `@_cdecl` (the only hand-written `@_cdecl` in the project; spec §2
+  generally uses jextract). Net effect: every method on `AndroidBridge`
+  — including sink callbacks fired from inside `attach`'s loops — runs
+  on the UI thread. JNI thunks (always called from Compose on the UI
+  thread) enter the actor synchronously via `Actor.assumeIsolated`,
+  saving a `Task { await … }` allocation and the `AttachCurrentThread`
+  cost on each sink delivery.
+  - **Sync thunk contract.** `appcoreCreate`, `appcoreSetSearchQuery`,
+    and `appcoreDestroy` execute their actor work synchronously and
+    only return after the mutation has taken effect. This tightens
+    spec §9's old fire-and-forget contract; the JNI inbound mutation
+    path is now strict-sync. The async snapshot *delivery* path
+    (Observations → JSON → SnapshotSink) is still asynchronous.
+  - **`appcoreDispatch` mirrors iOS's `AppEventDispatch` split.**
+    `AndroidBridge.dispatch(_:) async` is the awaitable form;
+    `enqueueDispatch(_:)` is sync, fire-and-forget (spawns an
+    internal Task that awaits the async path). The thunk uses
+    `enqueueDispatch` so it can stay synchronous; the async form is
+    available for tests.
+  - **Off-UI-thread JNI calls trap — this is intentional.** Compose
+    dispatches all user events from the UI thread, and the bridge's
+    executor *is* the UI thread, so `assumeIsolated` is sound. The
+    contract is "JNI thunks may only be called from the UI thread";
+    a background coroutine calling `AppCoreAndroid.appcoreDispatch(...)`
+    will trap loudly inside `assumeIsolated`, which is the right
+    failure mode (silent re-scheduling onto a different thread would
+    hide a real bug). If a future use case genuinely needs an off-UI
+    JNI caller, give that thunk a separate variant that wraps the
+    actor call in `Task { await … }`; don't relax the
+    `assumeIsolated` contract on the existing thunks.
+  - **`LooperExecutor.checkIsolated()` is required.** Swift's runtime
+    calls `SerialExecutor.checkIsolated()` from `Actor.assumeIsolated`
+    (and other isolation-check sites) to verify the calling thread is
+    the executor's expected thread. The default impl always traps with
+    "Unexpected isolation context, expected to be executing on
+    LooperExecutor", because Swift can't tell that Android's main
+    `Looper` thread *is* this executor's domain. We override
+    `checkIsolated()` to call `LooperPoster.isOnMainLooper()` via JNI
+    (`Looper.myLooper() == Looper.getMainLooper()`). Don't remove this
+    override — without it `appcoreCreate` traps at app launch.
+  - **Android-only — no macOS fallback.** `LooperExecutor.swift`'s
+    body is `#if canImport(Android)`-gated; `unownedExecutor` on
+    `AndroidBridge` is similarly gated; the JNI thunks in
+    `AppCoreNative.swift` have `#if canImport(Android)`-gated bodies.
+    On macOS, `AndroidBridge` uses Swift's default actor executor
+    (a real `SerialExecutor`) and the thunks are no-ops — jextract
+    still sees the public-API signatures so the Java surface
+    generates correctly. We don't need a fake macOS impl because
+    `AppCoreTests` doesn't exercise this actor.
 - **Echo dedup at the trust boundary.** AndroidBridge's
   `searchQueryTask` runs an `Observations { state.searchQuery }` loop
-  whose emissions feed `SearchQuerySink.deliver`. Without dedup, a fast
-  typist would see Compose's local `BridgedSource` get clobbered by
-  echoes of writes Compose just sent (Compose typing "he", Swift
-  emitting "h" on Compose's still-pending "he"). The bridge holds a
+  whose emissions feed `SearchQuerySink.deliver`. Without dedup, every
+  Kotlin write would round-trip back through the sink and fire
+  `BridgedSource.deliver` → Compose listener → recomposition, with no
+  semantic effect (TextFieldState already has the value the user
+  typed). The bridge holds a
   `lastSetterValue: String?` updated by `handleSetSearchQuery`; the
   Observations loop skips emissions matching it. Same shape as the
   JSON-snapshot dedup (`lastJSON`) — dedup once at the trust boundary,

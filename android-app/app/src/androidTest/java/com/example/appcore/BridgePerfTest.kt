@@ -1,6 +1,7 @@
 package com.example.appcore
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.CommandSink
 import com.example.appcore.bridge.SearchQuerySink
@@ -80,7 +81,7 @@ class BridgePerfTest {
      * snapshot.
      */
     private suspend fun firstStoryIdAfterRefresh(sink: CapturingSink): String {
-        AppCoreAndroid.appcoreDispatch(REFRESH_JSON)
+        onMain { AppCoreAndroid.appcoreDispatch(REFRESH_JSON) }
         val withStories = withTimeout(10_000) {
             var s = sink.channel.receive()
             while (!s.contains("\"stories\":[{")) {
@@ -114,12 +115,12 @@ class BridgePerfTest {
         // with `a_coldStart_initialSnapshotDelivered` to guard the second
         // half of the bridge's two-channel cold-start contract.
         val sink = CapturingSink()
-        AppCoreAndroid.appcoreCreate(sink, sink, sink)
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
         try {
             val initial = withTimeout(50) { sink.searchQueryChannel.receive() }
             assertEquals("cold-start searchQuery is empty", "", initial)
         } finally {
-            AppCoreAndroid.appcoreDestroy()
+            onMain { AppCoreAndroid.appcoreDestroy() }
         }
     }
 
@@ -127,7 +128,7 @@ class BridgePerfTest {
     fun a_coldStart_initialSnapshotDelivered() = runBlocking {
         val sink = CapturingSink()
         val nanos = measureNanoTime {
-            AppCoreAndroid.appcoreCreate(sink, sink, sink)
+            onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
             try {
                 // 50 ms is generous — the bridge actor's attach() task
                 // spawns and emits the initial Observations value within
@@ -143,7 +144,7 @@ class BridgePerfTest {
                 assertTrue("contains empty stories array", initial.contains("\"stories\":[]"))
                 assertTrue("isLoading defaults false", initial.contains("\"isLoading\":false"))
             } finally {
-                AppCoreAndroid.appcoreDestroy()
+                onMain { AppCoreAndroid.appcoreDestroy() }
             }
         }
         report("cold start: create → first snapshot (synchronous)", listOf(nanos))
@@ -152,34 +153,34 @@ class BridgePerfTest {
     @Test
     fun syncJniCall_overhead() = runBlocking {
         val sink = CapturingSink()
-        AppCoreAndroid.appcoreCreate(sink, sink, sink)
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
         try {
             // Drain the cold-start snapshot.
             withTimeout(5_000) { sink.channel.receive() }
 
             // Warm-up.
-            repeat(20) { AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON) }
+            repeat(20) { onMain { AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON) } }
             // Drain any snapshots from warm-up.
             drainBriefly(sink)
 
             val samples = mutableListOf<Long>()
             repeat(200) {
                 samples += measureNanoTime {
-                    AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON)
+                    onMain { AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON) }
                 }
             }
             // Drain the resulting snapshots so the next test starts clean.
             drainBriefly(sink)
             report("sync JNI call (dispatch — incl. JSON decode)", samples)
         } finally {
-            AppCoreAndroid.appcoreDestroy()
+            onMain { AppCoreAndroid.appcoreDestroy() }
         }
     }
 
     @Test
     fun endToEnd_toggleRoundTrip() = runBlocking {
         val sink = CapturingSink()
-        AppCoreAndroid.appcoreCreate(sink, sink, sink)
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
         try {
             // Drain the cold-start snapshot.
             withTimeout(5_000) { sink.channel.receive() }
@@ -195,14 +196,14 @@ class BridgePerfTest {
             // flips Story.isRead in the encoded snapshot, so each one
             // produces a distinct emission.
             repeat(20) {
-                AppCoreAndroid.appcoreDispatch(toggleStory)
+                onMain { AppCoreAndroid.appcoreDispatch(toggleStory) }
                 withTimeout(1_000) { sink.channel.receive() }
             }
 
             val samples = mutableListOf<Long>()
             repeat(100) {
                 val t0 = System.nanoTime()
-                AppCoreAndroid.appcoreDispatch(toggleStory)
+                onMain { AppCoreAndroid.appcoreDispatch(toggleStory) }
                 // Wait for the corresponding snapshot.
                 withTimeout(1_000) { sink.channel.receive() }
                 samples += System.nanoTime() - t0
@@ -212,14 +213,14 @@ class BridgePerfTest {
             // Sanity: every toggle produced exactly one snapshot.
             assertTrue("samples produced", samples.size == 100)
         } finally {
-            AppCoreAndroid.appcoreDestroy()
+            onMain { AppCoreAndroid.appcoreDestroy() }
         }
     }
 
     @Test
     fun snapshotPayload_size() = runBlocking {
         val sink = CapturingSink()
-        AppCoreAndroid.appcoreCreate(sink, sink, sink)
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
         try {
             // Drain the initial Observations emission.
             withTimeout(5_000) { sink.channel.receive() }
@@ -229,7 +230,7 @@ class BridgePerfTest {
             // because the bridge is process-wide and prior tests will
             // have warmed AppState; "loaded (no reads)" is the
             // canonical baseline.
-            AppCoreAndroid.appcoreDispatch(REFRESH_JSON)
+            onMain { AppCoreAndroid.appcoreDispatch(REFRESH_JSON) }
             val loaded = withTimeout(10_000) {
                 var s = sink.channel.receive()
                 while (!s.contains("\"stories\":[{")) {
@@ -246,7 +247,7 @@ class BridgePerfTest {
             // Toggle three real story ids — each flips Story.isRead in
             // the encoded snapshot, so each emits a distinct payload.
             ids.forEach { id ->
-                AppCoreAndroid.appcoreDispatch("""{"type":"toggleRead","id":"$id"}""")
+                onMain { AppCoreAndroid.appcoreDispatch("""{"type":"toggleRead","id":"$id"}""") }
             }
 
             // Drain to the last snapshot in a small window. Three
@@ -261,7 +262,38 @@ class BridgePerfTest {
 
             println("[BridgePerf] snapshot JSON bytes (3 read): ${withReads.toByteArray().size}")
         } finally {
-            AppCoreAndroid.appcoreDestroy()
+            onMain { AppCoreAndroid.appcoreDestroy() }
+        }
+    }
+
+    @Test
+    fun bridgeWorkRunsOnUIThread() = runBlocking {
+        // Canary for the `LooperExecutor` contract: `AndroidBridge`'s
+        // custom `SerialExecutor` pins the actor to Android's main
+        // `Looper`, so every sink callback fires on the UI thread.
+        // Capture `Looper.myLooper()` from inside `deliver`; assert it
+        // equals `Looper.getMainLooper()`. If a future refactor swaps
+        // the executor or drops `unownedExecutor`, this test fails
+        // before any per-thread JNI subtlety bites in production.
+        val mainLooper = android.os.Looper.getMainLooper()
+        val capturedLooper = Channel<android.os.Looper?>(capacity = 1)
+        val sink = object : SnapshotSink, CommandSink, SearchQuerySink {
+            override fun deliver(snapshotJSON: String) {
+                capturedLooper.trySend(android.os.Looper.myLooper())
+            }
+            override fun deliverCommand(commandJSON: String) {}
+            override fun deliverSearchQuery(value: String) {}
+        }
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
+        try {
+            val looper = withTimeout(5_000) { capturedLooper.receive() }
+            assertEquals(
+                "SnapshotSink.deliver must run on Android's main Looper",
+                mainLooper,
+                looper
+            )
+        } finally {
+            onMain { AppCoreAndroid.appcoreDestroy() }
         }
     }
 
@@ -276,13 +308,13 @@ class BridgePerfTest {
         //      is what prevents Compose's local mirror from getting
         //      clobbered by echoes of writes it just sent.)
         val sink = CapturingSink()
-        AppCoreAndroid.appcoreCreate(sink, sink, sink)
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
         try {
             // Drain cold-start snapshot + cold-start searchQuery emission.
             withTimeout(5_000) { sink.channel.receive() }
             withTimeout(5_000) { sink.searchQueryChannel.receive() }
 
-            AppCoreAndroid.appcoreSetSearchQuery("rust")
+            onMain { AppCoreAndroid.appcoreSetSearchQuery("rust") }
 
             // Watcher → runFetch → search succeeds → snapshot arrives.
             // 10s budget covers HTTP latency for the Algolia API.
@@ -310,8 +342,37 @@ class BridgePerfTest {
             } catch (_: Exception) { /* expected timeout */ }
             assertEquals("bridge dedup must suppress the echo", false, sawEcho)
         } finally {
-            AppCoreAndroid.appcoreDestroy()
+            onMain { AppCoreAndroid.appcoreDestroy() }
         }
+    }
+
+    /**
+     * Runs [block] on Android's main `Looper`, blocking the caller
+     * until it completes. JNI thunks (`appcoreCreate`, `appcoreDispatch`,
+     * `appcoreSetSearchQuery`, `appcoreGetSearchQuery`, `appcoreDestroy`)
+     * use `Actor.assumeIsolated` and require the bridge actor's
+     * executor's thread (= main looper). `AndroidJUnit4` tests run on
+     * the instrumentation thread by default, so any JNI call from a
+     * `@Test` method must be hopped onto main first or
+     * `LooperExecutor.checkIsolated()` traps.
+     *
+     * Adds runOnMainSync overhead per call (~tens of µs); the perf
+     * numbers reported by these tests will reflect that and are
+     * therefore inflated relative to a real Compose-driven dispatch
+     * (which is already on the main looper). The relative measurements
+     * (cold-start vs round-trip vs sync overhead) still tell us the
+     * shape of the bridge — they're sanity checks, not regression
+     * gates.
+     */
+    private fun onMain(block: () -> Unit) {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
+    }
+
+    /** Returning variant of [onMain] for thunks that yield a value. */
+    private fun <T : Any> onMainResult(block: () -> T): T {
+        lateinit var result: T
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { result = block() }
+        return result
     }
 
     private suspend fun drainBriefly(sink: CapturingSink) {
