@@ -27,6 +27,15 @@ private actor CallRecorder {
     func recordSearch(_ query: String) { searchCalls.append(query) }
 }
 
+/// Mirrors the producer/consumer watcher pattern that `RootView` and
+/// `AndroidBridge` install in production. The body runs concurrently
+/// with the watcher; on body exit, the watcher's TaskGroup is cancelled.
+///
+/// `[model]` capture is load-bearing on each `addTask`: without it,
+/// strict concurrency rejects sending a non-Sendable `AppModel` into the
+/// sending closure. Explicit capture lets region isolation prove the
+/// reference stays in the surrounding MainActor region.
+
 @Suite("AppModel")
 struct AppModelTests {
 
@@ -166,9 +175,64 @@ struct AppModelTests {
         #expect(projected?.isRead == true)
     }
 
-    @Test("setSearchQuery debounces, then fires one request")
+    @Test("ObservedKeyPath emits initial value then yields on each willSet")
     @MainActor
-    func setSearchQuery_firesDebouncedRequest() async {
+    func observedKeyPath_emitsInitialAndChanges() async {
+        let model = AppModel(
+            client: HNClient(frontPage: { [] }, search: { _ in [] })
+        )
+
+        // Iterate state.observe(\.searchQuery) — first element is the
+        // current value (matching `Observations`' initial emission);
+        // subsequent elements arrive on each willSet.
+        let observer = Task { @MainActor [state = model.state] in
+            var captured: [String] = []
+            for await q in state.observe(\.searchQuery).prefix(3) {
+                captured.append(q)
+            }
+            return captured
+        }
+        await Task.megaYield()
+
+        model.state.searchQuery = "ru"
+        await Task.megaYield()
+        model.state.searchQuery = "rust"
+
+        let captured = await observer.value
+        #expect(captured == ["", "ru", "rust"])
+    }
+
+    @Test("ObservedKeyPath terminates when surrounding Task is cancelled — even without a subsequent write")
+    @MainActor
+    func observedKeyPath_terminatesOnCancellationWithoutWrite() async {
+        let model = AppModel(
+            client: HNClient(frontPage: { [] }, search: { _ in [] })
+        )
+
+        // Start an observer that consumes the initial emission then
+        // parks awaiting the next willSet.
+        let observer = Task { @MainActor [state = model.state] in
+            var captured: [String] = []
+            for await q in state.observe(\.searchQuery) {
+                captured.append(q)
+            }
+            return captured
+        }
+        await Task.megaYield()
+
+        // Cancel without writing. The iterator's wait sits on
+        // `AsyncStream`'s for-await, which propagates cancellation
+        // even when no `willSet` ever fires — so the loop must exit
+        // cleanly instead of hanging.
+        observer.cancel()
+
+        let captured = await observer.value
+        #expect(captured == [""])  // initial-emission only; iterator exited on cancel
+    }
+
+    @Test("runFetch debounces and fires search with current query")
+    @MainActor
+    func runFetch_debouncesAndFires() async {
         let calls = CallRecorder()
         let clock = TestClock()
         let model = AppModel(
@@ -182,13 +246,15 @@ struct AppModelTests {
             clock: clock
         )
 
-        let dispatch = Task { @MainActor in
-            await model.dispatch(.setSearchQuery(value: "rust"))
+        // Direct property write (the path @Bindable / per-property JNI
+        // setter take); host's watcher would respond by calling runFetch.
+        model.state.searchQuery = "rust"
+        let fetch = Task { @MainActor [model] in
+            await model.runFetch(debounce: AppModel.searchDebounce)
         }
-        // Yield until the dispatch is parked in `clock.sleep`.
         await Task.megaYield()
         await clock.advance(by: AppModel.searchDebounce)
-        await dispatch.value
+        await fetch.value
 
         #expect(model.state.searchQuery == "rust")
         #expect(model.state.stories.map(\.id) == ["100"])
@@ -196,9 +262,9 @@ struct AppModelTests {
         #expect(model.state.isLoading == false)
     }
 
-    @Test("rapid keystrokes coalesce — only the latest fires")
+    @Test("rapid runFetch calls coalesce — only the latest fires")
     @MainActor
-    func setSearchQuery_coalescesRapidKeystrokes() async {
+    func runFetch_coalescesRapidKeystrokes() async {
         let calls = CallRecorder()
         let clock = TestClock()
         let model = AppModel(
@@ -212,17 +278,25 @@ struct AppModelTests {
             clock: clock
         )
 
-        // Fire three concurrent dispatches on MainActor. Each one
-        // synchronously cancels the prior `searchTask` and parks in
-        // `clock.sleep`.
-        let t1 = Task { @MainActor in await model.dispatch(.setSearchQuery(value: "ru")) }
-        let t2 = Task { @MainActor in await model.dispatch(.setSearchQuery(value: "rus")) }
-        let t3 = Task { @MainActor in await model.dispatch(.setSearchQuery(value: "rust")) }
+        // Simulate three back-to-back keystrokes the way the production
+        // watcher would: write the property, then call runFetch (each
+        // call cancels the prior in-flight searchTask).
+        model.state.searchQuery = "ru"
+        let t1 = Task { @MainActor [model] in
+            await model.runFetch(debounce: AppModel.searchDebounce)
+        }
+        await Task.megaYield()
+        model.state.searchQuery = "rus"
+        let t2 = Task { @MainActor [model] in
+            await model.runFetch(debounce: AppModel.searchDebounce)
+        }
+        await Task.megaYield()
+        model.state.searchQuery = "rust"
+        let t3 = Task { @MainActor [model] in
+            await model.runFetch(debounce: AppModel.searchDebounce)
+        }
         await Task.megaYield()
 
-        // Advance the virtual clock past the debounce. The cancelled
-        // sleeps return CancellationError; only the latest survives to
-        // call `client.search`.
         await clock.advance(by: AppModel.searchDebounce)
         await t1.value
         await t2.value
@@ -252,21 +326,23 @@ struct AppModelTests {
             clock: clock
         )
 
-        // Start a pending search whose debounce is in flight, then fire
-        // refresh. Refresh's own `runFetch` cancels the pending task.
-        let pending = Task { @MainActor in
-            await model.dispatch(.setSearchQuery(value: "rust"))
+        // Pending watcher-style fetch with searchQuery="rust", parked
+        // in clock.sleep.
+        model.state.searchQuery = "rust"
+        let pending = Task { @MainActor [model] in
+            await model.runFetch(debounce: AppModel.searchDebounce)
         }
         await Task.megaYield()
+
+        // Refresh's own runFetch cancels the pending task before the
+        // debounce elapses.
         await model.dispatch(.refresh)
-        // Drain the pending dispatch (its sleep was cancelled, so it
-        // resolves to .cancelled and returns).
         await clock.advance(by: AppModel.searchDebounce)
         await pending.value
 
         // Refresh ran with searchQuery already set to "rust", so it hit
-        // the search endpoint. The pending dispatch's debounce got
-        // cancelled before it could fire its own request.
+        // the search endpoint. The pending fetch got cancelled before
+        // it could fire its own request.
         await #expect(calls.frontPageCalls == 0)
         await #expect(calls.searchCalls == ["rust"])
     }
@@ -306,11 +382,12 @@ struct AppModelTests {
     func cancelAndReplace_throughURLErrorCancelled_silent() async {
         // Reproduces the cold-start race that motivated the URLError
         // normalisation: a slow `.refresh` fetch is in flight when a
-        // `.setSearchQuery` arrives, runFetch cancel-and-replaces the
-        // task, and the URLSession-style mock surfaces URLError.cancelled
-        // as the task throws. Without the normalisation the prior
-        // dispatch's catch arm would have written `loadError = "cancelled"`
-        // until the search-query fetch settled.
+        // searchQuery write arrives, the watcher's runFetch
+        // cancel-and-replaces the task, and the URLSession-style mock
+        // surfaces URLError.cancelled as the task throws. Without the
+        // normalisation the prior dispatch's catch arm would have
+        // written `loadError = "cancelled"` until the search-query
+        // fetch settled.
         let clock = TestClock()
         let model = AppModel(
             client: HNClient(
@@ -327,12 +404,16 @@ struct AppModelTests {
             clock: clock
         )
 
-        let refreshTask = Task { @MainActor in await model.dispatch(.refresh) }
+        // Start a slow refresh that parks at frontPage (waiting to be
+        // cancelled), then simulate a watcher-driven setSearchQuery by
+        // writing the property and calling runFetch.
+        let refreshTask = Task { @MainActor [model] in await model.dispatch(.refresh) }
         await Task.megaYield()
 
-        // .setSearchQuery cancels the in-flight refresh task; debounce
-        // sleep is released by advancing the TestClock.
-        let queryTask = Task { @MainActor in await model.dispatch(.setSearchQuery(value: "rust")) }
+        model.state.searchQuery = "rust"
+        let queryTask = Task { @MainActor [model] in
+            await model.runFetch(debounce: AppModel.searchDebounce)
+        }
         await Task.megaYield()
         await clock.advance(by: AppModel.searchDebounce)
 
@@ -380,17 +461,6 @@ struct AppEventTests {
         #expect(decoded == event)
     }
 
-    @Test("setSearchQuery encodes with value payload")
-    func setSearchQuery_wireShape() throws {
-        let event = AppEvent.setSearchQuery(value: "rust")
-        let json = event.toJSON()
-        #expect(json.contains("\"type\":\"setSearchQuery\""))
-        #expect(json.contains("\"value\":\"rust\""))
-
-        let decoded = try #require(AppEvent(json: json))
-        #expect(decoded == event)
-    }
-
     @Test("decodes hand-written wire literals")
     func decodes_handWrittenLiterals() throws {
         // These are the literal payloads the Kotlin side sends; if Swift
@@ -403,9 +473,6 @@ struct AppEventTests {
 
         let refresh = try #require(AppEvent(json: #"{"type":"refresh"}"#))
         #expect(refresh == .refresh)
-
-        let query = try #require(AppEvent(json: #"{"type":"setSearchQuery","value":"rust"}"#))
-        #expect(query == .setSearchQuery(value: "rust"))
     }
 
     @Test("rejects unknown discriminators")
@@ -450,7 +517,7 @@ struct AppCommandTests {
 @Suite("AppState JSON wire shape")
 struct AppStateWireTests {
 
-    @Test("snapshot omits internal storage and embeds isRead on each story")
+    @Test("snapshot omits internal storage, omits searchQuery, embeds isRead on each story")
     func snapshot_omitsInternalStorage_andEmbedsIsReadOnStory() async {
         let model = AppModel(
             client: HNClient(
@@ -465,16 +532,23 @@ struct AppStateWireTests {
         )
         await model.dispatch(.refresh)
         await model.dispatch(.toggleRead(id: "100"))
+        // Set searchQuery so we can prove it stays out of the JSON even
+        // when populated.
+        model.state.searchQuery = "rust"
 
         let json = model.state.toJSON()
 
         // Internal storage never crosses the wire.
         #expect(!json.contains("\"hits\""))
         #expect(!json.contains("\"readIds\""))
+        // searchQuery is per-property bridged via `appcoreSetSearchQuery`
+        // + `SearchQuerySink`, not via this snapshot.
+        #expect(!json.contains("\"searchQuery\""))
+        #expect(!json.contains("\"rust\""))
         // No underscore-prefixed key — guards against the @Observable
-        // macro's `_searchQuery`-style backing storage leaking into the
-        // wire if anyone accidentally restores default `Codable`
-        // synthesis instead of the hand-written `encode(to:)`.
+        // macro's backing storage leaking into the wire if anyone
+        // accidentally restores default `Codable` synthesis instead of
+        // the hand-written `encode(to:)`.
         #expect(!json.contains("\"_"))
         // The merged stories list is what Android sees.
         #expect(json.contains("\"stories\""))

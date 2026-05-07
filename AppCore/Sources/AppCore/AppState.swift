@@ -13,11 +13,21 @@ import Observation
 /// Properties fall into two groups, in the data-flow vocabulary of
 /// WWDC19's *Data Flow Through SwiftUI*:
 ///
-/// - **Stored sources of truth (encoded)** — `searchQuery`,
-///   `isLoading`, `lastRefreshedAt`, `loadError`. Stored properties
-///   that `encode(to:)` writes into the JSON snapshot the Kotlin
-///   `AppState` data class consumes. Adding a new encoded field is
-///   one new property plus one line in `encode(to:)`.
+/// - **Stored sources of truth (encoded)** — `isLoading`,
+///   `lastRefreshedAt`, `loadError`. Stored properties that
+///   `encode(to:)` writes into the JSON snapshot the Kotlin `AppState`
+///   data class consumes. Adding a new encoded field is one new
+///   property plus one line in `encode(to:)`.
+///
+/// - **Stored sources of truth (per-property bridged, not encoded)** —
+///   `searchQuery`. Both platforms drive this directly: iOS via
+///   `@Bindable` + `$state.searchQuery`, Android via the per-property
+///   JNI setter `appcoreSetSearchQuery` and the matching
+///   `SearchQuerySink` push-back. The JSON snapshot deliberately omits
+///   it — for primitives that two-way-bind to a UI control, per-property
+///   bridging beats round-tripping through a snapshot. `AppModel`'s
+///   `withObservationTracking` watcher fires the debounced fetch on
+///   every write, regardless of which platform wrote it.
 ///
 /// - **Stored sources of truth (internal — not encoded)** — `hits`
 ///   and `readIds`. The working set behind `dispatch(_:)`; never
@@ -38,9 +48,12 @@ import Observation
 @Observable
 public final class AppState: Encodable {
 
-    // MARK: Stored sources of truth (encoded)
+    // MARK: Stored sources of truth (per-property bridged, not encoded)
 
     public var searchQuery: String = ""
+
+    // MARK: Stored sources of truth (encoded)
+
     public var isLoading: Bool = false
     public var lastRefreshedAt: Date? = nil
     public var loadError: String? = nil
@@ -62,7 +75,6 @@ public final class AppState: Encodable {
 
     private enum WireKey: String, CodingKey {
         case stories
-        case searchQuery
         case isLoading
         case lastRefreshedAt
         case loadError
@@ -71,10 +83,12 @@ public final class AppState: Encodable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: WireKey.self)
         try container.encode(stories, forKey: .stories)
-        try container.encode(searchQuery, forKey: .searchQuery)
         try container.encode(isLoading, forKey: .isLoading)
         try container.encodeIfPresent(lastRefreshedAt, forKey: .lastRefreshedAt)
         try container.encodeIfPresent(loadError, forKey: .loadError)
+        // searchQuery is intentionally absent — see the type-level
+        // doc-comment. It crosses JNI via its own setter + sink, not
+        // via this snapshot.
     }
 
     private static let encoder: JSONEncoder = {

@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -51,14 +52,14 @@ public final class AppModel {
     private let clock: any Clock<Duration>
 
     /// In-flight network task. Replaced (and the predecessor cancelled)
-    /// on every `.refresh` and post-debounce `.setSearchQuery` — only one
-    /// fetch runs at a time, and the latest dispatch always wins.
+    /// on every `.refresh` and on each `state.searchQuery` write — only
+    /// one fetch runs at a time, and the latest dispatch always wins.
     private var searchTask: Task<[HNHit], Error>?
 
-    /// Debounce window for `.setSearchQuery`. Exposed (rather than
-    /// inlined) so tests can name the same duration when advancing
-    /// their `TestClock`.
-    static let searchDebounce: Duration = .milliseconds(250)
+    /// Debounce window applied between a `state.searchQuery` write and
+    /// the resulting fetch. Exposed (rather than inlined) so tests can
+    /// name the same duration when advancing their `TestClock`.
+    public static let searchDebounce: Duration = .milliseconds(250)
 
     public init(
         client: HNClient = HNClient(),
@@ -91,8 +92,32 @@ public final class AppModel {
             openStory(id)
         case .refresh:
             await runFetch()
-        case .setSearchQuery(let value):
-            state.searchQuery = value
+        }
+    }
+
+    /// Long-lived loop that drives a debounced fetch on every write to
+    /// `state.searchQuery`. The host (`RootView`'s `.task` on iOS,
+    /// `AndroidBridge.attach` on Android) `await`s this from inside its
+    /// own Task; cancellation propagates from the host's surrounding
+    /// Task.
+    ///
+    /// Why this works as a plain async method (where `start()` spawning
+    /// a `Task { [self] in ... }` doesn't): there's no unstructured
+    /// `Task` creation here. Under SE-0461 the body runs on the
+    /// caller's actor; the `for await` iterator is non-Sendable but
+    /// stays in that actor's region; `runFetch` is called on the same
+    /// actor. The `[#SendingClosureRisksDataRace]` hole only fires when
+    /// you put `self` inside a `sending` closure (Task.init,
+    /// async-let, TaskGroup.addTask). A plain async method body has
+    /// no such hop.
+    ///
+    /// `dropFirst()` skips `ObservedKeyPath`'s iteration-start emission
+    /// so the host's first-appear `.refresh` isn't duplicated.
+    /// `runFetch` reads `state.searchQuery` on entry, so a burst of
+    /// writes coalesces naturally — the inner `searchTask`
+    /// cancel-and-replace handles overlapping fetches.
+    public func runSearchQueryWatcher() async {
+        for await _ in state.observe(\.searchQuery).dropFirst() {
             await runFetch(debounce: Self.searchDebounce)
         }
     }
@@ -144,7 +169,7 @@ public final class AppModel {
     /// a transient `loadError = "cancelled"` until the newer fetch
     /// settles. Re-throwing as `CancellationError` keeps the dispatch
     /// arm a single uniform "this run was superseded" path.
-    private func runFetch(debounce: Duration? = nil) async {
+    public func runFetch(debounce: Duration? = nil) async {
         searchTask?.cancel()
 
         let query = state.searchQuery
