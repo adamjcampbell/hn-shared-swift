@@ -13,10 +13,9 @@ struct RootView: View {
                     .ignoresSafeArea()
             }
             .task {
-                // Single long-lived consumer of AppCommand. The sheet
-                // binding lives here in the SwiftUI tree; user-driven
-                // dismissal sets `presented = nil` without touching
-                // AppCore.
+                // Long-lived consumer of AppCommand. The sheet binding
+                // lives here in the SwiftUI tree; user-driven dismissal
+                // sets `presented = nil` without touching AppCore.
                 for await command in appModel.commands {
                     switch command {
                     case .presentURL(let urlString):
@@ -24,24 +23,33 @@ struct RootView: View {
                     }
                 }
             }
+            .task {
+                // searchQuery watcher: AppModel iterates
+                // `state.observe(\.searchQuery)` and calls
+                // `runFetch(debounce:)` on every willSet. Cancellation
+                // propagates when this `.task` is torn down on view
+                // disappear.
+                await appModel.runSearchQueryWatcher()
+            }
     }
 }
 
 private struct StoriesScreen: View {
-    let state: AppState
-    @State private var searchText = ""
+    @Bindable var state: AppState
     @Environment(\.dispatch) private var dispatch
 
     var body: some View {
         StoriesContent(state: state)
-            .searchable(text: $searchText, prompt: "Search Hacker News")
+            // Direct two-way binding into the @Observable state. Writes
+            // through `$state.searchQuery` go through `AppState`'s
+            // synthesized setter; `RootView`'s watcher Task observes the
+            // willSet and fires a debounced fetch. No closure-shim
+            // Binding(get:set:) — that pattern destroys the Hashable
+            // identity SwiftUI's animation/transaction tracking relies
+            // on (Point-Free #289).
+            .searchable(text: $state.searchQuery, prompt: "Search Hacker News")
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-            .onChange(of: searchText) { _, newValue in
-                // AppCore handles its own debounce inside `.setSearchQuery`
-                // — see AppModel.dispatch. iOS just forwards every keystroke.
-                dispatch(.setSearchQuery(value: newValue))
-            }
             .task {
                 // One-shot first-appear fetch.
                 await dispatch.run(.refresh)
