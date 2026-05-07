@@ -5,7 +5,6 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * A platform-bridged primitive exposed as a Compose-friendly state.
@@ -29,10 +28,11 @@ import java.util.concurrent.CopyOnWriteArrayList
  *      writes are filtered on the Swift bridge actor's `lastSetterValue`
  *      dedup before reaching here.
  *
- * Listeners use [CopyOnWriteArrayList] for defence-in-depth: the bridge
- * pins callbacks to the UI thread today (via `LooperExecutor`), but the
- * COW list keeps `addListener`/`removeListener` correct even if a
- * future change re-introduces off-UI deliveries.
+ * Listener storage is a plain [mutableListOf] — `LooperExecutor` pins
+ * the bridge actor to Android's main `Looper`, so `addListener`,
+ * `removeListener`, and `deliver` only ever run on the UI thread.
+ * `BridgePerfTest.bridgeWorkRunsOnUIThread` is the regression guard
+ * for that contract.
  */
 class BridgedSource<T>(
     private val readThrough: () -> T,
@@ -45,7 +45,7 @@ class BridgedSource<T>(
      */
     val current: T get() = readThrough()
 
-    private val listeners = CopyOnWriteArrayList<(T) -> Unit>()
+    private val listeners = mutableListOf<(T) -> Unit>()
 
     /** Compose-side write: sync JNI. See class doc for why no local notify. */
     fun set(value: T) {
