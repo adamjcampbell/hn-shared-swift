@@ -60,20 +60,46 @@ private struct StoriesScreen: View {
 
 private struct StoriesContent: View {
     let state: AppState
+    @Environment(\.isSearching) private var isSearching
 
     var body: some View {
         StoriesList(state: state)
             .overlay {
-                // Empty-results overlay (only meaningful for an active search;
-                // an empty front page would be a network failure handled via
-                // loadError instead).
-                if !state.isLoading
-                    && state.stories.isEmpty
-                    && !state.searchQuery.isEmpty {
-                    EmptyResultsOverlay(query: state.searchQuery)
+                // While the search field is active, occlude the front-page
+                // surface (HeaderCard + full list) with a stories-only
+                // SearchResults view. Mirrors Android's
+                // ExpandedFullScreenSearchBar, which renders just the
+                // matching stories with no HeaderCard. Overlay (not
+                // if/else swap) keeps StoriesList mounted so scroll
+                // position survives a search-cancel cycle.
+                if isSearching {
+                    SearchResults(state: state)
                 }
             }
             .scrollDismissesKeyboard(.immediately)
+    }
+}
+
+private struct SearchResults: View {
+    let state: AppState
+
+    var body: some View {
+        List {
+            Section { StoryRows(stories: state.stories) }
+        }
+        .listStyle(.insetGrouped)
+        .background(.background)
+        .overlay {
+            // Empty-search-results overlay. Only fires when the user
+            // has typed a query but nothing matches — an empty front
+            // page would be a network failure surfaced via loadError
+            // on the underlying StoriesList instead.
+            if !state.isLoading
+                && state.stories.isEmpty
+                && !state.searchQuery.isEmpty {
+                EmptyResultsOverlay(query: state.searchQuery)
+            }
+        }
     }
 }
 
