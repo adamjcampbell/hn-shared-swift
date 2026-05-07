@@ -46,13 +46,19 @@ real differences from spec §1–§13:
 0. **Networking is in.** Spec §12 listed "no networking" as a non-goal.
    The example now fetches Hacker News stories via Algolia HN search
    with `URLSession` in `AppCore`. `HNClient` is a `Sendable` closure-
-   struct so tests inject mock closures directly. Debouncing lives
-   inside `AppModel.dispatch`: `.setSearchQuery` cancel-and-replaces
-   a `Task<[Story], Error>?` that sleeps the debounce window then
-   issues the fetch, with cancellation flowing through the standard
-   `CancellationError` path. The platform UI just forwards every
-   keystroke. `AppModel` takes a `Clock` so tests use `TestClock` for
-   deterministic timing.
+   struct so tests inject mock closures directly. `searchQuery` is
+   per-property bridged rather than dispatched as an event: iOS uses
+   `@Bindable` + `$state.searchQuery`, Android uses a per-property
+   JNI setter (`appcoreSetSearchQuery`) plus a matching push sink.
+   `AppModel.runSearchQueryWatcher` iterates `state.observe(\.searchQuery)`
+   (a small `AsyncSequence` over a single `@Observable` key path,
+   modelled after `Observations`) and on every willSet calls
+   `runFetch(debounce:)`, which cancel-and-replaces a `Task<[Story], Error>?`
+   that sleeps the debounce window then issues the fetch.
+   `CancellationError` flows through the standard path; `URLError(.cancelled)`
+   is normalised to `CancellationError` so superseded fetches don't
+   surface as transient errors. `AppModel` takes a `Clock` so tests
+   use `TestClock` for deterministic timing.
 
 1. **`AppCoreAndroid` sources are wrapped in `#if canImport(Android)`** so
    the target compiles to an empty module on macOS. Lets us run

@@ -111,24 +111,77 @@ Per spec §12 plus what verification surfaced:
   positive on idempotent writes. The dedup state lives inside the Task
   closure rather than on the actor — `attach` cancels and respawns the
   Task, so a fresh sink gets a fresh comparison automatically.
-- **Debouncing lives inside `AppModel.dispatch`, not the platform UI.**
-  `.setSearchQuery` cancel-and-replaces a stored
-  `searchTask: Task<[Story], Error>?`. The platform UI just forwards
-  every keystroke as `.setSearchQuery`. The Task body captures only
-  Sendable values (`[client, clock, query]`) — never `self` — and
-  returns `[Story]` or throws. The dispatch arm awaits with `try` and
-  commits the result on the caller's actor. This sidesteps SE-0461's
-  "unstructured Task in nonisolated function captures non-Sendable
-  self" hole: there's no self capture, so there's no region transfer
-  to fail. State mutations happen back in the dispatch arm, not in
-  the Task.
+- **Search-query writes are NOT events — they're per-property bridged.**
+  Both platforms drive `state.searchQuery` directly: iOS via `@Bindable`
+  + `$state.searchQuery`, Android via `BridgedSource` + the per-property
+  JNI setter `appcoreSetSearchQuery`. `AppEvent` retains only the
+  command-shaped mutations (`toggleRead`, `openStory`, `refresh`).
+  `AppModel.runSearchQueryWatcher` is an `async` method that iterates
+  `state.observe(\.searchQuery).dropFirst()` and calls
+  `runFetch(debounce: 250 ms)` on every willSet. `runFetch` keeps its
+  cancel-and-replace `searchTask` and the `[client, clock, query]`
+  capture — still load-bearing for sidestepping SE-0461's "unstructured
+  Task captures non-Sendable self" hole.
+- **`ObservedKeyPath<Root, Value>`** is the small `AsyncSequence`
+  (`AppCore/Sources/AppCore/Observed.swift`) wrapping
+  `withObservationTracking` for a single key path; modelled after
+  Apple's `Observations` (SE-0475 / iOS 26+) but available on iOS 17+.
+  Each `next()` re-arms by re-iterating, so the spec §13 fallback's
+  recursion-from-`@Sendable onChange` isn't needed. The iterator
+  yields `Task.yield()` once after the suspension point so the
+  writer's `willSet` → assignment → `didSet` frame completes before
+  reading the post-write value (Apple's `Observations` solves the same
+  "willSet fires before mutation" problem by emitting at "transaction
+  end"). Iterator is non-Sendable; iteration must stay in a single
+  isolation domain (MainActor on iOS, the bridge actor on Android) —
+  same constraint Apple's `Observations` has. Drop this type and use
+  `Observations` directly when iOS 26 becomes the deployment floor.
+- **The watcher loop body lives on AppModel; the Task lifetime lives on
+  the host.** AppModel exposes `runSearchQueryWatcher() async` and
+  hosts call `await appModel.runSearchQueryWatcher()` from inside their
+  own Task. Spawning the Task *inside* AppModel —
+  `Task { [self] in ... }` — captures non-Sendable `self` into a
+  `sending` closure, which Swift 6.1 `[#SendingClosureRisksDataRace]`
+  rejects. The async-method shape works because there's no `Task` /
+  `async let` / `TaskGroup.addTask` creation in AppModel's body; the
+  body runs on the caller's actor under SE-0461 and the `for await`
+  iterator stays in that actor's region. Hosts (`MainActor` `.task` on
+  iOS, the `AndroidBridge` actor on Android) own the cancellable Task;
+  their own `self` is `Sendable`. AndroidBridge wraps the call in an
+  actor-isolated method (`runSearchQueryWatcher` on the actor) so the
+  non-Sendable AppModel reference never leaves the actor's region.
+- **Each host runs two `.task`-shaped Tasks side-by-side.** Folding
+  them into one (TaskGroup or async let, inside AppModel or even on
+  the host) was attempted and rejected by strict concurrency: AppModel
+  is non-Sendable, so any `sending` closure that captures it (which is
+  what `TaskGroup.addTask` / `async let` / `Task.init` produce) trips
+  `[#SendingClosureRisksDataRace]`. The two-task shape is the
+  Swift 6.3 idiom for non-Sendable hosts:
+  - iOS `RootView`: two `.task` modifiers — one consumes
+    `appModel.commands`, one awaits `appModel.runSearchQueryWatcher()`.
+    SwiftUI manages each Task's lifetime per view
+    appearance/disappearance.
+  - Android `AndroidBridge`: a separate `Task<Void, Never>?` field per
+    concern (snapshot, command, searchQueryTask, queryWatcherTask),
+    spawned in `attach()` and cancelled in `detach()`. Inside the
+    actor `[self]` capture is Sendable, so this is the cheap path.
+- **Echo dedup at the trust boundary.** AndroidBridge's
+  `searchQueryTask` runs an `Observations { state.searchQuery }` loop
+  whose emissions feed `SearchQuerySink.deliver`. Without dedup, a fast
+  typist would see Compose's local `BridgedSource` get clobbered by
+  echoes of writes Compose just sent (Compose typing "he", Swift
+  emitting "h" on Compose's still-pending "he"). The bridge holds a
+  `lastSetterValue: String?` updated by `handleSetSearchQuery`; the
+  Observations loop skips emissions matching it. Same shape as the
+  JSON-snapshot dedup (`lastJSON`) — dedup once at the trust boundary,
+  not at every source.
 - **Inject `clock: any Clock<Duration>` into `AppModel` for tests.**
   Default is `ContinuousClock()`. `runFetch`'s Task body uses
   `clock.sleep(for:)` for the debounce wait. Tests pass a `TestClock`
   (from `pointfreeco/swift-clocks`) and call `clock.advance(by:)` to
   release suspended sleepers atomically — no real-clock waiting. Two
   cancel-and-replace tests
-  (`setSearchQuery_coalescesRapidKeystrokes`,
+  (`runFetch_coalescesRapidKeystrokes`,
   `refresh_cancelsPendingDebounce`) run in <1 ms each.
 - **`try` (not `try?`) on the debounce `clock.sleep`.** The Task body
   uses `try await clock.sleep(for: debounce)` and lets the throw
@@ -148,13 +201,29 @@ Per spec §12 plus what verification surfaced:
 - **`URLSessionConfiguration.waitsForConnectivity` is read-only on
   swift-corelibs-foundation.** Don't set it; the default (`false`) is
   what we want anyway.
-- Adding a new mutation requires (a) a new `case` on `AppEvent` (Swift)
-  — `Codable` is generated by MetaCodable's `@Codable` + `@CodedAt("type")`
-  on the enum, so no per-case annotation is needed when the case name
-  equals the wire string; add `@CodedAs("…")` per case only if they need
-  to differ — (b) a `switch` arm in `AppModel.dispatch`, and (c) a matching
-  `@SerialName`'d variant on Kotlin's `sealed class AppEvent` in
-  `AppModelHolder.kt`. No new JNI entry point.
+- Adding a new mutation depends on its shape:
+  - **Command-shaped** (toggle, refresh, navigate — fire-and-forget, no
+    text input bound to a UI control): (a) new `case` on `AppEvent`
+    (Swift), (b) `switch` arm in `AppModel.dispatch`, (c) matching
+    `@SerialName`'d variant on Kotlin's `sealed class AppEvent` in
+    `AppModelHolder.kt`. `Codable` is generated by MetaCodable's
+    `@Codable` + `@CodedAt("type")` on the enum, so no per-case
+    annotation is needed when the case name equals the wire string; add
+    `@CodedAs("…")` per case only if they differ. No new JNI entry
+    point.
+  - **Per-property bridged** (continuously two-way bound to a UI
+    control, like `searchQuery`): (a) make the `@Observable` property
+    publicly settable on `AppState`; (b) drop it from `encode(to:)` so
+    it doesn't ride the snapshot; (c) on Android, a new `XSink`
+    Sendable protocol + entry in `appcoreCreate`'s parameter list, a
+    new `appcoreSetX` JNI entry point, a new bridge actor field for
+    `lastSetterValue`, a new `Observations { state.x }` task with the
+    echo dedup; (d) on Kotlin, `BridgedSource<X>` constructed in
+    `AppModelHolder` + a new sink override; (e) on iOS, just bind via
+    `$state.x`. The host's existing `searchQuery` watcher loop
+    automatically picks up new properties only if you wire them through
+    `runFetch` or another shared trigger — usually each per-property
+    primitive wants its own host-side reaction.
 - **`URLProtocolStub` is `nonisolated(unsafe) static var` storage**
   (acceptable in `Tests/`, forbidden in `Sources/`). Only `HNClientTests`
   touches it, and that suite carries `.serialized` — no other suite
@@ -212,6 +281,17 @@ Per spec §12 plus what verification surfaced:
     property it actually reads is mutated. Leaf views that already
     take value-type slices (`Story`, `[Story]`) keep doing so —
     parameter equality is the right diff signal there.
+  - For two-way bindings to `@Observable` properties (search text,
+    toggles, slider values), use `@Bindable var state: AppState` plus
+    `$state.foo` — Swift produces a writable-key-path Binding rooted
+    on the observable. **Never** construct a `Binding(get:set:)`
+    closure shim: closures aren't `Hashable` or
+    reference-comparable, so the closure-shim form destroys the
+    Hashable identity SwiftUI's animation/transaction tracking relies
+    on, and the `Binding.init(get:set:transaction:)` overload doesn't
+    fully salvage it (Point-Free episode #289). If a write needs
+    side effects (debounce, network), express them at the model layer
+    via observation, not inside a Binding setter.
   - For views that toggle between two states of the *same* surface
     (empty/full, search/main), render the underlying view always and
     reveal the alternate via `.overlay { if cond { … } }`. Top-level
