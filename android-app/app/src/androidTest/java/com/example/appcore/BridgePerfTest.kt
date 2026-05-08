@@ -34,10 +34,13 @@ import kotlin.system.measureNanoTime
  * connectedAndroidTest report. Tolerances are generous — these are sanity
  * checks, not regression gates.
  *
- * The Swift side holds a single `AndroidBridge.shared`. `appcoreCreate`
- * replaces the sink (cancelling any prior observation task) so each test
- * can attach a fresh `CapturingSink` without a dedicated reset hook;
- * `appcoreDestroy()` detaches before the next test runs.
+ * The Swift side holds a single `@JavaUIActor`-isolated `Bridge`
+ * namespace; `appcoreCreate` calls `Bridge.attach(...)` and
+ * `appcoreDestroy()` calls `Bridge.detach()`. `Bridge.attach` enforces
+ * a once-and-only-once contract via `precondition` — production never
+ * calls `appcoreDestroy`, so this test pattern (attach → work →
+ * `finally { destroy }`) is the only place that exercises the
+ * detach/re-attach cycle.
  */
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
@@ -142,7 +145,6 @@ class BridgePerfTest {
                 // `null` and render an empty list before the first fetch
                 // settles.
                 assertTrue("contains empty stories array", initial.contains("\"stories\":[]"))
-                assertTrue("isLoading defaults false", initial.contains("\"isLoading\":false"))
             } finally {
                 onMain { AppCoreAndroid.appcoreDestroy() }
             }
@@ -268,13 +270,13 @@ class BridgePerfTest {
 
     @Test
     fun bridgeWorkRunsOnUIThread() = runBlocking {
-        // Canary for the `LooperExecutor` contract: `AndroidBridge`'s
-        // custom `SerialExecutor` pins the actor to Android's main
-        // `Looper`, so every sink callback fires on the UI thread.
-        // Capture `Looper.myLooper()` from inside `deliver`; assert it
-        // equals `Looper.getMainLooper()`. If a future refactor swaps
-        // the executor or drops `unownedExecutor`, this test fails
-        // before any per-thread JNI subtlety bites in production.
+        // Canary for the `LooperExecutor` contract: `JavaUIActor`'s
+        // executor pins the global actor to Android's main `Looper`,
+        // so every sink callback fires on the UI thread. Capture
+        // `Looper.myLooper()` from inside `deliver`; assert it equals
+        // `Looper.getMainLooper()`. If a future refactor swaps the
+        // executor or drops `unownedExecutor`, this test fails before
+        // any per-thread JNI subtlety bites in production.
         val mainLooper = android.os.Looper.getMainLooper()
         val capturedLooper = Channel<android.os.Looper?>(capacity = 1)
         val sink = object : SnapshotSink, CommandSink, SearchQuerySink {

@@ -24,9 +24,7 @@ public final class AndroidCommands<C: Encodable & Sendable> {
 
     public func start() {
         task?.cancel()
-        let stream = self.stream
-        let sink = self.sink
-        task = Task {
+        task = Task { [stream, sink] in
             for await command in stream {
                 sink.deliverCommand(commandJSON: JNICoder.encode(command))
             }

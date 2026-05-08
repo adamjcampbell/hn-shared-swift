@@ -38,9 +38,7 @@ public final class AndroidSnapshot<S: Encodable> {
 
     public func start() {
         task?.cancel()
-        let source = self.source
-        let sink = self.sink
-        task = Task {
+        task = Task { [source, sink] in
             var lastJSON: String?
             for await json in Observations({ JNICoder.encode(source()) }) {
                 guard json != lastJSON else { continue }

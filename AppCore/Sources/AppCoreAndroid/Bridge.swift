@@ -37,31 +37,38 @@ enum Bridge {
     /// fine because all accesses stay inside `@JavaUIActor` isolation.
     static let appModel = AppModel()
 
-    private static var snapshotPump: AndroidSnapshot<AppState>?
-    private static var commandPump: AndroidCommands<AppCommand>?
-    private static var searchQueryBinding: AndroidBinding<String>?
-    private static var queryWatcherTask: Task<Void, Never>?
+    private static var snapshotPump: AndroidSnapshot<AppState>!
+    private static var commandPump: AndroidCommands<AppCommand>!
+    private static var searchQueryBinding: AndroidBinding<AppState, String>!
+    private static var queryWatcherTask: Task<Void, Never>!
 
-    /// Wire up all three sinks and start the pumps + watcher. Idempotent.
+    /// Wire up all three sinks and start the pumps + watcher.
+    ///
+    /// **Once-and-only-once contract.** Production calls [attach]
+    /// exactly once at app startup (`AppCoreApplication.onCreate` →
+    /// `AppModelHolder.start()` → `appcoreCreate`). The precondition
+    /// catches accidental double-attach loudly. Tests are allowed to
+    /// cycle by calling [detach] between cases — every attach is
+    /// preceded by a prior detach, so the precondition holds.
     static func attach(
         snapshotSink: any SnapshotSink,
         commandSink: any CommandSink,
         searchQuerySink: any SearchQuerySink
     ) {
-        detach()
+        precondition(snapshotPump == nil, "Bridge.attach called while already attached")
 
         snapshotPump = AndroidSnapshot(source: { appModel.state }, sink: snapshotSink)
-        snapshotPump?.start()
+        snapshotPump.start()
 
         commandPump = AndroidCommands(stream: appModel.commands, sink: commandSink)
-        commandPump?.start()
+        commandPump.start()
 
         searchQueryBinding = AndroidBinding(
-            read: { appModel.state.searchQuery },
-            write: { appModel.state.searchQuery = $0 },
-            deliver: { searchQuerySink.deliverSearchQuery(value: $0) }
+            root: appModel.state,
+            keyPath: \.searchQuery,
+            deliver: searchQuerySink.deliverSearchQuery(value:)
         )
-        searchQueryBinding?.start()
+        searchQueryBinding.start()
 
         queryWatcherTask = Task {
             await appModel.runSearchQueryWatcher()
@@ -70,7 +77,8 @@ enum Bridge {
 
     /// Idempotent teardown. Leaves `appModel` and its `commands` stream
     /// untouched so a subsequent [attach] picks up where we left off
-    /// (one model per process; sinks change, the model doesn't).
+    /// (one model per process; sinks change, the model doesn't). Used
+    /// by tests between cases — production never calls this.
     static func detach() {
         snapshotPump?.stop(); snapshotPump = nil
         commandPump?.stop(); commandPump = nil
@@ -106,18 +114,17 @@ enum Bridge {
 
     /// Per-property setter for `state.searchQuery`. Compose calls this
     /// on every keystroke through the JNI thunk; the binding records
-    /// the value for echo dedup before applying the write.
+    /// the value for echo dedup before applying the write. Traps
+    /// loudly if called before [attach].
     static func handleSetSearchQuery(_ value: String) {
-        searchQueryBinding?.set(value)
+        searchQueryBinding.set(value)
     }
 
     /// Per-property getter. Compose's `BridgedSource` reads through
     /// this on each composition for `produceState(initialValue:)`'s
-    /// cold-start seed. Returns "" before [attach] runs (the JNI
-    /// thunk shouldn't be called pre-attach, but the empty default
-    /// keeps the contract total).
+    /// cold-start seed. Traps loudly if called before [attach].
     static func getSearchQuery() -> String {
-        searchQueryBinding?.get() ?? ""
+        searchQueryBinding.get()
     }
 }
 #endif
