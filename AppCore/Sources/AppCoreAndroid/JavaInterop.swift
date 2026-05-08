@@ -1,11 +1,12 @@
 import SwiftJava
 
-/// `JavaSnapshotSink`, `JavaCommandSink`, and `JavaSearchQuerySink` are
-/// jextract-generated Swift wrappers for the Kotlin-implemented
-/// `SnapshotSink` / `CommandSink` / `SearchQuerySink` interfaces. They
-/// are thin handles to a JNI `jobject` and are safe to share across
-/// isolation domains: jextract's generated thunks attach/detach the JVM
-/// thread per call.
+/// `JavaSnapshotSink`, `JavaCommandSink`, `JavaSearchQuerySink`, and
+/// `JavaDispatchCompletion` are jextract-generated Swift wrappers for
+/// the Kotlin-implemented `SnapshotSink` / `CommandSink` /
+/// `SearchQuerySink` / `DispatchCompletion` interfaces. They are thin
+/// handles to a JNI `jobject` and are safe to share across isolation
+/// domains: jextract's generated thunks attach/detach the JVM thread
+/// per call.
 ///
 /// The swift-java tool does not yet mark `@JavaInterface`-generated
 /// wrappers as `Sendable`, so we adopt it here. These are the only
@@ -17,3 +18,4 @@ import SwiftJava
 extension JavaSnapshotSink: @unchecked Sendable {}
 extension JavaCommandSink: @unchecked Sendable {}
 extension JavaSearchQuerySink: @unchecked Sendable {}
+extension JavaDispatchCompletion: @unchecked Sendable {}

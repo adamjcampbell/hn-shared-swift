@@ -68,6 +68,29 @@ public func appcoreDispatch(eventJSON: String) {
     #endif
 }
 
+/// Awaitable cousin of `appcoreDispatch(eventJSON:)`. Mirrors iOS's
+/// `AppEventDispatch.run(_:) async` — the awaitable side of the
+/// sync/async dispatch duality. The Kotlin-side `suspendCancellableCoroutine`
+/// wrapper passes a single-shot `DispatchCompletion`; this thunk hands
+/// it to `enqueueAwaitableDispatch`, which spawns a Task that awaits the
+/// model dispatch end-to-end and then fires `completion.complete()`.
+///
+/// Pull-to-refresh in Compose is the primary consumer: the awaiting
+/// coroutine keeps the indicator visible for the full fetch lifetime,
+/// no race with snapshot propagation. Decode failures complete
+/// immediately so a malformed event doesn't strand a Kotlin coroutine.
+public func appcoreDispatchAwait(eventJSON: String, completion: some DispatchCompletion) {
+    guard let event: AppEvent = JNICoder.decode(from: eventJSON) else {
+        completion.complete()
+        return
+    }
+    #if canImport(Android)
+    AndroidBridge.shared.assumeIsolated { $0.enqueueAwaitableDispatch(event, completion: completion) }
+    #else
+    completion.complete()
+    #endif
+}
+
 /// Per-property setter for `state.searchQuery`. Compose calls this on
 /// every keystroke. The bridge dedups echoes via `lastSetterValue` so
 /// the value Compose just typed isn't pushed back through `SearchQuerySink`

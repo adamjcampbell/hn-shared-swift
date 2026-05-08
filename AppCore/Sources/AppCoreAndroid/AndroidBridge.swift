@@ -166,6 +166,20 @@ actor AndroidBridge {
         Task { await self.appModel.dispatch(event) }
     }
 
+    /// Sync, awaitable-on-the-Kotlin-side cousin of `enqueueDispatch(_:)`.
+    /// Mirrors iOS's `AppEventDispatch.run(_:) async`. Spawns a Task that
+    /// `await`s the model dispatch end-to-end, then fires `completion`
+    /// so the Kotlin caller's `suspendCancellableCoroutine` resumes.
+    /// Pull-to-refresh in Compose is the primary consumer; the awaiting
+    /// coroutine keeps the indicator visible for the full fetch lifetime
+    /// without racing snapshot propagation.
+    func enqueueAwaitableDispatch(_ event: AppEvent, completion: some DispatchCompletion) {
+        Task { [self] in
+            await self.dispatch(event)
+            completion.complete()
+        }
+    }
+
     /// Per-property setter for `state.searchQuery`. Records the value
     /// in `lastSetterValue` so the matching emission from
     /// `searchQueryTask` is suppressed (echo dedup), then writes the

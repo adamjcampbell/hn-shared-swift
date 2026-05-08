@@ -6,11 +6,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.CommandSink
+import com.example.appcore.bridge.DispatchCompletion
 import com.example.appcore.bridge.SearchQuerySink
 import com.example.appcore.bridge.SnapshotSink
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -167,6 +169,33 @@ object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink {
 
     fun dispatch(event: AppEvent) {
         AppCoreAndroid.appcoreDispatch(json.encodeToString(AppEvent.serializer(), event))
+    }
+
+    /**
+     * Awaitable cousin of [dispatch] — mirrors iOS's
+     * `AppEventDispatch.run(_:) async`. The coroutine suspends until the
+     * Swift dispatch completes (the model's full `runFetch` for `.refresh`,
+     * the synchronous reducer for the others). Pull-to-refresh's onRefresh
+     * uses this so its indicator stays visible for the actual fetch
+     * lifetime, not for the snapshot-propagation race window.
+     *
+     * Cancellation: if the calling coroutine is cancelled before
+     * completion fires, [DispatchCompletion.complete] resolves a no-longer-
+     * active continuation (which we silently drop). The Swift-side Task
+     * continues to completion; for `.refresh` the in-flight fetch is
+     * cancel-and-replaced internally by the next dispatch, so leaking is
+     * benign. Cross-language cancellation is a future enhancement.
+     */
+    suspend fun dispatchAwait(event: AppEvent): Unit = suspendCancellableCoroutine { cont ->
+        val completion = object : DispatchCompletion {
+            override fun complete() {
+                if (cont.isActive) cont.resume(Unit) { _, _, _ -> }
+            }
+        }
+        AppCoreAndroid.appcoreDispatchAwait(
+            json.encodeToString(AppEvent.serializer(), event),
+            completion,
+        )
     }
 }
 
