@@ -26,8 +26,10 @@ both UIs only render the snapshot.
   primitives. `AndroidSnapshot` runs an `Observations` task → JSON
   snapshot → Java callback → Compose recomposition. Most mutations go
   through `appcoreDispatch(eventJSON:)`; `appcoreDispatchAwait(...)` is
-  the awaitable variant for pull-to-refresh; `searchQuery` rides the
-  per-property `AndroidBinding`.
+  the awaitable variant for pull-to-refresh; `searchQuery` and
+  `isLoading` ride per-property `AndroidBinding`s (the former is
+  two-way for typing, the latter is one-way Swift→Kotlin driving the
+  spinner + empty-overlay flicker guard).
 - Networking lives in Swift: `HNClient` is a `Sendable` struct with
   two `@Sendable` closure properties (`frontPage`, `search`), injected
   into `AppModel.init`. The struct shape is the natural mock point —
@@ -219,11 +221,12 @@ Per spec §12 plus what verification surfaced:
   the two. See the doc-comment on `JavaUIActor.swift` for the verified
   diagnostic.
   - **Sync thunk contract.** `appcoreCreate`, `appcoreSetSearchQuery`,
-    and `appcoreDestroy` execute their actor work synchronously and
-    only return after the mutation has taken effect. This tightens
-    spec §9's old fire-and-forget contract; the JNI inbound mutation
-    path is now strict-sync. The async snapshot *delivery* path
-    (Observations → JSON → SnapshotSink) is still asynchronous.
+    `appcoreSetIsLoading`, and `appcoreDestroy` execute their actor
+    work synchronously and only return after the mutation has taken
+    effect. This tightens spec §9's old fire-and-forget contract;
+    the JNI inbound mutation path is now strict-sync. The async
+    snapshot *delivery* path (Observations → JSON → SnapshotSink) is
+    still asynchronous.
   - **`appcoreDispatch` mirrors iOS's `AppEventDispatch` split.**
     `Bridge.dispatch(_:) async` is the awaitable form;
     `Bridge.enqueueDispatch(_:)` is sync, fire-and-forget (spawns an

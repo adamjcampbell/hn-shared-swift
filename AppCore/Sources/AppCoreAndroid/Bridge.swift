@@ -44,6 +44,7 @@ enum Bridge {
     private static var snapshotPump: AndroidSnapshot<AppState>!
     private static var commandPump: AndroidCommands<AppCommand>!
     private static var searchQueryBinding: AndroidBinding<AppState, String>!
+    private static var isLoadingBinding: AndroidBinding<AppState, Bool>!
     private static var queryWatcherTask: Task<Void, Never>!
 
     /// Wire up all three sinks and start the pumps + watcher.
@@ -57,7 +58,8 @@ enum Bridge {
     static func attach(
         snapshotSink: any SnapshotSink,
         commandSink: any CommandSink,
-        searchQuerySink: any SearchQuerySink
+        searchQuerySink: any SearchQuerySink,
+        isLoadingSink: any IsLoadingSink
     ) {
         precondition(snapshotPump == nil, "Bridge.attach called while already attached")
 
@@ -74,6 +76,13 @@ enum Bridge {
         )
         searchQueryBinding.start()
 
+        isLoadingBinding = AndroidBinding(
+            root: appModel.state,
+            keyPath: \.isLoading,
+            deliver: isLoadingSink.deliverIsLoading(value:)
+        )
+        isLoadingBinding.start()
+
         queryWatcherTask = Task {
             await appModel.runSearchQueryWatcher()
         }
@@ -87,6 +96,7 @@ enum Bridge {
         snapshotPump?.stop(); snapshotPump = nil
         commandPump?.stop(); commandPump = nil
         searchQueryBinding?.stop(); searchQueryBinding = nil
+        isLoadingBinding?.stop(); isLoadingBinding = nil
         queryWatcherTask?.cancel(); queryWatcherTask = nil
     }
 
@@ -129,6 +139,23 @@ enum Bridge {
     /// cold-start seed. Traps loudly if called before [attach].
     static func getSearchQuery() -> String {
         searchQueryBinding.get()
+    }
+
+    /// Per-property setter for `state.isLoading`. Functionally unused
+    /// today — `isLoading` is a one-way Swift→Kotlin signal owned by
+    /// `runFetch` — but kept for parity with the `searchQuery` shape so
+    /// `AndroidBinding`'s two-way contract holds and `BridgedSource`'s
+    /// `writeThrough` has a real entry point. Traps loudly if called
+    /// before [attach].
+    static func handleSetIsLoading(_ value: Bool) {
+        isLoadingBinding.set(value)
+    }
+
+    /// Per-property getter for `state.isLoading`. Used by Compose's
+    /// `BridgedSource` for the cold-start seed before the first
+    /// observation lands. Traps loudly if called before [attach].
+    static func getIsLoading() -> Bool {
+        isLoadingBinding.get()
     }
 }
 #endif

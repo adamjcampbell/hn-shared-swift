@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import com.example.appcore.bridge.AndroidCompletion
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.CommandSink
+import com.example.appcore.bridge.IsLoadingSink
 import com.example.appcore.bridge.SearchQuerySink
 import com.example.appcore.bridge.SnapshotSink
 import kotlinx.coroutines.channels.Channel
@@ -100,11 +101,13 @@ sealed class AppCommand {
  * `state`.
  *
  * **Loading state:** `loadError` comes straight from Swift on the
- * snapshot. There is deliberately no `isLoading` field — pull-to-refresh
- * drives its indicator from the lifetime of [dispatchAwait], mirroring
- * iOS's `.refreshable { await dispatch.run(.refresh) }` contract.
+ * snapshot. `isLoading` rides a per-property bridge instead — same
+ * shape as `searchQuery`, exposed as [isLoading] below — so the
+ * pull-to-refresh indicator and the empty-overlay flicker guard
+ * fire on every fetch (search-typing debounce + explicit `.refresh`),
+ * not just on the latter.
  */
-object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink {
+object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink, IsLoadingSink {
     var state by mutableStateOf<AppState?>(null)
         private set
 
@@ -123,6 +126,19 @@ object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink {
         writeThrough = AppCoreAndroid::appcoreSetSearchQuery,
     )
 
+    /**
+     * Per-property bridged `isLoading`. Compose binds via
+     * `holder.isLoading.asMutableState()` (same shape as
+     * [searchQuery] for parity with `AndroidBinding`'s two-way
+     * contract), but in practice the value is one-way Swift→Kotlin:
+     * only `runFetch` writes it. Drives the pull-to-refresh indicator
+     * and the empty-overlay flicker guard.
+     */
+    val isLoading = BridgedSource<Boolean>(
+        readThrough = AppCoreAndroid::appcoreGetIsLoading,
+        writeThrough = AppCoreAndroid::appcoreSetIsLoading,
+    )
+
     private val json = Json {
         classDiscriminator = "type"
         ignoreUnknownKeys = true
@@ -139,7 +155,7 @@ object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink {
     val commands: Flow<AppCommand> get() = _commands.receiveAsFlow()
 
     fun start() {
-        AppCoreAndroid.appcoreCreate(this, this, this)
+        AppCoreAndroid.appcoreCreate(this, this, this, this)
     }
 
     /** Called from Swift via JNI on every Observations transaction. */
@@ -165,6 +181,17 @@ object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink {
      */
     override fun deliverSearchQuery(value: String) {
         searchQuery.deliver(value)
+    }
+
+    /**
+     * Called from Swift via JNI on every `state.isLoading` transition.
+     * Bridge `lastSetterValue` dedup suppresses echoes of any
+     * Compose-originated writes (in practice none — only `runFetch`
+     * writes `isLoading`), so this fires on the cold-start emission
+     * and every fetch start/finish.
+     */
+    override fun deliverIsLoading(value: Boolean) {
+        isLoading.deliver(value)
     }
 
     fun dispatch(event: AppEvent) {

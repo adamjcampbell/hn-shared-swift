@@ -122,10 +122,9 @@ struct AppStateWireTests {
         // + `SearchQuerySink`, not via this snapshot.
         #expect(!json.contains("\"searchQuery\""))
         #expect(!json.contains("\"rust\""))
-        // isLoading is deliberately not part of the snapshot — pull-to-refresh
-        // on both platforms tracks the lifetime of the awaited dispatch
-        // (`.refreshable { await dispatch.run(.refresh) }` on iOS,
-        // `holder.dispatchAwait(.refresh)` on Android).
+        // isLoading is per-property bridged via `appcoreSetIsLoading`
+        // + `IsLoadingSink` (same shape as searchQuery), not via this
+        // snapshot — so it must stay out of the JSON wire format.
         #expect(!json.contains("\"isLoading\""))
         // No underscore-prefixed key — guards against the @Observable
         // macro's backing storage leaking into the wire if anyone

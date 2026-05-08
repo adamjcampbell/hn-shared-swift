@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.CommandSink
+import com.example.appcore.bridge.IsLoadingSink
 import com.example.appcore.bridge.SearchQuerySink
 import com.example.appcore.bridge.SnapshotSink
 import kotlinx.coroutines.channels.Channel
@@ -70,9 +71,10 @@ class BridgePerfTest {
         }
     }
 
-    private class CapturingSink : SnapshotSink, CommandSink, SearchQuerySink {
+    private class CapturingSink : SnapshotSink, CommandSink, SearchQuerySink, IsLoadingSink {
         val channel = Channel<String>(capacity = Channel.UNLIMITED)
         val searchQueryChannel = Channel<String>(capacity = Channel.UNLIMITED)
+        val isLoadingChannel = Channel<Boolean>(capacity = Channel.UNLIMITED)
         override fun deliver(snapshotJSON: String) {
             channel.trySend(snapshotJSON)
         }
@@ -83,6 +85,11 @@ class BridgePerfTest {
         // the searchQuery-specific tests can await them.
         override fun deliverSearchQuery(value: String) {
             searchQueryChannel.trySend(value)
+        }
+        // Per-property `isLoading` deliveries — exposed separately for
+        // tests that want to observe fetch-lifecycle transitions.
+        override fun deliverIsLoading(value: Boolean) {
+            isLoadingChannel.trySend(value)
         }
     }
 
@@ -142,7 +149,7 @@ class BridgePerfTest {
         // with `a_coldStart_initialSnapshotDelivered` to guard the second
         // half of the bridge's two-channel cold-start contract.
         val sink = CapturingSink()
-        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink, sink) }
         try {
             val initial = withTimeout(50) { sink.searchQueryChannel.receive() }
             assertEquals("cold-start searchQuery is empty", "", initial)
@@ -155,7 +162,7 @@ class BridgePerfTest {
     fun a_coldStart_initialSnapshotDelivered() = runBlocking {
         val sink = CapturingSink()
         val nanos = measureNanoTime {
-            onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
+            onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink, sink) }
             try {
                 // 50 ms is generous — the bridge actor's attach() task
                 // spawns and emits the initial Observations value within
@@ -179,7 +186,7 @@ class BridgePerfTest {
     @Test
     fun syncJniCall_overhead() = runBlocking {
         val sink = CapturingSink()
-        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink, sink) }
         try {
             // Drain the cold-start snapshot.
             withTimeout(5_000) { sink.channel.receive() }
@@ -206,7 +213,7 @@ class BridgePerfTest {
     @Test
     fun endToEnd_toggleRoundTrip() = runBlocking {
         val sink = CapturingSink()
-        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink, sink) }
         try {
             // Drain the cold-start snapshot.
             withTimeout(5_000) { sink.channel.receive() }
@@ -246,7 +253,7 @@ class BridgePerfTest {
     @Test
     fun snapshotPayload_size() = runBlocking {
         val sink = CapturingSink()
-        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink, sink) }
         try {
             // Drain the initial Observations emission.
             withTimeout(5_000) { sink.channel.receive() }
@@ -303,14 +310,15 @@ class BridgePerfTest {
         // any per-thread JNI subtlety bites in production.
         val mainLooper = android.os.Looper.getMainLooper()
         val capturedLooper = Channel<android.os.Looper?>(capacity = 1)
-        val sink = object : SnapshotSink, CommandSink, SearchQuerySink {
+        val sink = object : SnapshotSink, CommandSink, SearchQuerySink, IsLoadingSink {
             override fun deliver(snapshotJSON: String) {
                 capturedLooper.trySend(android.os.Looper.myLooper())
             }
             override fun deliverCommand(commandJSON: String) {}
             override fun deliverSearchQuery(value: String) {}
+            override fun deliverIsLoading(value: Boolean) {}
         }
-        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink, sink) }
         try {
             val looper = withTimeout(5_000) { capturedLooper.receive() }
             assertEquals(
@@ -331,7 +339,7 @@ class BridgePerfTest {
         // waiting on any async round-trip. The Kotlin `BridgedSource`
         // relies on this for `produceState`'s initial-value seeding.
         val sink = CapturingSink()
-        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink, sink) }
         try {
             // Drain cold-start.
             withTimeout(5_000) { sink.channel.receive() }
@@ -365,7 +373,7 @@ class BridgePerfTest {
         //      is what prevents Compose's local mirror from getting
         //      clobbered by echoes of writes it just sent.)
         val sink = CapturingSink()
-        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink) }
+        onMain { AppCoreAndroid.appcoreCreate(sink, sink, sink, sink) }
         try {
             // Drain cold-start snapshot + cold-start searchQuery emission.
             withTimeout(5_000) { sink.channel.receive() }

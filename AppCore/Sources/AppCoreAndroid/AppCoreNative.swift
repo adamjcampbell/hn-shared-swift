@@ -40,7 +40,8 @@ import AppCore
 public func appcoreCreate(
     snapshotSink: some SnapshotSink,
     commandSink: some CommandSink,
-    searchQuerySink: some SearchQuerySink
+    searchQuerySink: some SearchQuerySink,
+    isLoadingSink: some IsLoadingSink
 ) {
     // `Observations` (Swift 6.2+) emits an initial value as well as all
     // future ones (see WWDC25 *What's new in Swift*), so `Bridge.attach`
@@ -49,14 +50,16 @@ public func appcoreCreate(
     // Compose reads `AppModelHolder.state` as a nullable `AppState?`, so
     // the brief window before that emission lands renders the same
     // empty-state UI as the initial snapshot would have. The
-    // `searchQuerySink` similarly emits the cold-start value of
-    // `state.searchQuery` (initially `""`) within the same window.
+    // `searchQuerySink` and `isLoadingSink` similarly emit the cold-start
+    // values of `state.searchQuery` (initially `""`) and `state.isLoading`
+    // (initially `false`) within the same window.
     #if canImport(Android)
     JavaUIActor.assumeIsolated {
         Bridge.attach(
             snapshotSink: snapshotSink,
             commandSink: commandSink,
-            searchQuerySink: searchQuerySink
+            searchQuerySink: searchQuerySink,
+            isLoadingSink: isLoadingSink
         )
     }
     #endif
@@ -115,6 +118,28 @@ public func appcoreGetSearchQuery() -> String {
     return JavaUIActor.assumeIsolated { Bridge.getSearchQuery() }
     #else
     return ""
+    #endif
+}
+
+/// Per-property setter for `state.isLoading`. Functionally unused on
+/// the Android side (the value is one-way Swift→Kotlin owned by
+/// `runFetch`); exposed for parity with `appcoreSetSearchQuery` so the
+/// `AndroidBinding` + `BridgedSource` shape is uniform across bridged
+/// primitives.
+public func appcoreSetIsLoading(value: Bool) {
+    #if canImport(Android)
+    JavaUIActor.assumeIsolated { Bridge.handleSetIsLoading(value) }
+    #endif
+}
+
+/// Per-property getter for `state.isLoading`. Same role as
+/// `appcoreGetSearchQuery`: Compose's `BridgedSource` reads through
+/// this for `produceState(initialValue:)`'s cold-start seed.
+public func appcoreGetIsLoading() -> Bool {
+    #if canImport(Android)
+    return JavaUIActor.assumeIsolated { Bridge.getIsLoading() }
+    #else
+    return false
     #endif
 }
 

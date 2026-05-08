@@ -39,11 +39,9 @@ import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +54,7 @@ import com.example.appcore.state.AppCommand
 import com.example.appcore.state.AppEvent
 import com.example.appcore.state.AppState
 import com.example.appcore.state.Story
+import com.example.appcore.state.asMutableState
 import com.example.appcore.state.asState
 import com.example.appcore.state.rememberAppModel
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -108,9 +107,16 @@ fun StoryScreen() {
         // we sync it to/from `holder.searchQuery` via two snapshotFlow
         // collectors below.
         val authoritativeSearchQuery by holder.searchQuery.asState()
+        // isLoading flows through the per-property bridge as well — the
+        // model's `runFetch` is the single writer, so this is one-way
+        // Swift→Kotlin in practice. `asMutableState` matches the
+        // searchQuery shape (and Compose's `var x by state` ergonomics)
+        // even though no consumer here actually writes.
+        val isRefreshing by holder.isLoading.asMutableState()
         StoriesContent(
             state = state,
             authoritativeSearchQuery = authoritativeSearchQuery,
+            isRefreshing = isRefreshing,
             onSearchQueryWrite = holder.searchQuery::set,
             onRefresh = { holder.dispatchAwait(AppEvent.Refresh) },
             onToggleRead = { holder.dispatch(AppEvent.ToggleRead(it)) },
@@ -128,6 +134,7 @@ fun StoryScreen() {
 private fun StoriesContent(
     state: AppState?,
     authoritativeSearchQuery: String,
+    isRefreshing: Boolean,
     onSearchQueryWrite: (String) -> Unit,
     onRefresh: suspend () -> Unit,
     onToggleRead: (String) -> Unit,
@@ -169,18 +176,12 @@ private fun StoriesContent(
     val searchQuery = textFieldState.text.toString()
     val stories = state?.stories ?: emptyList()
 
-    // Pull-to-refresh's indicator is driven by the lifetime of the
-    // suspend onRefresh — matching iOS's `.refreshable { await … }`
-    // contract. Compose owns this state locally; no isLoading field
-    // rides the snapshot.
-    var isRefreshing by remember { mutableStateOf(false) }
-    val pullToRefresh: () -> Unit = {
-        scope.launch {
-            isRefreshing = true
-            try { onRefresh() }
-            finally { isRefreshing = false }
-        }
-    }
+    // Pull-to-refresh's indicator is driven by `state.isLoading` from
+    // AppCore via the per-property bridge — see [AppModelHolder.isLoading].
+    // The model's `runFetch` toggles it for every fetch (debounced
+    // search + explicit `.refresh`), so the indicator surfaces on
+    // search-typing fetches too, not just pull-to-refresh.
+    val pullToRefresh: () -> Unit = { scope.launch { onRefresh() } }
 
     val inputField: @Composable () -> Unit = remember(textFieldState, searchBarState, scope) {
         {

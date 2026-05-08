@@ -173,6 +173,7 @@ public final class AppModel {
     /// arm a single uniform "this run was superseded" path.
     public func runFetch(debounce: Duration? = nil) async {
         searchTask?.cancel()
+        state.isLoading = true
 
         let query = state.searchQuery
         let task = Task<[HNHit], Error> { [client, clock] in
@@ -194,12 +195,16 @@ public final class AppModel {
             state.hits = hits
             state.lastRefreshedAt = .now
             state.loadError = nil
+            state.isLoading = false
         } catch is CancellationError {
             // A newer dispatch superseded us. The newer one is responsible
-            // for committing its own result; nothing to do here.
+            // for committing its own result; leave isLoading=true so the
+            // spinner / empty-overlay guard stays asserted until that
+            // fetch settles.
             return
         } catch {
             state.loadError = error.localizedDescription
+            state.isLoading = false
         }
     }
 }

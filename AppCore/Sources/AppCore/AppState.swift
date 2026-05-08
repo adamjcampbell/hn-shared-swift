@@ -21,14 +21,18 @@ import Observation
 ///   `encode(to:)`.
 ///
 /// - **Stored sources of truth (per-property bridged, not encoded)** —
-///   `searchQuery`. Both platforms drive this directly: iOS via
-///   `@Bindable` + `$state.searchQuery`, Android via the per-property
-///   JNI setter `appcoreSetSearchQuery` and the matching
-///   `SearchQuerySink` push-back. The JSON snapshot deliberately omits
-///   it — for primitives that two-way-bind to a UI control, per-property
-///   bridging beats round-tripping through a snapshot. `AppModel`'s
-///   `withObservationTracking` watcher fires the debounced fetch on
-///   every write, regardless of which platform wrote it.
+///   `searchQuery`, `isLoading`. Both platforms drive `searchQuery`
+///   directly: iOS via `@Bindable` + `$state.searchQuery`, Android via
+///   the per-property JNI setter `appcoreSetSearchQuery` and the
+///   matching `SearchQuerySink` push-back. `isLoading` is one-way in
+///   practice (only `runFetch` writes it), but rides the same
+///   `AndroidBinding` machinery on Android via `IsLoadingSink`. The
+///   JSON snapshot deliberately omits both — for primitives that
+///   bind to a UI control or feed a UI predicate per change,
+///   per-property bridging beats round-tripping through a snapshot.
+///   `AppModel`'s `runSearchQueryWatcher` fires the debounced fetch
+///   on every `searchQuery` write, regardless of which platform wrote
+///   it.
 ///
 /// - **Stored sources of truth (internal — not encoded)** — `hits`
 ///   and `readIds`. The working set behind `dispatch(_:)`; never
@@ -41,11 +45,15 @@ import Observation
 ///   render. Computed properties aren't seen by `Codable` synthesis,
 ///   so this is the one field `encode(to:)` writes by hand.
 ///
-/// **Spinner / loading state is NOT a model concern.** Pull-to-refresh
-/// indicators on both platforms are driven by the lifetime of the
-/// awaited dispatch (iOS `.refreshable { await dispatch.run(.refresh) }`,
-/// Android `holder.dispatchAwait(.refresh)` from inside Compose's
-/// `onRefresh` coroutine). No `isLoading` field rides the snapshot.
+/// **`isLoading` is bridged per-property, not via the snapshot.**
+/// Pull-to-refresh indicator + empty-overlay flicker guard both want
+/// per-fetch granularity (search-typing debounced fetches, not just
+/// explicit `.refresh`); reading `state.isLoading` is the natural shape
+/// on both platforms. iOS reads it directly through SwiftUI's tracking;
+/// Android consumes it via `IsLoadingSink` + `BridgedSource` (same
+/// machinery as `searchQuery`). It's deliberately not in the JSON
+/// snapshot — primitives that drive UI predicates on every change ride
+/// the per-property bridge.
 ///
 /// `Encodable` rather than `Codable` because the JSON only travels
 /// Swift → Kotlin — we never decode an `AppState` on the Swift side.
@@ -58,6 +66,7 @@ public final class AppState: Encodable {
     // MARK: Stored sources of truth (per-property bridged, not encoded)
 
     public var searchQuery: String = ""
+    public var isLoading: Bool = false
 
     // MARK: Stored sources of truth (encoded)
 
@@ -90,8 +99,8 @@ public final class AppState: Encodable {
         try container.encode(stories, forKey: .stories)
         try container.encodeIfPresent(lastRefreshedAt, forKey: .lastRefreshedAt)
         try container.encodeIfPresent(loadError, forKey: .loadError)
-        // searchQuery is intentionally absent — see the type-level
-        // doc-comment. It crosses JNI via its own setter + sink, not
-        // via this snapshot.
+        // searchQuery and isLoading are intentionally absent — see the
+        // type-level doc-comment. They cross JNI via their own setter +
+        // sink, not via this snapshot.
     }
 }

@@ -87,7 +87,11 @@ header card and search bar — visually equivalent to the Android variant
 (spec §10.7). Compose-side behaviours (toggle-read flips strikethrough,
 pull-to-refresh updates the timestamp, debounced search) are implemented
 identically on iOS via `@Observable` + SwiftUI's built-in observation
-tracking. iOS keeps an inline `ProgressView` in the header card because
-`.refreshable`'s spinner is gesture-driven only; Android dropped its
-inline indicator since `PullToRefreshBox(isRefreshing = …)` is
-programmatic and shows for cold-start fetches too.
+tracking. Loading state lives on `AppState.isLoading` (per-property
+bridged to Android via `IsLoadingSink`); iOS reads it directly to gate
+the empty-search-results overlay (suppressing the flicker that would
+otherwise appear during a debounced query change), and `.refreshable`
+owns the pull-to-refresh spinner via the awaited dispatch lifetime.
+Android drives `PullToRefreshBox(isRefreshing = …)` from the same
+`isLoading` value, so the indicator surfaces on search-typing
+fetches too.

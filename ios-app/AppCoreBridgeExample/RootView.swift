@@ -93,11 +93,13 @@ private struct SearchResults: View {
             // Empty-search-results overlay. Only fires when the user
             // has typed a query but nothing matches — an empty front
             // page would be a network failure surfaced via loadError
-            // on the underlying StoriesList instead. May flash briefly
-            // during a query change while the debounced fetch is in
-            // flight; accepting that to keep loading state out of the
-            // model.
-            if state.stories.isEmpty && !state.searchQuery.isEmpty {
+            // on the underlying StoriesList instead. The `!isLoading`
+            // guard suppresses the brief window during a debounced
+            // query change where stories are stale-empty before the
+            // new fetch lands.
+            if !state.isLoading
+                && state.stories.isEmpty
+                && !state.searchQuery.isEmpty {
                 EmptyResultsOverlay(query: state.searchQuery)
             }
         }
