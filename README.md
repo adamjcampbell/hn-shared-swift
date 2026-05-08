@@ -16,12 +16,16 @@ goals and non-goals at a glance.
 ## Layout
 
 - `AppCore/` — SwiftPM package with three targets:
-  - `AppCore` — the cross-platform `@Observable` model (`AppState`, `City`,
-    `Snapshot`). Consumed directly by iOS.
-  - `AppCoreAndroid` — Android-only JNI bridge. Friendly Swift functions plus
-    an `AndroidBridge` actor that owns an `AppState` and an `Observations`
-    task; jextract turns it into a `.so` + Java surface.
-  - `AppCoreTests` — XCTest/Swift Testing target running on macOS.
+  - `AppCore` — the cross-platform `@Observable` model (`AppState`,
+    `Story`, `AppEvent`/`AppCommand`). Consumed directly by iOS.
+  - `AppCoreAndroid` — Android-only JNI bridge. Friendly Swift functions
+    + a `JavaUIActor` global actor pinned to Android's main `Looper`,
+    with a `Bridge` namespace composed from `AndroidSnapshot` /
+    `AndroidCommands` / `AndroidBinding` primitives. jextract turns
+    the public surface into a `.so` + Java interface set.
+  - `AppCoreTests` / `AppCoreAndroidTests` — Swift Testing targets;
+    `AppCoreTests` runs on macOS host, `AppCoreAndroidTests` cross-
+    compiles for Android too.
 - `ios-app/` — SwiftUI app generated from `project.yml` via `xcodegen`.
 - `android-app/` — Gradle project that builds `AppCoreAndroid` for Android
   via the Swift Android SDK and consumes it through
@@ -31,7 +35,7 @@ goals and non-goals at a glance.
 
 | Surface | Tested how | Status |
 |---|---|---|
-| `AppCore` SwiftPM target | `swift test --disable-sandbox` on macOS (JAVA_HOME=JDK 21), 17/17 tests pass in ~10 ms | ✅ |
+| `AppCore` SwiftPM target | `swift test --disable-sandbox` on macOS (JAVA_HOME=JDK 21), 28/28 tests pass | ✅ |
 | iOS app | `xcodebuild` for `iPhone 17 / iOS 26.4.1` simulator | ✅ |
 | Android: build | `./gradlew :app:assembleDebug` produces `app-debug.apk` | ✅ |
 | Android: cold start | `BridgePerfTest.a_coldStart_…` regression test (50 ms timeout) | ✅ |

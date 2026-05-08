@@ -55,8 +55,8 @@ class BridgedSource<T>(
     /**
      * Bridge-side push: cold-start initial + programmatic Swift writes.
      * Echoes of [set]-originated writes are filtered on the Swift side
-     * (`lastSetterValue` on `AndroidBridge`), so by the time this fires
-     * the value is genuinely new.
+     * (`lastSetterValue` on `AndroidBinding`), so by the time this
+     * fires the value is genuinely new.
      */
     fun deliver(value: T) {
         listeners.forEach { it(value) }

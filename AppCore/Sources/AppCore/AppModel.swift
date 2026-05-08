@@ -13,8 +13,9 @@ import FoundationNetworking
 ///
 /// - On iOS, SwiftUI views are `@MainActor`, so reads and mutations from a
 ///   view body happen on `MainActor`.
-/// - On Android, an `AndroidBridge` actor in `AppCoreAndroid` owns an
-///   instance of this type and serialises all access through its executor.
+/// - On Android, the `@JavaUIActor`-isolated `Bridge` namespace in
+///   `AppCoreAndroid` owns an instance of this type and serialises all
+///   access through `JavaUIActor`'s `LooperExecutor`-pinned executor.
 ///
 /// `AppState` is the `@Observable` reference; `AppModel` itself is not
 /// `@Observable` because its other fields (`client`, `clock`, `searchTask`,
@@ -37,9 +38,10 @@ public final class AppModel {
     /// One-shot commands from the model to the UI — the symmetric
     /// counterpart to `dispatch(_:)`. `dispatch(_:)` yields onto a single
     /// continuation; iOS subscribes from a long-lived `.task`, Android's
-    /// `AndroidBridge` subscribes from a Task that forwards JSON over JNI
-    /// to a `CommandSink`. There is one consumer per platform binary, so
-    /// the single-iterator constraint of `AsyncStream` is respected.
+    /// `Bridge`'s `AndroidCommands` pump subscribes from a Task that
+    /// forwards JSON over JNI to a `CommandSink`. There is one consumer
+    /// per platform binary, so the single-iterator constraint of
+    /// `AsyncStream` is respected.
     public let commands: AsyncStream<AppCommand>
 
     private let commandsContinuation: AsyncStream<AppCommand>.Continuation
@@ -97,7 +99,7 @@ public final class AppModel {
 
     /// Long-lived loop that drives a debounced fetch on every write to
     /// `state.searchQuery`. The host (`RootView`'s `.task` on iOS,
-    /// `AndroidBridge.attach` on Android) `await`s this from inside its
+    /// `Bridge.attach` on Android) `await`s this from inside its
     /// own Task; cancellation propagates from the host's surrounding
     /// Task.
     ///

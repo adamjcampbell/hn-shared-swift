@@ -28,7 +28,7 @@ private actor CallRecorder {
 }
 
 /// Mirrors the producer/consumer watcher pattern that `RootView` and
-/// `AndroidBridge` install in production. The body runs concurrently
+/// `Bridge` install in production. The body runs concurrently
 /// with the watcher; on body exit, the watcher's TaskGroup is cancelled.
 ///
 /// `[model]` capture is load-bearing on each `addTask`: without it,

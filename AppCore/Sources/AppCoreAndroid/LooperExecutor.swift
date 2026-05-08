@@ -5,8 +5,8 @@ import SwiftJavaJNICore
 
 /// Custom `SerialExecutor` that posts jobs onto Android's main `Looper`.
 ///
-/// Adopted by `AndroidBridge` (via its `nonisolated var unownedExecutor`)
-/// so the bridge actor's work runs on the Android UI thread —
+/// Adopted by `JavaUIActor` (via its `nonisolated var unownedExecutor`)
+/// so all `@JavaUIActor`-isolated work runs on the Android UI thread —
 /// `state.searchQuery` writes from `appcoreSetSearchQuery`, sink
 /// callbacks via `SnapshotSink` / `CommandSink` / `SearchQuerySink`,
 /// and the search-query watcher's debounced fetch trigger all land on
@@ -16,10 +16,10 @@ import SwiftJavaJNICore
 ///
 /// **Android-only.** This file compiles to nothing on macOS (the whole
 /// body is `#if canImport(Android)`-gated). On the macOS host build
-/// `AndroidBridge` falls through to the default actor executor, which
-/// is a real `SerialExecutor` — so we don't need a fake macOS impl.
-/// `swift test` doesn't pull `AppCoreAndroid` directly anyway, only
-/// jextract's macOS-side scan of the public-API signatures.
+/// `JavaUIActor` itself is also `#if canImport(Android)`-gated, so we
+/// don't need a fake macOS executor. `swift test` doesn't pull the
+/// Android-only bridge bodies; only jextract's macOS-side scan of the
+/// public-API signatures.
 ///
 /// **Bootstrap**: Kotlin's `LooperPoster` static object captures
 /// `Handler(Looper.getMainLooper())` in its static initializer, so the

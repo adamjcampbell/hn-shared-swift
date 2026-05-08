@@ -6,9 +6,9 @@ import android.os.Looper
 /**
  * Java side of `LooperExecutor`'s post-to-main mechanism.
  *
- * `AndroidBridge` (Swift) pins its custom `SerialExecutor` to Android's
- * main `Looper`. When Swift's runtime calls
- * `LooperExecutor.enqueue(_:)` from a non-UI thread (e.g. an
+ * `JavaUIActor` (Swift global actor) pins its custom `SerialExecutor`
+ * (`LooperExecutor`) to Android's main `Looper`. When Swift's runtime
+ * calls `LooperExecutor.enqueue(_:)` from a non-UI thread (e.g. an
  * `Observations` task waking up off-actor), the executor packs the job
  * pointer into a `Long` and calls `postToMain` here. We then
  * `Handler.post { … }` the work onto the main `Looper`, where Android
@@ -54,9 +54,9 @@ internal object LooperPoster {
      * "is the current thread the executor's expected thread?" — i.e.
      * Android's main `Looper`. Swift's runtime invokes `checkIsolated`
      * whenever it needs to verify actor isolation (e.g. inside
-     * `Actor.assumeIsolated`); without this hook the default impl
+     * `JavaUIActor.assumeIsolated`); without this hook the default impl
      * always traps because Swift can't otherwise tell that Android's
-     * main thread *is* the bridge actor's executor.
+     * main thread *is* the global actor's executor.
      */
     @JvmStatic
     fun isOnMainLooper(): Boolean =

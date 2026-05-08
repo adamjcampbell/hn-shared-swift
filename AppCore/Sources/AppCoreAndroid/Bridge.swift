@@ -15,10 +15,14 @@ import AppCore
 /// wrapping is the structural cost of getting global-actor isolation
 /// for what would otherwise be file-private globals.
 ///
-/// **Lifecycle.** [attach] is idempotent: a re-attach cancels the prior
-/// pumps and replaces the sinks (which is what tests need to do between
-/// cases without a dedicated reset hook). [detach] is the symmetric
-/// teardown that the `appcoreDestroy` JNI thunk calls.
+/// **Lifecycle.** [attach] is once-and-only-once: a `precondition`
+/// traps if it's called while already attached. Production calls it
+/// exactly once (`AppCoreApplication.onCreate` → `AppModelHolder.start()`
+/// → `appcoreCreate`); tests cycle by pairing each `appcoreCreate(...)`
+/// with a `finally { appcoreDestroy() }` (or a `@Before` reset hook —
+/// see `BridgePerfTest`). [detach] is the symmetric teardown that the
+/// `appcoreDestroy` JNI thunk calls — idempotent so a double-detach
+/// from a `finally` after a thrown setup is benign.
 ///
 /// **Cross-platform parity.** The `runSearchQueryWatcher` Task mirrors
 /// iOS's `RootView`'s `.task { await appModel.runSearchQueryWatcher() }`

@@ -10,8 +10,8 @@ import MetaCodable
 ///
 /// Delivered through `AppModel.commands: AsyncStream<AppCommand>`. iOS
 /// consumes it with `for await` from a `.task` modifier on a long-lived
-/// view; Android's `AndroidBridge` consumes it and forwards each command
-/// over JNI as JSON to a `CommandSink`.
+/// view; Android's `Bridge.commandPump` (an `AndroidCommands<AppCommand>`)
+/// consumes it and forwards each command over JNI as JSON to a `CommandSink`.
 ///
 /// **Why not call this an `Effect`?** TCA-style architectures reserve
 /// "Effect" for reducer-spawned async work that produces more actions,
