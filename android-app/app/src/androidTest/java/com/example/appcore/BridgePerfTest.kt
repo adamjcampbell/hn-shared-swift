@@ -12,6 +12,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,10 +42,33 @@ import kotlin.system.measureNanoTime
  * calls `appcoreDestroy`, so this test pattern (attach → work →
  * `finally { destroy }`) is the only place that exercises the
  * detach/re-attach cycle.
+ *
+ * **Lifecycle reset.** Instrumented tests run in the same process as
+ * the app, so `AppCoreApplication.onCreate` has already called
+ * `AppModelHolder.start()` (→ `appcoreCreate`) by the time JUnit
+ * starts. Without an explicit detach, the first test's
+ * `appcoreCreate(...)` would be the *second* attach and trip the
+ * precondition. The `@Before` below detaches before each test (a
+ * no-op when already detached) so each `@Test` body's
+ * `appcoreCreate(...)` lands in a clean state.
  */
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class BridgePerfTest {
+
+    /**
+     * Reset bridge state before each test. Runs on Android's main
+     * Looper because `Bridge.detach` is `@JavaUIActor`-isolated and
+     * the JNI thunk `assumeIsolated`s into that domain.
+     * `Bridge.detach` is idempotent, so this is a no-op when already
+     * detached.
+     */
+    @Before
+    fun resetBridge() {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            AppCoreAndroid.appcoreDestroy()
+        }
+    }
 
     private class CapturingSink : SnapshotSink, CommandSink, SearchQuerySink {
         val channel = Channel<String>(capacity = Channel.UNLIMITED)

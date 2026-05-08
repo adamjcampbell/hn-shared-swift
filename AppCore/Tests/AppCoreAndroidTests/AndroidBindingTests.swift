@@ -2,7 +2,7 @@
 import Foundation
 import Observation
 import Testing
-@testable import AppCoreAndroid
+import AppCoreAndroid
 
 /// Stand-in `@Observable` root used to exercise `AndroidBinding` in
 /// isolation. Mirrors the production shape (`AppState` is also
