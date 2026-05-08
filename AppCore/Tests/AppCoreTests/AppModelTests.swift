@@ -56,7 +56,6 @@ struct AppModelTests {
         #expect(model.state.stories.count == 2)
         #expect(model.state.stories.first?.title == "Top story")
         #expect(model.state.lastRefreshedAt != nil)
-        #expect(model.state.isLoading == false)
         #expect(model.state.loadError == nil)
     }
 
@@ -74,7 +73,6 @@ struct AppModelTests {
 
         #expect(model.state.stories.isEmpty)
         #expect(model.state.loadError != nil)
-        #expect(model.state.isLoading == false)
     }
 
     @Test("toggleRead adds and removes")
@@ -259,7 +257,6 @@ struct AppModelTests {
         #expect(model.state.searchQuery == "rust")
         #expect(model.state.stories.map(\.id) == ["100"])
         await #expect(calls.searchCalls == ["rust"])
-        #expect(model.state.isLoading == false)
     }
 
     @Test("rapid runFetch calls coalesce — only the latest fires")

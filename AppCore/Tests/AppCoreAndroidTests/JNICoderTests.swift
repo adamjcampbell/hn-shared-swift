@@ -122,6 +122,11 @@ struct AppStateWireTests {
         // + `SearchQuerySink`, not via this snapshot.
         #expect(!json.contains("\"searchQuery\""))
         #expect(!json.contains("\"rust\""))
+        // isLoading is deliberately not part of the snapshot — pull-to-refresh
+        // on both platforms tracks the lifetime of the awaited dispatch
+        // (`.refreshable { await dispatch.run(.refresh) }` on iOS,
+        // `holder.dispatchAwait(.refresh)` on Android).
+        #expect(!json.contains("\"isLoading\""))
         // No underscore-prefixed key — guards against the @Observable
         // macro's backing storage leaking into the wire if anyone
         // accidentally restores default `Codable` synthesis instead of

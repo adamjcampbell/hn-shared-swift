@@ -34,7 +34,6 @@ data class AppState(
     val stories: List<Story> = emptyList(),
     // searchQuery is intentionally absent — bridged per-property via
     // SearchQuerySink + BridgedSource. See AppModelHolder.searchQuery.
-    val isLoading: Boolean = false,
     val lastRefreshedAt: String? = null,
     val loadError: String? = null,
 )
@@ -100,9 +99,10 @@ sealed class AppCommand {
  * leave it running for the process lifetime; the Compose tree just reads
  * `state`.
  *
- * **Loading state:** the snapshot's `isLoading` and `loadError` come
- * straight from Swift — no Kotlin-side timer. Pull-to-refresh's spinner
- * just observes `state.isLoading`.
+ * **Loading state:** `loadError` comes straight from Swift on the
+ * snapshot. There is deliberately no `isLoading` field — pull-to-refresh
+ * drives its indicator from the lifetime of [dispatchAwait], mirroring
+ * iOS's `.refreshable { await dispatch.run(.refresh) }` contract.
  */
 object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink {
     var state by mutableStateOf<AppState?>(null)

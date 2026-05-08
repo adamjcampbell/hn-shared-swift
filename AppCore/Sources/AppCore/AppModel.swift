@@ -187,22 +187,17 @@ public final class AppModel {
         }
         searchTask = task
 
-        state.isLoading = true
-
         do {
             let hits = try await task.value
             state.hits = hits
             state.lastRefreshedAt = .now
             state.loadError = nil
-            state.isLoading = false
         } catch is CancellationError {
             // A newer dispatch superseded us. The newer one is responsible
-            // for committing its own result; leave isLoading=true so the
-            // spinner stays until that fetch settles.
+            // for committing its own result; nothing to do here.
             return
         } catch {
             state.loadError = error.localizedDescription
-            state.isLoading = false
         }
     }
 }

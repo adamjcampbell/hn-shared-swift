@@ -14,11 +14,11 @@ import Observation
 /// Properties fall into two groups, in the data-flow vocabulary of
 /// WWDC19's *Data Flow Through SwiftUI*:
 ///
-/// - **Stored sources of truth (encoded)** — `isLoading`,
-///   `lastRefreshedAt`, `loadError`. Stored properties that
-///   `encode(to:)` writes into the JSON snapshot the Kotlin `AppState`
-///   data class consumes. Adding a new encoded field is one new
-///   property plus one line in `encode(to:)`.
+/// - **Stored sources of truth (encoded)** — `lastRefreshedAt`,
+///   `loadError`. Stored properties that `encode(to:)` writes into the
+///   JSON snapshot the Kotlin `AppState` data class consumes. Adding a
+///   new encoded field is one new property plus one line in
+///   `encode(to:)`.
 ///
 /// - **Stored sources of truth (per-property bridged, not encoded)** —
 ///   `searchQuery`. Both platforms drive this directly: iOS via
@@ -41,6 +41,12 @@ import Observation
 ///   render. Computed properties aren't seen by `Codable` synthesis,
 ///   so this is the one field `encode(to:)` writes by hand.
 ///
+/// **Spinner / loading state is NOT a model concern.** Pull-to-refresh
+/// indicators on both platforms are driven by the lifetime of the
+/// awaited dispatch (iOS `.refreshable { await dispatch.run(.refresh) }`,
+/// Android `holder.dispatchAwait(.refresh)` from inside Compose's
+/// `onRefresh` coroutine). No `isLoading` field rides the snapshot.
+///
 /// `Encodable` rather than `Codable` because the JSON only travels
 /// Swift → Kotlin — we never decode an `AppState` on the Swift side.
 /// Separately, the `encode(to:)` body is written by hand because the
@@ -55,7 +61,6 @@ public final class AppState: Encodable {
 
     // MARK: Stored sources of truth (encoded)
 
-    public var isLoading: Bool = false
     public var lastRefreshedAt: Date? = nil
     public var loadError: String? = nil
 
@@ -76,7 +81,6 @@ public final class AppState: Encodable {
 
     private enum WireKey: String, CodingKey {
         case stories
-        case isLoading
         case lastRefreshedAt
         case loadError
     }
@@ -84,7 +88,6 @@ public final class AppState: Encodable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: WireKey.self)
         try container.encode(stories, forKey: .stories)
-        try container.encode(isLoading, forKey: .isLoading)
         try container.encodeIfPresent(lastRefreshedAt, forKey: .lastRefreshedAt)
         try container.encodeIfPresent(loadError, forKey: .loadError)
         // searchQuery is intentionally absent — see the type-level
