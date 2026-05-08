@@ -97,7 +97,7 @@ enum Bridge {
     /// callback fires when the Swift dispatch resolves; the Kotlin
     /// `suspendCancellableCoroutine` wrapper resumes its continuation
     /// then. Mirrors iOS's `.refreshable { await dispatch.run(.refresh) }`.
-    static func enqueueAwaitableDispatch(_ event: AppEvent, completion: some DispatchCompletion) {
+    static func enqueueAwaitableDispatch(_ event: AppEvent, completion: some AndroidCompletion) {
         Task {
             await dispatch(event)
             completion.complete()

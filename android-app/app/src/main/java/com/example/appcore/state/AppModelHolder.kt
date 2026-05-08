@@ -4,9 +4,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.example.appcore.bridge.AndroidCompletion
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.CommandSink
-import com.example.appcore.bridge.DispatchCompletion
 import com.example.appcore.bridge.SearchQuerySink
 import com.example.appcore.bridge.SnapshotSink
 import kotlinx.coroutines.channels.Channel
@@ -173,25 +173,15 @@ object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink {
 
     /**
      * Awaitable cousin of [dispatch] — mirrors iOS's
-     * `AppEventDispatch.run(_:) async`. The coroutine suspends until the
-     * Swift dispatch completes (the model's full `runFetch` for `.refresh`,
-     * the synchronous reducer for the others). Pull-to-refresh's onRefresh
-     * uses this so its indicator stays visible for the actual fetch
-     * lifetime, not for the snapshot-propagation race window.
-     *
-     * Cancellation: if the calling coroutine is cancelled before
-     * completion fires, [DispatchCompletion.complete] resolves a no-longer-
-     * active continuation (which we silently drop). The Swift-side Task
-     * continues to completion; for `.refresh` the in-flight fetch is
-     * cancel-and-replaced internally by the next dispatch, so leaking is
-     * benign. Cross-language cancellation is a future enhancement.
+     * `AppEventDispatch.run(_:) async`. The coroutine suspends until
+     * the Swift dispatch completes (the model's full `runFetch` for
+     * `.refresh`, the synchronous reducer for the others).
+     * Pull-to-refresh's onRefresh uses this so its indicator stays
+     * visible for the actual fetch lifetime, not for the
+     * snapshot-propagation race window. See [awaitWithCompletion] for
+     * the underlying suspend/cancel shape.
      */
-    suspend fun dispatchAwait(event: AppEvent): Unit = suspendCancellableCoroutine { cont ->
-        val completion = object : DispatchCompletion {
-            override fun complete() {
-                if (cont.isActive) cont.resume(Unit) { _, _, _ -> }
-            }
-        }
+    suspend fun dispatchAwait(event: AppEvent) = awaitWithCompletion { completion ->
         AppCoreAndroid.appcoreDispatchAwait(
             json.encodeToString(AppEvent.serializer(), event),
             completion,
@@ -201,3 +191,30 @@ object AppModelHolder : SnapshotSink, CommandSink, SearchQuerySink {
 
 @Composable
 fun rememberAppModel(): AppModelHolder = AppModelHolder
+
+/**
+ * Adapter from a JNI thunk that takes an [AndroidCompletion] parameter
+ * to a Kotlin `suspend fun`. Wraps the thunk in a
+ * `suspendCancellableCoroutine`; the coroutine resumes when the Swift
+ * side fires `complete()`.
+ *
+ * Cancellation: if the calling coroutine is cancelled before the
+ * completion fires, [AndroidCompletion.complete] resolves an inactive
+ * continuation (which we silently drop). The Swift Task continues to
+ * completion; for `.refresh` the in-flight fetch is cancel-and-replaced
+ * internally by the next dispatch, so leaking is benign. Cross-language
+ * cancellation is a future enhancement.
+ *
+ * Reusable for any awaitable JNI thunk shaped as `(args…, completion)`
+ * — currently just [AppModelHolder.dispatchAwait], but the shape is
+ * the same for any future awaitable bridge call.
+ */
+suspend inline fun awaitWithCompletion(
+    crossinline thunk: (AndroidCompletion) -> Unit,
+): Unit = suspendCancellableCoroutine { cont ->
+    thunk(object : AndroidCompletion {
+        override fun complete() {
+            if (cont.isActive) cont.resume(Unit) { _, _, _ -> }
+        }
+    })
+}

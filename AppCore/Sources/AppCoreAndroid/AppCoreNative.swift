@@ -71,8 +71,8 @@ public func appcoreDispatch(eventJSON: String) {
 
 /// Awaitable cousin of `appcoreDispatch(eventJSON:)`. Mirrors iOS's
 /// `AppEventDispatch.run(_:) async` — the awaitable side of the
-/// sync/async dispatch duality. The Kotlin-side `suspendCancellableCoroutine`
-/// wrapper passes a single-shot `DispatchCompletion`; this thunk hands
+/// sync/async dispatch duality. The Kotlin-side `awaitWithCompletion`
+/// helper passes a single-shot `AndroidCompletion`; this thunk hands
 /// it to `Bridge.enqueueAwaitableDispatch`, which spawns a Task that
 /// awaits the model dispatch end-to-end and then fires
 /// `completion.complete()`.
@@ -81,7 +81,7 @@ public func appcoreDispatch(eventJSON: String) {
 /// coroutine keeps the indicator visible for the full fetch lifetime,
 /// no race with snapshot propagation. Decode failures complete
 /// immediately so a malformed event doesn't strand a Kotlin coroutine.
-public func appcoreDispatchAwait(eventJSON: String, completion: some DispatchCompletion) {
+public func appcoreDispatchAwait(eventJSON: String, completion: some AndroidCompletion) {
     guard let event: AppEvent = JNICoder.decode(from: eventJSON) else {
         completion.complete()
         return
