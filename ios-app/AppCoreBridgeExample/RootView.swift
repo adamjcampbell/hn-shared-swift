@@ -93,10 +93,11 @@ private struct SearchResults: View {
             // Empty-search-results overlay. Only fires when the user
             // has typed a query but nothing matches — an empty front
             // page would be a network failure surfaced via loadError
-            // on the underlying StoriesList instead.
-            if !state.isLoading
-                && state.stories.isEmpty
-                && !state.searchQuery.isEmpty {
+            // on the underlying StoriesList instead. May flash briefly
+            // during a query change while the debounced fetch is in
+            // flight; accepting that to keep loading state out of the
+            // model.
+            if state.stories.isEmpty && !state.searchQuery.isEmpty {
                 EmptyResultsOverlay(query: state.searchQuery)
             }
         }
@@ -114,7 +115,6 @@ private struct StoriesList: View {
                     searchQuery: state.searchQuery,
                     storyCount: state.stories.count,
                     unreadCount: state.stories.lazy.filter { !$0.isRead }.count,
-                    isLoading: state.isLoading,
                     lastRefreshedAt: state.lastRefreshedAt,
                     loadError: state.loadError
                 )
@@ -149,7 +149,6 @@ private struct HeaderCard: View {
     let searchQuery: String
     let storyCount: Int
     let unreadCount: Int
-    let isLoading: Bool
     let lastRefreshedAt: Date?
     let loadError: String?
 
@@ -167,12 +166,7 @@ private struct HeaderCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text(titleText).font(.headline)
-                if isLoading {
-                    ProgressView().controlSize(.small)
-                }
-            }
+            Text(titleText).font(.headline)
             Text(metaText)
                 .font(.caption)
                 .foregroundStyle(.secondary)

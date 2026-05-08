@@ -39,9 +39,11 @@ import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,13 +66,15 @@ import kotlinx.coroutines.launch
 fun StoryScreen() {
     val holder = rememberAppModel()
     val state = holder.state
-    val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
-    // Initial fetch: front page on first composition.
+    // Initial fetch: front page on first composition. Awaitable so the
+    // LaunchedEffect coroutine ties to the screen's lifecycle — if the
+    // user navigates away mid-fetch, the coroutine is cancelled
+    // (Kotlin-side; the Swift Task runs to completion, harmlessly).
     LaunchedEffect(Unit) {
-        holder.dispatch(AppEvent.Refresh)
+        holder.dispatchAwait(AppEvent.Refresh)
     }
 
     // One-shot commands from the core. Each emission is consumed exactly
@@ -108,7 +112,7 @@ fun StoryScreen() {
             state = state,
             authoritativeSearchQuery = authoritativeSearchQuery,
             onSearchQueryWrite = holder.searchQuery::set,
-            onRefresh = { scope.launch { holder.dispatch(AppEvent.Refresh) } },
+            onRefresh = { holder.dispatchAwait(AppEvent.Refresh) },
             onToggleRead = { holder.dispatch(AppEvent.ToggleRead(it)) },
             onOpenStory = { holder.dispatch(AppEvent.OpenStory(it)) },
             modifier = Modifier
@@ -125,7 +129,7 @@ private fun StoriesContent(
     state: AppState?,
     authoritativeSearchQuery: String,
     onSearchQueryWrite: (String) -> Unit,
-    onRefresh: () -> Unit,
+    onRefresh: suspend () -> Unit,
     onToggleRead: (String) -> Unit,
     onOpenStory: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -164,7 +168,19 @@ private fun StoriesContent(
 
     val searchQuery = textFieldState.text.toString()
     val stories = state?.stories ?: emptyList()
-    val isLoading = state?.isLoading ?: false
+
+    // Pull-to-refresh's indicator is driven by the lifetime of the
+    // suspend onRefresh — matching iOS's `.refreshable { await … }`
+    // contract. Compose owns this state locally; no isLoading field
+    // rides the snapshot.
+    var isRefreshing by remember { mutableStateOf(false) }
+    val pullToRefresh: () -> Unit = {
+        scope.launch {
+            isRefreshing = true
+            try { onRefresh() }
+            finally { isRefreshing = false }
+        }
+    }
 
     val inputField: @Composable () -> Unit = remember(textFieldState, searchBarState, scope) {
         {
@@ -190,8 +206,8 @@ private fun StoriesContent(
                 .weight(1f),
         ) {
             PullToRefreshBox(
-                isRefreshing = isLoading,
-                onRefresh = onRefresh,
+                isRefreshing = isRefreshing,
+                onRefresh = pullToRefresh,
                 modifier = Modifier.fillMaxSize(),
             ) {
                 LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)) {
@@ -208,7 +224,7 @@ private fun StoriesContent(
                 }
             }
 
-            if (!isLoading && stories.isEmpty() && searchQuery.isNotEmpty()) {
+            if (!isRefreshing && stories.isEmpty() && searchQuery.isNotEmpty()) {
                 EmptyResultsOverlay(query = searchQuery)
             }
         }
