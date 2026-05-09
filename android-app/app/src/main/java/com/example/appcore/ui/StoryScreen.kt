@@ -54,8 +54,8 @@ import com.example.appcore.state.AppCommand
 import com.example.appcore.state.AppEvent
 import com.example.appcore.state.AppModelHolder
 import com.example.appcore.state.Story
+import com.example.appcore.state.asState
 import com.example.appcore.state.rememberAppModel
-import com.example.appcore.state.rememberSwiftObserved
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
@@ -69,7 +69,7 @@ fun StoryScreen() {
     // searchQuery stays at StoryScreen level; the other four properties move
     // into StoriesContent so that content-only changes (stories, isLoading,
     // lastRefreshedAt, loadError) do not recompose the TopAppBar or Scaffold.
-    val authoritativeSearchQuery = rememberSwiftObserved { cb -> holder.observeGetSearchQuery(cb) }
+    val authoritativeSearchQuery by holder.searchQuery.asState()
 
     // Initial fetch: front page on first composition.
     LaunchedEffect(Unit) {
@@ -121,18 +121,18 @@ private fun StoriesContent(
     onOpenStory: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val stories         = rememberSwiftObserved { cb -> holder.observeGetStories(cb) }
-    val isRefreshing    = rememberSwiftObserved { cb -> holder.observeGetIsLoading(cb) }
-    val lastRefreshedAt = rememberSwiftObserved { cb -> holder.observeGetLastRefreshedAt(cb) }
-    val loadError       = rememberSwiftObserved { cb -> holder.observeGetLoadError(cb) }
+    val stories         by holder.stories.asState()
+    val isRefreshing    by holder.isLoading.asState()
+    val lastRefreshedAt by holder.lastRefreshedAt.asState()
+    val loadError       by holder.loadError.asState()
 
     val searchBarState = rememberSearchBarState()
     val textFieldState = rememberTextFieldState(initialText = authoritativeSearchQuery)
     val scope = rememberCoroutineScope()
 
     // User typing → AppCore. Calls the JNI setter synchronously; the
-    // per-property observation scope picks up the write via the next
-    // rememberSwiftObserved recomposition cycle.
+    // per-property observation scope re-registers and writes the new value
+    // inside onChange (before recompose), so the next frame sees it immediately.
     LaunchedEffect(Unit) {
         snapshotFlow { textFieldState.text.toString() }
             .distinctUntilChanged()

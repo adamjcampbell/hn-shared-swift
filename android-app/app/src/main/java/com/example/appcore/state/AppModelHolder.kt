@@ -91,25 +91,30 @@ object AppModelHolder : CommandSink {
     fun setSearchQuery(value: String) =
         AppCoreAndroid.appcoreSetSearchQuery(value)
 
-    // MARK: - Fused observe+read wrappers
-    // Each delegates to the matching Swift `appcoreObserveGet*` thunk, which
-    // atomically registers a per-property observation scope AND returns the
-    // current value. The callback fires onChange at most once per registration.
+    // MARK: - Per-property observable fields
+    // Each is a BridgedProperty backed by the matching fused Swift
+    // `appcoreObserveGet*` thunk. Use `by` in a Composable to subscribe:
+    //   val stories by holder.stories.asState()
 
-    fun observeGetStories(callback: ObservationCallback): List<Story> =
-        json.decodeFromString<List<Story>>(AppCoreAndroid.appcoreObserveGetStoriesJSON(callback))
+    val stories = BridgedProperty { cb ->
+        json.decodeFromString<List<Story>>(AppCoreAndroid.appcoreObserveGetStoriesJSON(cb))
+    }
 
-    fun observeGetIsLoading(callback: ObservationCallback): Boolean =
-        AppCoreAndroid.appcoreObserveGetIsLoading(callback)
+    val isLoading = BridgedProperty { cb ->
+        AppCoreAndroid.appcoreObserveGetIsLoading(cb)
+    }
 
-    fun observeGetSearchQuery(callback: ObservationCallback): String =
-        AppCoreAndroid.appcoreObserveGetSearchQuery(callback)
+    val searchQuery = BridgedProperty { cb ->
+        AppCoreAndroid.appcoreObserveGetSearchQuery(cb)
+    }
 
-    fun observeGetLastRefreshedAt(callback: ObservationCallback): String? =
-        AppCoreAndroid.appcoreObserveGetLastRefreshedAt(callback).takeIf { it.isNotEmpty() }
+    val lastRefreshedAt = BridgedProperty<String?> { cb ->
+        AppCoreAndroid.appcoreObserveGetLastRefreshedAt(cb).takeIf { it.isNotEmpty() }
+    }
 
-    fun observeGetLoadError(callback: ObservationCallback): String? =
-        AppCoreAndroid.appcoreObserveGetLoadError(callback).takeIf { it.isNotEmpty() }
+    val loadError = BridgedProperty<String?> { cb ->
+        AppCoreAndroid.appcoreObserveGetLoadError(cb).takeIf { it.isNotEmpty() }
+    }
 
     fun dispatch(event: AppEvent) {
         AppCoreAndroid.appcoreDispatch(json.encodeToString(AppEvent.serializer(), event))
