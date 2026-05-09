@@ -97,13 +97,27 @@ public func appcoreSetSearchQuery(value: String) {
 /// Private helper, Android-only. `@JavaUIActor`-isolated so `read` and
 /// `Bridge.appModel.state` are accessed in the same domain — no actor
 /// boundary to cross, no Sendable requirement on `read`.
+///
+/// **Why the `Task` hop in `onChange`** (not `assumeIsolated`):
+/// `withObservationTracking`'s `onChange` fires synchronously *inside*
+/// the property's `willSet`, before the mutation has committed. Kotlin's
+/// `onChange` re-enters Swift to re-register tracking via another
+/// `appcoreObserveGet*` call — and that nested read sees the pre-mutation
+/// value (the getter still returns the old backing storage during willSet).
+/// The result is `MutableState` written with stale values: `isLoading=true`
+/// is observed as `false`, then `isLoading=false` is observed as `true` —
+/// the spinner stays asserted forever and stories never paint. Hopping
+/// through `Task { @JavaUIActor in … }` enqueues `callback.onChange()`
+/// onto the looper after the current synchronous frame (the setter and
+/// any sibling commits) unwinds, so the recursive read sees the final
+/// committed state. Matches the contract documented on `ObservationCallback`.
 #if canImport(Android)
 @JavaUIActor
 private func observeGet<T>(_ read: (AppState) -> T, callback: some ObservationCallback) -> T {
     withObservationTracking {
         read(Bridge.appModel.state)
-    } onChange: {
-        JavaUIActor.assumeIsolated { callback.onChange() }
+    } onChange: { [callback] in
+        Task { @JavaUIActor in callback.onChange() }
     }
 }
 #endif
