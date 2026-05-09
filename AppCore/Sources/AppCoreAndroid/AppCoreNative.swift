@@ -98,26 +98,23 @@ public func appcoreSetSearchQuery(value: String) {
 /// `Bridge.appModel.state` are accessed in the same domain — no actor
 /// boundary to cross, no Sendable requirement on `read`.
 ///
-/// **Why the `Task` hop in `onChange`** (not `assumeIsolated`):
-/// `withObservationTracking`'s `onChange` fires synchronously *inside*
-/// the property's `willSet`, before the mutation has committed. Kotlin's
-/// `onChange` re-enters Swift to re-register tracking via another
-/// `appcoreObserveGet*` call — and that nested read sees the pre-mutation
-/// value (the getter still returns the old backing storage during willSet).
-/// The result is `MutableState` written with stale values: `isLoading=true`
-/// is observed as `false`, then `isLoading=false` is observed as `true` —
-/// the spinner stays asserted forever and stories never paint. Hopping
-/// through `Task { @JavaUIActor in … }` enqueues `callback.onChange()`
-/// onto the looper after the current synchronous frame (the setter and
-/// any sibling commits) unwinds, so the recursive read sees the final
-/// committed state. Matches the contract documented on `ObservationCallback`.
+/// **Synchronous `onChange` is intentional — Kotlin owns the deferral.**
+/// `withObservationTracking`'s `onChange` fires *inside* the property's
+/// `willSet`, before the mutation has committed. Kotlin's `onChange`
+/// re-registers tracking via another `appcoreObserveGet*` call, and a
+/// nested read during willSet would see the pre-mutation backing
+/// storage. The Kotlin-side `ObservationHandle` defers the
+/// re-registration through `Handler.post(...)` so it runs on the next
+/// main-looper iteration, after the writer's setter unwinds. Don't
+/// add a Swift-side `Task` hop here — it'd duplicate the deferral and
+/// allocate a Task per change for no gain.
 #if canImport(Android)
 @JavaUIActor
 private func observeGet<T>(_ read: (AppState) -> T, callback: some ObservationCallback) -> T {
     withObservationTracking {
         read(Bridge.appModel.state)
-    } onChange: { [callback] in
-        Task { @JavaUIActor in callback.onChange() }
+    } onChange: {
+        JavaUIActor.assumeIsolated { callback.onChange() }
     }
 }
 #endif

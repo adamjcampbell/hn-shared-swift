@@ -277,20 +277,24 @@ Per spec §12 plus what verification surfaced:
     still scans these so the Java surface generates correctly. We
     don't need a fake macOS impl because `AppCoreTests` doesn't
     exercise the bridge primitives.
-- **`observeGet`'s `onChange` must Task-hop, not `assumeIsolated`.**
+- **Re-registration deferral lives on the Kotlin side, not Swift.**
   `withObservationTracking`'s `onChange` fires synchronously *inside*
   the property's `willSet`, before the mutation has committed. Kotlin's
   `onChange` re-enters Swift to re-register tracking via another
   `appcoreObserveGet*` call — and that nested read, if synchronous,
   sees the pre-mutation value (the getter still returns the old backing
-  storage during willSet). The result is `MutableState` written with
-  stale values: `isLoading=false` is observed as `true`, the spinner
-  stays asserted forever, stories never paint. The `onChange` body in
-  `observeGet` therefore enqueues `callback.onChange()` via
-  `Task { @JavaUIActor in … }` so the re-registration happens after
-  the writer's setter unwinds and the recursive read sees the final
-  committed state. The contract is documented on `ObservationCallback`.
-  Don't change this back to `JavaUIActor.assumeIsolated { callback.onChange() }`.
+  storage during willSet). The result would be `MutableState` written
+  with stale values: `isLoading=false` observed as `true`, spinner
+  stuck on, stories never painting. The fix is on the Kotlin side:
+  `ObservationHandle.start` in `SwiftObservable.kt` wraps the recursive
+  re-registration in `mainHandler.post { … }`, which defers it to the
+  next main-looper iteration — after the writer's setter (and any
+  sibling commits) unwinds. Swift's `observeGet` therefore stays
+  synchronous: `JavaUIActor.assumeIsolated { callback.onChange() }`,
+  no Swift `Task` allocation per change. Don't move the deferral back
+  into Swift; either side fixes the race, but Kotlin is cheaper
+  (no per-emission `Task.init`) and the deferral mechanism — main
+  looper post — already exists.
 - **Inject `clock: any Clock<Duration>` into `AppModel` for tests.**
   Default is `ContinuousClock()`. `runFetch`'s Task body uses
   `clock.sleep(for:)` for the debounce wait. Tests pass a `TestClock`

@@ -11,10 +11,16 @@
 /// jextract generates a Java interface
 /// `com.example.appcore.bridge.ObservationCallback` from this protocol.
 ///
-/// **Thread contract.** Swift fires `onChange()` via
-/// `Task { @JavaUIActor in … }` — it always arrives on Android's main
-/// Looper thread. Kotlin's implementation can safely read and write
-/// Compose `MutableState` directly.
+/// **Thread contract.** Swift fires `onChange()` synchronously inside
+/// the property's `willSet`, on whichever thread did the write — for
+/// the bridge that is always Android's main `Looper` (writes go through
+/// `JavaUIActor`-isolated dispatch arms). Kotlin's implementation must
+/// not re-enter Swift to re-read the property synchronously: the read
+/// during willSet would see pre-mutation backing storage. Instead defer
+/// the re-registration through `Handler.post(...)` (see
+/// `ObservationHandle` in `SwiftObservable.kt`), which runs the
+/// re-registration on the next main-looper iteration after the writer's
+/// setter unwinds.
 ///
 /// **One-shot.** `withObservationTracking`'s `onChange` fires at most
 /// once per registration. Re-registration is the composable's

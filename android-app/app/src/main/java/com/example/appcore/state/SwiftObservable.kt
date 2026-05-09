@@ -1,5 +1,7 @@
 package com.example.appcore.state
 
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
@@ -8,6 +10,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import com.example.appcore.bridge.ObservationCallback
 
+private val mainHandler = Handler(Looper.getMainLooper())
+
 /**
  * Reads a value from a Swift @Observable model with per-property Compose
  * reactivity. [observe] receives a one-shot [ObservationCallback] and must
@@ -15,17 +19,26 @@ import com.example.appcore.bridge.ObservationCallback
  * a per-property dependency AND returns the current value via
  * `withObservationTracking`'s apply-closure return.
  *
- * The value is held in a [MutableState]. When [ObservationCallback.onChange]
- * fires (synchronously on the UI thread via JavaUIActor.assumeIsolated),
- * [observe] is called immediately — re-registering the Swift tracking scope
- * and writing the fresh value to the state in one step, closing the observation
- * gap that would otherwise exist between onChange and the next recompose.
- * Compose skips recomposition if the new value is structurally equal to the
- * current one.
+ * **Re-registration is deferred via `Handler.post`.** Swift's
+ * `withObservationTracking` fires `onChange` *inside* the property's
+ * `willSet`, before the mutation has committed. A synchronous re-call
+ * of [observe] would re-enter Swift and read the pre-mutation backing
+ * storage (the getter still returns the old `_hits` etc. during
+ * willSet). Posting the re-registration onto Android's main looper
+ * defers it to the next loop iteration — after the writer's setter
+ * (and any sibling commits in the same dispatch arm) unwinds — so the
+ * recursive read sees the final committed state. The post runs strictly
+ * before the next Compose frame, so `state.value` carries the fresh
+ * value by recomposition time.
+ *
+ * The value is held in a [MutableState]; Compose skips recomposition
+ * if the new value is structurally equal to the current one.
  *
  * Initialisation runs inside the [remember] computation block so that the
- * first composition always reads a non-null (real) value. The [DisposableEffect]
- * stops the observation loop when the composable leaves the composition.
+ * first composition always reads a non-null (real) value. The
+ * [DisposableEffect] flips `active = false` when the composable leaves
+ * the composition; the `if (active)` guard inside the posted lambda
+ * makes any in-flight onChange a no-op past disposal.
  */
 @Composable
 fun <T> rememberSwiftObserved(observe: (ObservationCallback) -> T): State<T> {
@@ -42,7 +55,10 @@ private class ObservationHandle(val state: MutableState<Any?>) {
 
     fun <T> start(observe: (ObservationCallback) -> T) {
         state.value = observe(object : ObservationCallback {
-            override fun onChange() { if (active) start(observe) }
+            override fun onChange() {
+                if (!active) return
+                mainHandler.post { if (active) start(observe) }
+            }
         })
     }
 }
