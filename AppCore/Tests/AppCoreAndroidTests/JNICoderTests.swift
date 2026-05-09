@@ -91,11 +91,11 @@ struct AppCommandTests {
     }
 }
 
-@Suite("AppState JSON wire shape")
-struct AppStateWireTests {
+@Suite("Stories JSON wire shape (appcoreGetStoriesJSON)")
+struct StoriesWireTests {
 
-    @Test("snapshot omits internal storage, omits searchQuery, embeds isRead on each story")
-    func snapshot_omitsInternalStorage_andEmbedsIsReadOnStory() async {
+    @Test("stories JSON is a bare array, omits all AppState internals, embeds isRead on each story")
+    func storiesJSON_bareArray_omitsInternals_embedsIsRead() async {
         let model = AppModel(
             client: HNClient(
                 frontPage: {
@@ -109,30 +109,28 @@ struct AppStateWireTests {
         )
         await model.dispatch(.refresh)
         await model.dispatch(.toggleRead(id: "100"))
-        // Set searchQuery so we can prove it stays out of the JSON even
-        // when populated.
         model.state.searchQuery = "rust"
 
-        let json = JNICoder.encode(model.state)
+        // `appcoreGetStoriesJSON` encodes stories directly — a bare JSON
+        // array that Kotlin decodes as `List<Story>`.
+        let json = JNICoder.encode(model.state.stories)
 
-        // Internal storage never crosses the wire.
+        // Bare array shape — no enclosing `{"stories": ...}` envelope.
+        #expect(json.hasPrefix("["))
+        // Internal AppState fields never cross the wire.
         #expect(!json.contains("\"hits\""))
         #expect(!json.contains("\"readIds\""))
-        // searchQuery is per-property bridged via `appcoreSetSearchQuery`
-        // + `SearchQuerySink`, not via this snapshot.
+        // Per-property scalar fields have their own dedicated getters;
+        // they must not appear inside the stories array.
         #expect(!json.contains("\"searchQuery\""))
         #expect(!json.contains("\"rust\""))
-        // isLoading is per-property bridged via `appcoreSetIsLoading`
-        // + `IsLoadingSink` (same shape as searchQuery), not via this
-        // snapshot — so it must stay out of the JSON wire format.
         #expect(!json.contains("\"isLoading\""))
-        // No underscore-prefixed key — guards against the @Observable
-        // macro's backing storage leaking into the wire if anyone
-        // accidentally restores default `Codable` synthesis instead of
-        // the hand-written `encode(to:)`.
+        #expect(!json.contains("\"lastRefreshedAt\""))
+        #expect(!json.contains("\"loadError\""))
+        // No underscore-prefixed keys — guards against @Observable macro's
+        // backing storage leaking into the wire format.
         #expect(!json.contains("\"_"))
-        // The merged stories list is what Android sees.
-        #expect(json.contains("\"stories\""))
+        // isRead is derived from `readIds` and embedded on each Story.
         #expect(json.contains("\"isRead\":true"))
         #expect(json.contains("\"isRead\":false"))
     }
