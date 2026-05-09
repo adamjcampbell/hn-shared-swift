@@ -1,17 +1,18 @@
 import Foundation
 import AppCore
 
-/// JSON codec for values that ride the JNI snapshot pipe.
+/// JSON codec for values that cross JNI.
 ///
-/// The cross-platform `AppCore` model types (`AppEvent`, `AppCommand`,
-/// `AppState`) carry no JSON helpers themselves — they're consumed
-/// natively on iOS and only need a wire format on Android. This enum
-/// is the single home for that wire format: a cached
+/// `AppEvent`, `AppCommand`, and `[Story]` cross JNI as JSON strings.
+/// The cross-platform model types carry no JSON helpers themselves —
+/// they're consumed natively on iOS and only need a wire format on
+/// Android. This enum is the single home for that wire format: a cached
 /// `JSONEncoder`/`JSONDecoder` plus generic `encode`/`decode` helpers.
 ///
-/// The encoder uses `.iso8601` for `Date` so `AppState.lastRefreshedAt`
-/// crosses JNI as an ISO8601 string Kotlin's `kotlinx.serialization`
-/// can parse.
+/// Scalar `AppState` properties (`searchQuery`, `isLoading`,
+/// `lastRefreshedAt`, `loadError`) cross JNI as native JNI types
+/// via their dedicated `appcore*` getters — not via this encoder.
+/// The encoder's `.iso8601` date strategy is retained for consistency.
 public enum JNICoder {
     public static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()

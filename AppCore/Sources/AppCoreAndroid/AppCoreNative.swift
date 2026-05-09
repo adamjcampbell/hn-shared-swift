@@ -1,5 +1,6 @@
 import Foundation
 import AppCore
+import Observation
 
 // MARK: - jextract entry points
 //
@@ -15,20 +16,16 @@ import AppCore
 // There is one `AppModel` per process, owned by the `@JavaUIActor`-isolated
 // `Bridge` namespace, so none of these entry points take a handle.
 // Command-shaped mutations are funnelled through `appcoreDispatch(eventJSON:)`
-// that decodes a Codable `AppEvent`. Continuously-bound primitives
-// (currently `searchQuery`) get dedicated per-property setters and
-// matching push sinks; adding a new mutation case in `AppCore` covers
-// both shapes.
+// that decodes a Codable `AppEvent`. Per-composable reactive reads use the
+// fused `appcoreObserveGet*` thunks; each atomically registers a per-property
+// dependency and returns the current value in one JNI hop.
 //
 // **Sync entry via `JavaUIActor.assumeIsolated`.** `JavaUIActor` is a
 // global actor pinned to Android's main `Looper` via `LooperExecutor`.
 // Compose always calls these thunks from the UI thread, which *is* the
 // global actor's executor, so `JavaUIActor.assumeIsolated` lets the
 // thunks enter the actor's isolation domain synchronously without
-// `Task { await … }` allocation. `enqueueDispatch` is the sync,
-// fire-and-forget cousin of `Bridge.dispatch(_:) async` (mirroring the
-// iOS `AppEventDispatch.callAsFunction(_:)` / `run(_:)` split) for the
-// case where the model method itself is `async`.
+// `Task { await … }` allocation.
 //
 // **Contract.** Calling these thunks off the UI thread on Android, or
 // at all on the macOS host, will trap inside `assumeIsolated`. Compose
@@ -37,31 +34,9 @@ import AppCore
 // are `#if canImport(Android)`-gated to no-ops so jextract still sees
 // the public-API signatures. See AGENT.md.
 
-public func appcoreCreate(
-    snapshotSink: some SnapshotSink,
-    commandSink: some CommandSink,
-    searchQuerySink: some SearchQuerySink,
-    isLoadingSink: some IsLoadingSink
-) {
-    // `Observations` (Swift 6.2+) emits an initial value as well as all
-    // future ones (see WWDC25 *What's new in Swift*), so `Bridge.attach`
-    // already delivers a cold-start snapshot ~1–2 ms after this call
-    // returns. `BridgePerfTest.a_coldStart_…` is the regression guard.
-    // Compose reads `AppModelHolder.state` as a nullable `AppState?`, so
-    // the brief window before that emission lands renders the same
-    // empty-state UI as the initial snapshot would have. The
-    // `searchQuerySink` and `isLoadingSink` similarly emit the cold-start
-    // values of `state.searchQuery` (initially `""`) and `state.isLoading`
-    // (initially `false`) within the same window.
+public func appcoreCreate(commandSink: some CommandSink) {
     #if canImport(Android)
-    JavaUIActor.assumeIsolated {
-        Bridge.attach(
-            snapshotSink: snapshotSink,
-            commandSink: commandSink,
-            searchQuerySink: searchQuerySink,
-            isLoadingSink: isLoadingSink
-        )
-    }
+    JavaUIActor.assumeIsolated { Bridge.attach(commandSink: commandSink) }
     #endif
 }
 
@@ -97,49 +72,70 @@ public func appcoreDispatchAwait(eventJSON: String, completion: some AndroidComp
 }
 
 /// Per-property setter for `state.searchQuery`. Compose calls this on
-/// every keystroke. The `AndroidBinding` dedups echoes via
-/// `lastSetterValue` so the value Compose just typed isn't pushed back
-/// through `SearchQuerySink` to clobber the in-progress text.
+/// every keystroke via the JNI thunk.
 public func appcoreSetSearchQuery(value: String) {
     #if canImport(Android)
     JavaUIActor.assumeIsolated { Bridge.handleSetSearchQuery(value) }
     #endif
 }
 
-/// Per-property getter for `state.searchQuery`. Used by the Compose
-/// `BridgedSource` wrapper as `produceState`'s initial value, so the
-/// first composition reads the live Swift value (correct under future
-/// process-death restoration) rather than a hardcoded `""`. Sync
-/// because the thunk is on the UI thread and so is `JavaUIActor`'s
-/// executor — `assumeIsolated` is just a property read through the
-/// `AndroidBinding`.
-public func appcoreGetSearchQuery() -> String {
+/// Private helper, Android-only. `@JavaUIActor`-isolated so `read` and
+/// `Bridge.appModel.state` are accessed in the same domain — no actor
+/// boundary to cross, no Sendable requirement on `read`.
+#if canImport(Android)
+@JavaUIActor
+private func observeGet<T>(_ read: (AppState) -> T, callback: some ObservationCallback) -> T {
+    withObservationTracking {
+        read(Bridge.appModel.state)
+    } onChange: {
+        JavaUIActor.assumeIsolated { callback.onChange() }
+    }
+}
+#endif
+
+/// Fused observe+read thunks. Each atomically registers a per-property
+/// observation scope AND returns the current value via `withObservationTracking`'s
+/// apply-closure return, so Kotlin can cache it in `remember(counter.intValue)` —
+/// no separate trailing `read()` call. Public declarations are outside the
+/// `#if canImport(Android)` guard so jextract sees them on macOS; the `#else`
+/// bodies are unreachable stubs (the JNI runtime is absent on macOS).
+public func appcoreObserveGetStoriesJSON(callback: some ObservationCallback) -> String {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { Bridge.getSearchQuery() }
+    return JavaUIActor.assumeIsolated { observeGet({ JNICoder.encode($0.stories) }, callback: callback) }
     #else
-    return ""
+    fatalError("Android-only")
     #endif
 }
 
-/// Per-property setter for `state.isLoading`. Functionally unused on
-/// the Android side (the value is one-way Swift→Kotlin owned by
-/// `runFetch`); exposed for parity with `appcoreSetSearchQuery` so the
-/// `AndroidBinding` + `BridgedSource` shape is uniform across bridged
-/// primitives.
-public func appcoreSetIsLoading(value: Bool) {
+public func appcoreObserveGetIsLoading(callback: some ObservationCallback) -> Bool {
     #if canImport(Android)
-    JavaUIActor.assumeIsolated { Bridge.handleSetIsLoading(value) }
+    return JavaUIActor.assumeIsolated { observeGet(\.isLoading, callback: callback) }
+    #else
+    fatalError("Android-only")
     #endif
 }
 
-/// Per-property getter for `state.isLoading`. Same role as
-/// `appcoreGetSearchQuery`: Compose's `BridgedSource` reads through
-/// this for `produceState(initialValue:)`'s cold-start seed.
-public func appcoreGetIsLoading() -> Bool {
+public func appcoreObserveGetSearchQuery(callback: some ObservationCallback) -> String {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { Bridge.getIsLoading() }
+    return JavaUIActor.assumeIsolated { observeGet(\.searchQuery, callback: callback) }
     #else
-    return false
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreObserveGetLastRefreshedAt(callback: some ObservationCallback) -> String {
+    #if canImport(Android)
+    return JavaUIActor.assumeIsolated { observeGet({ $0.lastRefreshedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "" }, callback: callback) }
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreObserveGetLoadError(callback: some ObservationCallback) -> String {
+    #if canImport(Android)
+    return JavaUIActor.assumeIsolated { observeGet({ $0.loadError ?? "" }, callback: callback) }
+    #else
+    fatalError("Android-only")
     #endif
 }
 

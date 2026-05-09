@@ -52,11 +52,10 @@ import androidx.compose.ui.unit.dp
 import com.example.appcore.R
 import com.example.appcore.state.AppCommand
 import com.example.appcore.state.AppEvent
-import com.example.appcore.state.AppState
+import com.example.appcore.state.AppModelHolder
 import com.example.appcore.state.Story
-import com.example.appcore.state.asMutableState
-import com.example.appcore.state.asState
 import com.example.appcore.state.rememberAppModel
+import com.example.appcore.state.rememberSwiftObserved
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
@@ -64,20 +63,20 @@ import kotlinx.coroutines.launch
 @Composable
 fun StoryScreen() {
     val holder = rememberAppModel()
-    val state = holder.state
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
-    // Initial fetch: front page on first composition. Awaitable so the
-    // LaunchedEffect coroutine ties to the screen's lifecycle — if the
-    // user navigates away mid-fetch, the coroutine is cancelled
-    // (Kotlin-side; the Swift Task runs to completion, harmlessly).
+    // searchQuery stays at StoryScreen level; the other four properties move
+    // into StoriesContent so that content-only changes (stories, isLoading,
+    // lastRefreshedAt, loadError) do not recompose the TopAppBar or Scaffold.
+    val authoritativeSearchQuery = rememberSwiftObserved { cb -> holder.observeGetSearchQuery(cb) }
+
+    // Initial fetch: front page on first composition.
     LaunchedEffect(Unit) {
         holder.dispatchAwait(AppEvent.Refresh)
     }
 
-    // One-shot commands from the core. Each emission is consumed exactly
-    // once by the receiveAsFlow channel — recomposition can't replay it.
+    // One-shot commands from the core.
     LaunchedEffect(holder) {
         holder.commands.collect { command ->
             when (command) {
@@ -98,26 +97,9 @@ fun StoryScreen() {
             )
         },
     ) { innerPadding ->
-        // searchQuery flows through the per-property bridge: typing
-        // pushes through `holder.searchQuery.set` → AppCoreAndroid; the
-        // SearchQuerySink-driven `holder.searchQuery` State pushes back
-        // for cold-start + programmatic Swift writes (echoes of typing
-        // are filtered on the bridge actor's `lastSetterValue` dedup).
-        // Compose's TextFieldState owns the in-progress typing buffer —
-        // we sync it to/from `holder.searchQuery` via two snapshotFlow
-        // collectors below.
-        val authoritativeSearchQuery by holder.searchQuery.asState()
-        // isLoading flows through the per-property bridge as well — the
-        // model's `runFetch` is the single writer, so this is one-way
-        // Swift→Kotlin in practice. `asMutableState` matches the
-        // searchQuery shape (and Compose's `var x by state` ergonomics)
-        // even though no consumer here actually writes.
-        val isRefreshing by holder.isLoading.asMutableState()
         StoriesContent(
-            state = state,
+            holder = holder,
             authoritativeSearchQuery = authoritativeSearchQuery,
-            isRefreshing = isRefreshing,
-            onSearchQueryWrite = holder.searchQuery::set,
             onRefresh = { holder.dispatchAwait(AppEvent.Refresh) },
             onToggleRead = { holder.dispatch(AppEvent.ToggleRead(it)) },
             onOpenStory = { holder.dispatch(AppEvent.OpenStory(it)) },
@@ -132,55 +114,40 @@ fun StoryScreen() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StoriesContent(
-    state: AppState?,
+    holder: AppModelHolder,
     authoritativeSearchQuery: String,
-    isRefreshing: Boolean,
-    onSearchQueryWrite: (String) -> Unit,
     onRefresh: suspend () -> Unit,
     onToggleRead: (String) -> Unit,
     onOpenStory: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val stories         = rememberSwiftObserved { cb -> holder.observeGetStories(cb) }
+    val isRefreshing    = rememberSwiftObserved { cb -> holder.observeGetIsLoading(cb) }
+    val lastRefreshedAt = rememberSwiftObserved { cb -> holder.observeGetLastRefreshedAt(cb) }
+    val loadError       = rememberSwiftObserved { cb -> holder.observeGetLoadError(cb) }
+
     val searchBarState = rememberSearchBarState()
     val textFieldState = rememberTextFieldState(initialText = authoritativeSearchQuery)
     val scope = rememberCoroutineScope()
 
-    // User typing → AppCore. `BridgedSource.set` calls the JNI setter
-    // synchronously (Swift bridge has the new value before this
-    // returns); listeners are NOT notified locally because the Swift
-    // `lastSetterValue` echo dedup suppresses the round-trip and
-    // `textFieldState` already owns the typing buffer.
+    // User typing → AppCore. Calls the JNI setter synchronously; the
+    // per-property observation scope picks up the write via the next
+    // rememberSwiftObserved recomposition cycle.
     LaunchedEffect(Unit) {
         snapshotFlow { textFieldState.text.toString() }
             .distinctUntilChanged()
-            .collect(onSearchQueryWrite)
+            .collect { holder.setSearchQuery(it) }
     }
     // Authoritative writes from AppCore (cold-start initial,
-    // future programmatic clears) → TextFieldState. The
-    // `lastSetterValue` dedup on the Swift bridge filters echoes of
-    // user-typed writes, so this only fires for genuine
-    // out-of-band updates. The dropWhile-guarded race in the
-    // event-dispatch architecture doesn't exist here: Compose's
-    // initial textFieldState text == bridge's cold-start emission ""
-    // by construction, so the conditional below skips it.
-    LaunchedEffect(Unit) {
-        snapshotFlow { authoritativeSearchQuery }
-            .distinctUntilChanged()
-            .collect { value ->
-                if (textFieldState.text.toString() != value) {
-                    textFieldState.edit { replace(0, length, value) }
-                }
-            }
+    // programmatic clears) → TextFieldState.
+    LaunchedEffect(authoritativeSearchQuery) {
+        if (textFieldState.text.toString() != authoritativeSearchQuery) {
+            textFieldState.edit { replace(0, length, authoritativeSearchQuery) }
+        }
     }
 
     val searchQuery = textFieldState.text.toString()
-    val stories = state?.stories ?: emptyList()
 
-    // Pull-to-refresh's indicator is driven by `state.isLoading` from
-    // AppCore via the per-property bridge — see [AppModelHolder.isLoading].
-    // The model's `runFetch` toggles it for every fetch (debounced
-    // search + explicit `.refresh`), so the indicator surfaces on
-    // search-typing fetches too, not just pull-to-refresh.
     val pullToRefresh: () -> Unit = { scope.launch { onRefresh() } }
 
     val inputField: @Composable () -> Unit = remember(textFieldState, searchBarState, scope) {
@@ -217,8 +184,8 @@ private fun StoriesContent(
                             searchQuery = searchQuery,
                             storyCount = stories.size,
                             unreadCount = stories.count { !it.isRead },
-                            lastRefreshedAt = state?.lastRefreshedAt,
-                            loadError = state?.loadError,
+                            lastRefreshedAt = lastRefreshedAt,
+                            loadError = loadError,
                         )
                     }
                     storyRows(stories, onToggleRead, onOpenStory)
@@ -329,9 +296,6 @@ private fun StoryRow(
     val swipeLabel = stringResource(
         if (story.isRead) R.string.mark_unread_action else R.string.mark_read_action,
     )
-    // rememberSwipeToDismissBoxState captures confirmValueChange at first
-    // construction; rememberUpdatedState lets the captured lambda reach the
-    // latest onToggle without re-keying (and resetting) the swipe state.
     val currentOnToggle by rememberUpdatedState(onToggle)
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
