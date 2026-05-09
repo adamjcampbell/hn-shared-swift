@@ -13,23 +13,27 @@ both UIs only render the snapshot.
 
 ## Goals
 
-- One Swift type (`AppModel`) drives both platforms; one Codable
-  `AppEvent` enum carries every user-driven mutation.
-- iOS: direct `@Observable` + SwiftUI; no JNI, no JSON. `RootView` owns
-  the singleton `AppModel` and installs an `AppEventDispatch` action via
-  `\.dispatch`. `AppState` itself is the `@Observable final class`;
+- One Swift type (`AppModel`) drives both platforms; one `AppEvent`
+  enum carries every user-driven mutation.
+- iOS: direct `@Observable` + SwiftUI; no JNI, no wire format. `RootView`
+  owns the singleton `AppModel` and installs an `AppEventDispatch` action
+  via `\.dispatch`. `AppState` itself is the `@Observable final class`;
   descendants take it as a parameter and rely on per-property tracking
   for invalidation. Events flow back through `\.dispatch` — the model
   is invisible below the root.
-- Android: `JavaUIActor` global actor + a `Bridge` namespace composed
-  from `AndroidSnapshot` / `AndroidCommands` / `AndroidBinding`
-  primitives. `AndroidSnapshot` runs an `Observations` task → JSON
-  snapshot → Java callback → Compose recomposition. Most mutations go
-  through `appcoreDispatch(eventJSON:)`; `appcoreDispatchAwait(...)` is
-  the awaitable variant for pull-to-refresh; `searchQuery` and
-  `isLoading` ride per-property `AndroidBinding`s (the former is
-  two-way for typing, the latter is one-way Swift→Kotlin driving the
-  spinner + empty-overlay flicker guard).
+- Android: `JavaUIActor` global actor + a `Bridge` namespace plus an
+  `AndroidCommands` pump. The wire is typed primitives end-to-end — no
+  JSON. Mutations are one typed thunk per `AppEvent` case
+  (`appcoreToggleRead`, `appcoreOpenStory`, `appcoreRefresh`, plus the
+  awaitable `appcoreRefreshAwait` for pull-to-refresh). Reactive reads
+  use fused `appcoreObserveGet*` thunks: each atomically registers a
+  per-property dependency and returns the current value in one JNI hop;
+  Kotlin's `BridgedProperty<T>` + `rememberSwiftObserved` re-arm on
+  every `onChange`. `[Story]` crosses as an opaque `Int64` peer
+  (`StoriesSnapshotPeer` retained via `Unmanaged`); Kotlin walks
+  per-field accessors and releases the peer in `finally`. `searchQuery`
+  is two-way: Compose drives writes via `appcoreSetSearchQuery`,
+  authoritative reads come back via `appcoreObserveGetSearchQuery`.
 - Networking lives in Swift: `HNClient` is a `Sendable` struct with
   two `@Sendable` closure properties (`frontPage`, `search`), injected
   into `AppModel.init`. The struct shape is the natural mock point —
@@ -56,19 +60,22 @@ Per spec §12 plus what verification surfaced:
 - **No Skip.** The whole point is doing this without Skip.
 - **No production-grade JNI safety.** jextract handles ref counting,
   attach/detach, exception bridging.
-- **No typed JNI marshaling for the snapshot.** JSON is fast enough at
-  the demo's payload scale (340 B). Swap if/when payload grows or
-  jextract struct support matures.
+- **No JSON across JNI.** All values cross as typed primitives. Complex
+  collections (`[Story]`) cross as Skip-style opaque peer pointers
+  (`Int64` from `Unmanaged.passRetained`) plus per-field accessor
+  thunks; the eager Kotlin walk materialises a `List<Story>` and
+  releases the peer in `finally`. See `StoriesSnapshotPeer.swift`.
 - **No support for low-end / Intel Mac AVDs.** Only arm64-v8a is built.
 - **Not a published package.** `swift-java` is a path dependency; nothing
   here is meant to be `swift package add`-ed.
-- **Cold-start initial snapshot comes from `Observations` itself.**
-  Per WWDC25 *What's new in Swift*, an `Observations` sequence emits
-  the initial value as well as future ones. The bridge actor's
-  `attach()` task therefore delivers a cold-start snapshot ~1–2 ms
-  after `appcoreCreate` returns; Compose's `mutableStateOf<AppState?>`
-  bridges that small `null` window. `BridgePerfTest.a_coldStart_…`
-  is the regression guard.
+- **No cold-start push.** With per-property `appcoreObserveGet*`
+  thunks, each composable reads the current value at registration
+  time — there's no asynchronous push channel that needs priming.
+  `LaunchedEffect(Unit)` in `StoryScreen` fires
+  `dispatchAwait(AppEvent.Refresh)` on first appear to populate the
+  front page; before that the per-property reads return their zero
+  values (`isLoading=false`, empty stories, etc.).
+  `BridgePerfTest.a_coldStart_…` is the regression guard.
 
 ## Non-obvious project rules
 
@@ -85,21 +92,23 @@ Per spec §12 plus what verification surfaced:
   jextract runs on the macOS host and silently skips functions sitting
   inside a `#if canImport(Android)` guard, so gating the signatures
   would empty out the generated Java module class. The function
-  *bodies* are `#if canImport(Android)`-gated (no-ops on macOS); only
-  the signatures need to compile cross-platform.
+  *bodies* are `#if canImport(Android)`-gated (no-ops or `fatalError`
+  on macOS); only the signatures need to compile cross-platform.
   `Bridge.swift`, `JavaUIActor.swift`, `LooperExecutor.swift`,
-  `AndroidBinding.swift`, `AndroidSnapshot.swift`, and
-  `AndroidCommands.swift` are wrapped end-to-end in
-  `#if canImport(Android)` — they're internal, not jextract-scanned,
-  and only referenced from the gated thunk bodies, so they don't need
-  to exist on macOS at all. On the macOS host build `AppCoreAndroid`
-  collapses to the public-API signatures + the cross-platform `*Sink`
-  protocols (and `AndroidCompletion`).
+  `AndroidCommands.swift`, and `StoriesSnapshotPeer.swift` are wrapped
+  end-to-end in `#if canImport(Android)` — they're internal, not
+  jextract-scanned, and only referenced from the gated thunk bodies,
+  so they don't need to exist on macOS at all. On the macOS host build
+  `AppCoreAndroid` collapses to the public-API signatures + the
+  cross-platform `CommandSink` / `ObservationCallback` /
+  `AndroidCompletion` protocols.
 - There is exactly one `AppModel` per process. `AppCoreNative` exposes
-  the entry points (`appcoreCreate`, `appcoreDispatch`,
-  `appcoreDispatchAwait`, `appcoreSetSearchQuery`,
-  `appcoreGetSearchQuery`, `appcoreDestroy`) which all hop into the
-  `@JavaUIActor`-isolated `Bridge` namespace via
+  the entry points (`appcoreCreate`, `appcoreToggleRead`,
+  `appcoreOpenStory`, `appcoreRefresh`, `appcoreRefreshAwait`,
+  `appcoreSetSearchQuery`, the `appcoreObserveGet*` family — including
+  `appcoreObserveGetStoriesHandle` and the per-field `appcoreStory*` +
+  `appcoreStoriesRelease` accessors — and `appcoreDestroy`). All hop
+  into the `@JavaUIActor`-isolated `Bridge` namespace via
   `JavaUIActor.assumeIsolated { Bridge.foo() }`. `Bridge.attach` is
   **once-and-only-once**: a `precondition` traps if it's called while
   already attached. The Kotlin side initialises `AppModelHolder` once
@@ -110,30 +119,26 @@ Per spec §12 plus what verification surfaced:
   `Snapshot` — renamed so the property reads as `appModel.state:
   AppState`). Don't rename it back to `State` — that collides with
   SwiftUI's `@State` property wrapper in iOS code.
-- **`AndroidSnapshot` deduplicates emissions before the JNI hop.** The
-  observation `Task` body encodes inside the `Observations` closure
-  (`Observations { JNICoder.encode(source()) }`) and holds a local
-  `var lastJSON: String?`, skipping `sink.deliver` when the new JSON is
-  byte-identical to the prior one. `Observations` starts a transaction
-  on every `willSet` regardless of value-equality, so without this
-  guard a redundant write (e.g. setting `lastRefreshedAt` to its
-  current value) would JNI-hop for nothing. Compose's
-  `mutableStateOf<AppState?>` saves the recompose either way, but the
-  wire round-trip costs ~100 µs per skipped emission. The dedup state
-  lives inside the Task closure rather than on the primitive — `start()`
-  cancels and respawns the Task, so a fresh sink gets a fresh
-  comparison automatically.
+- **Per-composable observation is the recomposition mechanism.** Each
+  Compose composable reading a Swift property uses `BridgedProperty<T>`
+  + `rememberSwiftObserved` (`SwiftObservable.kt`) to call a fused
+  `appcoreObserveGet*` thunk. Each call atomically registers a
+  `withObservationTracking` scope on the read properties AND returns
+  the current value — so the composable gets a `MutableState<T>` that
+  re-arms on every `onChange` by calling the thunk again. Compose
+  recomposes only the composables that read the property that changed
+  (per-property granularity, not whole-screen). For `[Story]` the
+  same shape applies: `appcoreObserveGetStoriesHandle` returns an
+  `Int64` peer pointer; the Kotlin closure walks per-field accessors
+  to materialise a `List<Story>` and releases the peer in `finally`.
+  No JSON, no string parsing, no reused buffers across emissions.
 - **Search-query writes are NOT events — they're per-property bridged.**
   Both platforms drive `state.searchQuery` directly: iOS via `@Bindable`
-  + `$state.searchQuery`, Android via `BridgedSource` + the per-property
-  JNI setter `appcoreSetSearchQuery` and getter `appcoreGetSearchQuery`.
-  Swift is the single source of truth; the Kotlin `BridgedSource` keeps
-  no local mirror — `current` reads through the JNI getter, `set`
-  writes through the JNI setter (sync, via `Actor.assumeIsolated`),
-  and `deliver` is the platform-push path for cold-start +
-  programmatic Swift writes (Kotlin-originated writes don't fire it
-  because of the bridge actor's `lastSetterValue` echo dedup;
-  Compose's `TextFieldState` owns the typing buffer anyway).
+  + `$state.searchQuery`, Android via the per-property JNI setter
+  `appcoreSetSearchQuery` and the fused observe-and-read thunk
+  `appcoreObserveGetSearchQuery`. Swift is the single source of truth;
+  Compose's `TextFieldState` owns the typing buffer locally and writes
+  through to Swift via a `snapshotFlow` LaunchedEffect.
   `AppEvent` retains only the command-shaped mutations (`toggleRead`,
   `openStory`, `refresh`).
   `AppModel.runSearchQueryWatcher` is an `async` method that iterates
@@ -190,13 +195,16 @@ Per spec §12 plus what verification surfaced:
     `appModel.commands`, one awaits `appModel.runSearchQueryWatcher()`.
     SwiftUI manages each Task's lifetime per view
     appearance/disappearance.
-  - Android `Bridge`: each composable primitive
-    (`AndroidSnapshot`, `AndroidCommands`, `AndroidBinding`) owns its
-    own `Task<Void, Never>?` field internally; `Bridge` itself owns
-    only the `queryWatcherTask`. All are spawned in `Bridge.attach()`
-    and cancelled in `Bridge.detach()`. Under `@JavaUIActor` global-
-    actor isolation, Task closures inherit the same isolation, so
-    capturing non-Sendable references stays in-region.
+  - Android `Bridge`: `AndroidCommands` owns its own
+    `Task<Void, Never>?` field internally; `Bridge` itself owns only
+    the `queryWatcherTask`. Both are spawned in `Bridge.attach()` and
+    cancelled in `Bridge.detach()`. Per-composable observation Tasks
+    (registered via the fused `appcoreObserveGet*` thunks) live for
+    the lifetime of a single `withObservationTracking` arm and do
+    not need explicit lifecycle plumbing on the bridge side. Under
+    `@JavaUIActor` global-actor isolation, Task closures inherit the
+    same isolation, so capturing non-Sendable references stays
+    in-region.
 - **`JavaUIActor` runs on Android's main `Looper` (custom executor).**
   `JavaUIActor` is a global actor with a `nonisolated var unownedExecutor`
   pointing at `LooperExecutor.shared` (SE-0392 custom actor executors).
@@ -221,28 +229,27 @@ Per spec §12 plus what verification surfaced:
   the two. See the doc-comment on `JavaUIActor.swift` for the verified
   diagnostic.
   - **Sync thunk contract.** `appcoreCreate`, `appcoreSetSearchQuery`,
-    `appcoreSetIsLoading`, and `appcoreDestroy` execute their actor
-    work synchronously and only return after the mutation has taken
-    effect. This tightens spec §9's old fire-and-forget contract;
-    the JNI inbound mutation path is now strict-sync. The async
-    snapshot *delivery* path (Observations → JSON → SnapshotSink) is
-    still asynchronous.
-  - **`appcoreDispatch` mirrors iOS's `AppEventDispatch` split.**
-    `Bridge.dispatch(_:) async` is the awaitable form;
-    `Bridge.enqueueDispatch(_:)` is sync, fire-and-forget (spawns an
-    internal Task that awaits the async path). The fire-and-forget
-    thunk (`appcoreDispatch`) uses `enqueueDispatch` so it can stay
-    synchronous. The awaitable thunk (`appcoreDispatchAwait`) calls
-    `Bridge.enqueueAwaitableDispatch(event, completion:)` which
+    the `appcoreObserveGet*` family, the fire-and-forget event thunks
+    (`appcoreToggleRead`, `appcoreOpenStory`, `appcoreRefresh`), and
+    `appcoreDestroy` execute their actor work synchronously and only
+    return after the mutation has been enqueued (or, for fused reads,
+    after the read has been performed). The dispatch arms run on a
+    `Task` they spawn, so the Swift-side fetch happens asynchronously,
+    but the JNI thunk itself returns promptly.
+  - **Awaitable variants exist where iOS does too.** Pull-to-refresh
+    needs the indicator visible for the full fetch lifetime, so
+    `appcoreRefreshAwait(completion:)` calls
+    `Bridge.enqueueAwaitableDispatch(.refresh, completion:)` which
     spawns a Task, awaits the async dispatch, and fires the
     `AndroidCompletion` so the Kotlin `awaitWithCompletion {}`
-    helper resumes its `suspendCancellableCoroutine`. Pull-to-refresh
-    in Compose is the primary consumer.
+    helper resumes its `suspendCancellableCoroutine`. Toggle and open
+    are fire-and-forget on both platforms, so they don't ship an
+    `*Await` variant.
   - **Off-UI-thread JNI calls trap — this is intentional.** Compose
     dispatches all user events from the UI thread, and the bridge's
     executor *is* the UI thread, so `assumeIsolated` is sound. The
     contract is "JNI thunks may only be called from the UI thread";
-    a background coroutine calling `AppCoreAndroid.appcoreDispatch(...)`
+    a background coroutine calling `AppCoreAndroid.appcoreToggleRead(...)`
     will trap loudly inside `assumeIsolated`, which is the right
     failure mode (silent re-scheduling onto a different thread would
     hide a real bug). If a future use case genuinely needs an off-UI
@@ -261,25 +268,29 @@ Per spec §12 plus what verification surfaced:
     override — without it `appcoreCreate` traps at app launch.
   - **Android-only — no macOS fallback.** `LooperExecutor.swift`'s
     body is `#if canImport(Android)`-gated; `JavaUIActor.swift`,
-    `Bridge.swift`, `AndroidBinding.swift`, `AndroidSnapshot.swift`,
-    and `AndroidCommands.swift` are similarly gated; the JNI thunks
+    `Bridge.swift`, `AndroidCommands.swift`, and
+    `StoriesSnapshotPeer.swift` are similarly gated; the JNI thunks
     in `AppCoreNative.swift` have `#if canImport(Android)`-gated
     bodies. On macOS, the entire bridge collapses to the public-API
-    signatures + the cross-platform `*Sink` protocols + `AndroidCompletion`
-    — jextract still scans these so the Java surface generates
-    correctly. We don't need a fake macOS impl because `AppCoreTests`
-    doesn't exercise the bridge primitives.
-- **Echo dedup at the trust boundary.** `AndroidBinding<Root, Value>`
-  runs an `Observations { root[keyPath: keyPath] }` loop whose
-  emissions feed the deliver closure (which wraps a per-`Value` sink
-  like `SearchQuerySink.deliverSearchQuery(value:)`). Without dedup,
-  every Kotlin write would round-trip back through the sink and fire
-  `BridgedSource.deliver` → Compose listener → recomposition, with no
-  semantic effect (TextFieldState already has the value the user
-  typed). The binding holds a `lastSetterValue: Value?` updated by
-  `set(_:)`; the Observations loop skips emissions matching it. Same
-  shape as the JSON-snapshot dedup (`lastJSON` in `AndroidSnapshot`)
-  — dedup once at the trust boundary, not at every source.
+    signatures + the cross-platform `CommandSink` /
+    `ObservationCallback` / `AndroidCompletion` protocols — jextract
+    still scans these so the Java surface generates correctly. We
+    don't need a fake macOS impl because `AppCoreTests` doesn't
+    exercise the bridge primitives.
+- **`observeGet`'s `onChange` must Task-hop, not `assumeIsolated`.**
+  `withObservationTracking`'s `onChange` fires synchronously *inside*
+  the property's `willSet`, before the mutation has committed. Kotlin's
+  `onChange` re-enters Swift to re-register tracking via another
+  `appcoreObserveGet*` call — and that nested read, if synchronous,
+  sees the pre-mutation value (the getter still returns the old backing
+  storage during willSet). The result is `MutableState` written with
+  stale values: `isLoading=false` is observed as `true`, the spinner
+  stays asserted forever, stories never paint. The `onChange` body in
+  `observeGet` therefore enqueues `callback.onChange()` via
+  `Task { @JavaUIActor in … }` so the re-registration happens after
+  the writer's setter unwinds and the recursive read sees the final
+  committed state. The contract is documented on `ObservationCallback`.
+  Don't change this back to `JavaUIActor.assumeIsolated { callback.onChange() }`.
 - **Inject `clock: any Clock<Duration>` into `AppModel` for tests.**
   Default is `ContinuousClock()`. `runFetch`'s Task body uses
   `clock.sleep(for:)` for the debounce wait. Tests pass a `TestClock`
@@ -309,26 +320,45 @@ Per spec §12 plus what verification surfaced:
 - Adding a new mutation depends on its shape:
   - **Command-shaped** (toggle, refresh, navigate — fire-and-forget, no
     text input bound to a UI control): (a) new `case` on `AppEvent`
-    (Swift), (b) `switch` arm in `AppModel.dispatch`, (c) matching
-    `@SerialName`'d variant on Kotlin's `sealed class AppEvent` in
-    `AppModelHolder.kt`. `Codable` is generated by MetaCodable's
-    `@Codable` + `@CodedAt("type")` on the enum, so no per-case
-    annotation is needed when the case name equals the wire string; add
-    `@CodedAs("…")` per case only if they differ. No new JNI entry
-    point.
-  - **Per-property bridged** (continuously two-way bound to a UI
-    control, like `searchQuery`): (a) make the `@Observable` property
-    publicly settable on `AppState`; (b) drop it from `encode(to:)` so
-    it doesn't ride the snapshot; (c) on Android, a new `XSink`
-    Sendable protocol + entry in `appcoreCreate`'s parameter list,
-    `appcoreSetX` and `appcoreGetX` JNI entry points, a new bridge
-    actor field for `lastSetterValue`, a new `Observations { state.x }`
-    task with the echo dedup; (d) on Kotlin, `BridgedSource<X>(readThrough = …, writeThrough = …)`
-    constructed in `AppModelHolder` + a new sink override calling
-    `bridgedSource.deliver`; (e) on iOS, just bind via `$state.x`. The host's existing `searchQuery` watcher loop
-    automatically picks up new properties only if you wire them through
-    `runFetch` or another shared trigger — usually each per-property
-    primitive wants its own host-side reaction.
+    (Swift) and matching arm in `AppModel.dispatch`; (b) new public
+    typed thunk on `AppCoreNative.swift`
+    (`appcoreFooBar(arg: String)` etc.) calling
+    `Bridge.enqueueDispatch(.fooBar(arg: arg))`; (c) matching
+    plain Kotlin sealed-class variant on `AppEvent` in
+    `AppModelHolder.kt`; (d) new `when` arm in
+    `AppModelHolder.dispatch` (and `dispatchAwait` if pull-to-refresh-
+    style). The wire is typed primitives — no JSON, no MetaCodable, no
+    `@SerialName`. If the iOS UI also needs an awaitable variant, add
+    a sibling `appcoreFooBarAwait(arg:, completion:)` thunk that calls
+    `Bridge.enqueueAwaitableDispatch(.fooBar(arg:), completion:)`.
+  - **Core → UI command** (one-shot, like `presentURL`): add a `case`
+    to `AppCommand`, a `switch` arm in `AndroidCommands.start()` that
+    calls a new typed method on `CommandSink`, and the matching method
+    on the `CommandSink` Swift protocol. Kotlin's `AppModelHolder`
+    overrides the new method and constructs the matching Kotlin
+    `AppCommand` data class for downstream consumers. No JSON.
+  - **Per-property bridged primitive** (continuously two-way bound to
+    a UI control, like `searchQuery`): (a) make the `@Observable`
+    property publicly settable on `AppState`; (b) on Android, add an
+    `appcoreSetX(value:)` setter thunk and an
+    `appcoreObserveGetX(callback:) -> X` fused observe-and-read thunk,
+    both using `Bridge.handleSetX` / `observeGet(\.x, callback:)`;
+    (c) on Kotlin, expose a new `BridgedProperty<X>` on
+    `AppModelHolder` calling the fused thunk, and a `setX(...)` write
+    helper; (d) on iOS, just bind via `$state.x`. The host's existing
+    `searchQuery` watcher loop only picks up new properties if you
+    wire them through `runFetch` or another shared trigger — usually
+    each per-property primitive wants its own host-side reaction.
+  - **Per-property bridged collection** (a frequently-updated complex
+    snapshot, like `[Story]`): same shape as primitives but with a
+    peer wrapper. Define a `final class XSnapshotPeer: @unchecked
+    Sendable { let value: X }`, an `appcoreObserveGetXHandle(callback:)
+    -> Int64` fused thunk that retains a peer via
+    `Unmanaged.passRetained`, per-field `appcoreXFoo(handle:, index:)`
+    accessor thunks, and an `appcoreXRelease(handle:)` thunk. Kotlin's
+    `BridgedProperty` closure walks the peer eagerly and releases in
+    `finally`. Pattern modelled on Skip's peer-handle bridge but kept
+    bespoke because there are only a handful of bridged collections.
 - **`URLProtocolStub` is `nonisolated(unsafe) static var` storage**
   (acceptable in `Tests/`, forbidden in `Sources/`). Only `HNClientTests`
   touches it, and that suite carries `.serialized` — no other suite
