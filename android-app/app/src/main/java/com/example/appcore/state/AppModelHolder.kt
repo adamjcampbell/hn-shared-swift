@@ -8,11 +8,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 
-@Serializable
 data class Story(
     val id: String,
     val title: String,
@@ -20,38 +16,29 @@ data class Story(
     val points: Int,
     val commentCount: Int,
     val url: String? = null,
-    val createdAt: String,
+    val createdAt: Long,
     val isRead: Boolean = false,
 )
 
 /**
- * Mirrors the Swift `AppEvent` enum. Wire shape is `{"type":"...", ...}`,
- * matching `AppCore/Sources/AppCore/AppEvent.swift`'s `@Codable` +
- * `@CodedAt("type")` MetaCodable annotations.
+ * Mirrors the Swift `AppEvent` enum. The Kotlin sealed class is the type
+ * UI code emits via `holder.dispatch(...)`; the holder dispatches each
+ * case to its matching typed JNI thunk, so no wire format crosses the
+ * boundary.
  */
-@Serializable
 sealed class AppEvent {
-    @Serializable
-    @SerialName("toggleRead")
     data class ToggleRead(val id: String) : AppEvent()
-
-    @Serializable
-    @SerialName("openStory")
     data class OpenStory(val id: String) : AppEvent()
-
-    @Serializable
-    @SerialName("refresh")
     data object Refresh : AppEvent()
 }
 
 /**
- * Mirrors the Swift `AppCommand` enum — the Core → UI direction. Wire
- * shape is `{"type":"...", ...}`, matching `AppCommand.swift`.
+ * Mirrors the Swift `AppCommand` enum — the Core → UI direction. The
+ * holder receives one typed `CommandSink` callback per case (e.g.
+ * `presentURL(value:)`) and reconstructs the sealed-class instance for
+ * downstream consumers' `when` exhaustiveness.
  */
-@Serializable
 sealed class AppCommand {
-    @Serializable
-    @SerialName("presentURL")
     data class PresentURL(val value: String) : AppCommand()
 }
 
@@ -65,11 +52,6 @@ sealed class AppCommand {
  * properties, so recomposition is per-composable and per-property.
  */
 object AppModelHolder : CommandSink {
-    private val json = Json {
-        classDiscriminator = "type"
-        ignoreUnknownKeys = true
-    }
-
     /**
      * One-shot commands from the Swift core to the UI. Buffered so
      * cold-start emissions are not dropped before the screen collector
@@ -82,10 +64,9 @@ object AppModelHolder : CommandSink {
         AppCoreAndroid.appcoreCreate(this)
     }
 
-    /** Called from Swift via JNI on every yield from `AppModel.commands`. */
-    override fun deliverCommand(commandJSON: String) {
-        val command = json.decodeFromString<AppCommand>(commandJSON)
-        _commands.trySend(command)
+    /** Called from Swift via JNI on every `.presentURL` yield from `AppModel.commands`. */
+    override fun presentURL(value: String) {
+        _commands.trySend(AppCommand.PresentURL(value))
     }
 
     fun setSearchQuery(value: String) =
@@ -96,8 +77,25 @@ object AppModelHolder : CommandSink {
     // `appcoreObserveGet*` thunk. Use `by` in a Composable to subscribe:
     //   val stories by holder.stories.asState()
 
-    val stories = BridgedProperty { cb ->
-        json.decodeFromString<List<Story>>(AppCoreAndroid.appcoreObserveGetStoriesJSON(cb))
+    val stories = BridgedProperty<List<Story>> { cb ->
+        val peer = AppCoreAndroid.appcoreObserveGetStoriesHandle(cb)
+        try {
+            val n = AppCoreAndroid.appcoreStoriesCount(peer)
+            List(n) { i ->
+                Story(
+                    id           = AppCoreAndroid.appcoreStoryId(peer, i),
+                    title        = AppCoreAndroid.appcoreStoryTitle(peer, i),
+                    author       = AppCoreAndroid.appcoreStoryAuthor(peer, i),
+                    points       = AppCoreAndroid.appcoreStoryPoints(peer, i),
+                    commentCount = AppCoreAndroid.appcoreStoryCommentCount(peer, i),
+                    url          = AppCoreAndroid.appcoreStoryURL(peer, i).ifEmpty { null },
+                    createdAt    = AppCoreAndroid.appcoreStoryCreatedAtMillis(peer, i),
+                    isRead       = AppCoreAndroid.appcoreStoryIsRead(peer, i),
+                )
+            }
+        } finally {
+            AppCoreAndroid.appcoreStoriesRelease(peer)
+        }
     }
 
     val isLoading = BridgedProperty { cb ->
@@ -116,21 +114,28 @@ object AppModelHolder : CommandSink {
         AppCoreAndroid.appcoreObserveGetLoadError(cb).takeIf { it.isNotEmpty() }
     }
 
-    fun dispatch(event: AppEvent) {
-        AppCoreAndroid.appcoreDispatch(json.encodeToString(AppEvent.serializer(), event))
+    fun dispatch(event: AppEvent) = when (event) {
+        is AppEvent.ToggleRead -> AppCoreAndroid.appcoreToggleRead(event.id)
+        is AppEvent.OpenStory  -> AppCoreAndroid.appcoreOpenStory(event.id)
+        AppEvent.Refresh       -> AppCoreAndroid.appcoreRefresh()
     }
 
     /**
      * Awaitable cousin of [dispatch] — mirrors iOS's
-     * `AppEventDispatch.run(_:) async`. The coroutine suspends until the
+     * `AppEventDispatch.run(.refresh) async`. The coroutine suspends until the
      * Swift dispatch completes. Pull-to-refresh uses this so the indicator
      * stays visible for the actual fetch lifetime.
+     *
+     * Only [AppEvent.Refresh] has a Swift-side awaitable thunk; toggle/open
+     * are fire-and-forget on both platforms, so this falls back to firing
+     * the sync thunk and resuming immediately for those cases.
      */
     suspend fun dispatchAwait(event: AppEvent) = awaitWithCompletion { completion ->
-        AppCoreAndroid.appcoreDispatchAwait(
-            json.encodeToString(AppEvent.serializer(), event),
-            completion,
-        )
+        when (event) {
+            AppEvent.Refresh       -> AppCoreAndroid.appcoreRefreshAwait(completion)
+            is AppEvent.ToggleRead -> { AppCoreAndroid.appcoreToggleRead(event.id); completion.complete() }
+            is AppEvent.OpenStory  -> { AppCoreAndroid.appcoreOpenStory(event.id); completion.complete() }
+        }
     }
 }
 

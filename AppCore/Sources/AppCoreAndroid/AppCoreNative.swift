@@ -15,9 +15,11 @@ import Observation
 //
 // There is one `AppModel` per process, owned by the `@JavaUIActor`-isolated
 // `Bridge` namespace, so none of these entry points take a handle.
-// Command-shaped mutations are funnelled through `appcoreDispatch(eventJSON:)`
-// that decodes a Codable `AppEvent`. Per-composable reactive reads use the
-// fused `appcoreObserveGet*` thunks; each atomically registers a per-property
+// Command-shaped mutations are funnelled through one typed thunk per
+// `AppEvent` case (`appcoreToggleRead`, `appcoreOpenStory`, `appcoreRefresh`),
+// each of which builds the matching `AppEvent` value on the Swift side and
+// enqueues it on the model. Per-composable reactive reads use the fused
+// `appcoreObserveGet*` thunks; each atomically registers a per-property
 // dependency and returns the current value in one JNI hop.
 //
 // **Sync entry via `JavaUIActor.assumeIsolated`.** `JavaUIActor` is a
@@ -40,15 +42,31 @@ public func appcoreCreate(commandSink: some CommandSink) {
     #endif
 }
 
-public func appcoreDispatch(eventJSON: String) {
-    guard let event: AppEvent = JNICoder.decode(from: eventJSON) else { return }
+/// Typed thunks per `AppEvent` case. The Swift side owns the mapping
+/// from "JNI surface" to "domain event", so the wire is plain primitives
+/// (`String`, no payload, etc.) and there is no JSON encoder/decoder on
+/// either side of the boundary. Adding a new case to `AppEvent` means
+/// adding a sibling thunk here and a `when` arm in `AppModelHolder.dispatch`.
+public func appcoreToggleRead(id: String) {
     #if canImport(Android)
-    JavaUIActor.assumeIsolated { Bridge.enqueueDispatch(event) }
+    JavaUIActor.assumeIsolated { Bridge.enqueueDispatch(.toggleRead(id: id)) }
     #endif
 }
 
-/// Awaitable cousin of `appcoreDispatch(eventJSON:)`. Mirrors iOS's
-/// `AppEventDispatch.run(_:) async` — the awaitable side of the
+public func appcoreOpenStory(id: String) {
+    #if canImport(Android)
+    JavaUIActor.assumeIsolated { Bridge.enqueueDispatch(.openStory(id: id)) }
+    #endif
+}
+
+public func appcoreRefresh() {
+    #if canImport(Android)
+    JavaUIActor.assumeIsolated { Bridge.enqueueDispatch(.refresh) }
+    #endif
+}
+
+/// Awaitable cousin of `appcoreRefresh()`. Mirrors iOS's
+/// `AppEventDispatch.run(.refresh) async` — the awaitable side of the
 /// sync/async dispatch duality. The Kotlin-side `awaitWithCompletion`
 /// helper passes a single-shot `AndroidCompletion`; this thunk hands
 /// it to `Bridge.enqueueAwaitableDispatch`, which spawns a Task that
@@ -57,15 +75,12 @@ public func appcoreDispatch(eventJSON: String) {
 ///
 /// Pull-to-refresh in Compose is the primary consumer: the awaiting
 /// coroutine keeps the indicator visible for the full fetch lifetime,
-/// no race with snapshot propagation. Decode failures complete
-/// immediately so a malformed event doesn't strand a Kotlin coroutine.
-public func appcoreDispatchAwait(eventJSON: String, completion: some AndroidCompletion) {
-    guard let event: AppEvent = JNICoder.decode(from: eventJSON) else {
-        completion.complete()
-        return
-    }
+/// no race with snapshot propagation. Only `refresh` has an awaitable
+/// variant today; toggle/open are fire-and-forget on both platforms,
+/// so a parallel `*Await` on those cases would be unused weight.
+public func appcoreRefreshAwait(completion: some AndroidCompletion) {
     #if canImport(Android)
-    JavaUIActor.assumeIsolated { Bridge.enqueueAwaitableDispatch(event, completion: completion) }
+    JavaUIActor.assumeIsolated { Bridge.enqueueAwaitableDispatch(.refresh, completion: completion) }
     #else
     completion.complete()
     #endif
@@ -99,13 +114,118 @@ private func observeGet<T>(_ read: (AppState) -> T, callback: some ObservationCa
 /// no separate trailing `read()` call. Public declarations are outside the
 /// `#if canImport(Android)` guard so jextract sees them on macOS; the `#else`
 /// bodies are unreachable stubs (the JNI runtime is absent on macOS).
-public func appcoreObserveGetStoriesJSON(callback: some ObservationCallback) -> String {
+/// Fused observe-and-snapshot for `[Story]`. Atomically registers a
+/// per-property dependency on `state.stories` AND returns an `Int64`
+/// peer pointer to a frozen `StoriesSnapshotPeer` capturing the current
+/// value. Kotlin reads fields with `appcoreStory*(handle:, index:)` and
+/// must call `appcoreStoriesRelease(handle:)` exactly once when done.
+///
+/// The peer is created with `Unmanaged.passRetained`, so the Swift-side
+/// retain count is +1 on return. `appcoreStoriesRelease` undoes that;
+/// the eager Kotlin walk wraps reads in `try { … } finally { release }`.
+public func appcoreObserveGetStoriesHandle(callback: some ObservationCallback) -> Int64 {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { observeGet({ JNICoder.encode($0.stories) }, callback: callback) }
+    return JavaUIActor.assumeIsolated {
+        observeGet({ state -> Int64 in
+            let peer = StoriesSnapshotPeer(state.stories)
+            return Int64(Int(bitPattern: Unmanaged.passRetained(peer).toOpaque()))
+        }, callback: callback)
+    }
     #else
     fatalError("Android-only")
     #endif
 }
+
+public func appcoreStoriesCount(handle: Int64) -> Int32 {
+    #if canImport(Android)
+    return Int32(storiesPeer(handle).stories.count)
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreStoryId(handle: Int64, index: Int32) -> String {
+    #if canImport(Android)
+    return storiesPeer(handle).stories[Int(index)].id
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreStoryTitle(handle: Int64, index: Int32) -> String {
+    #if canImport(Android)
+    return storiesPeer(handle).stories[Int(index)].title
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreStoryAuthor(handle: Int64, index: Int32) -> String {
+    #if canImport(Android)
+    return storiesPeer(handle).stories[Int(index)].author
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreStoryPoints(handle: Int64, index: Int32) -> Int32 {
+    #if canImport(Android)
+    return Int32(storiesPeer(handle).stories[Int(index)].points)
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreStoryCommentCount(handle: Int64, index: Int32) -> Int32 {
+    #if canImport(Android)
+    return Int32(storiesPeer(handle).stories[Int(index)].commentCount)
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+/// Empty string represents `nil` (Story.url is optional). Empty URLs
+/// don't occur in HN data, and a sentinel keeps the JNI surface a flat
+/// `String` instead of a separate hasURL/url pair.
+public func appcoreStoryURL(handle: Int64, index: Int32) -> String {
+    #if canImport(Android)
+    return storiesPeer(handle).stories[Int(index)].url ?? ""
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+/// Epoch millis. HN data is second-resolution upstream, so the
+/// `* 1000` truncation is exact for the values we'll see in practice.
+public func appcoreStoryCreatedAtMillis(handle: Int64, index: Int32) -> Int64 {
+    #if canImport(Android)
+    return Int64(storiesPeer(handle).stories[Int(index)].createdAt.timeIntervalSince1970 * 1000)
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreStoryIsRead(handle: Int64, index: Int32) -> Bool {
+    #if canImport(Android)
+    return storiesPeer(handle).stories[Int(index)].isRead
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreStoriesRelease(handle: Int64) {
+    #if canImport(Android)
+    let raw = UnsafeRawPointer(bitPattern: Int(handle))!
+    Unmanaged<StoriesSnapshotPeer>.fromOpaque(raw).release()
+    #endif
+}
+
+#if canImport(Android)
+private func storiesPeer(_ handle: Int64) -> StoriesSnapshotPeer {
+    let raw = UnsafeRawPointer(bitPattern: Int(handle))!
+    return Unmanaged<StoriesSnapshotPeer>.fromOpaque(raw).takeUnretainedValue()
+}
+#endif
 
 public func appcoreObserveGetIsLoading(callback: some ObservationCallback) -> Bool {
     #if canImport(Android)

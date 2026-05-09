@@ -39,8 +39,9 @@ public struct HNHit: Sendable, Identifiable, Codable, Equatable {
 
 /// View row: `HNHit` fields plus the per-user `isRead` flag, projected
 /// from `AppState.readIds` at read time. Constructed by `AppState.stories`
-/// and emitted on the wire to Android with `isRead` already merged in.
-public struct Story: Sendable, Identifiable, Codable, Equatable {
+/// and emitted to Android per-field via the `appcoreStory*` JNI accessors
+/// with `isRead` already merged in.
+public struct Story: Sendable, Identifiable, Equatable {
     public let id: String
     public let title: String
     public let author: String

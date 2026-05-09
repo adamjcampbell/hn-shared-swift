@@ -2,22 +2,21 @@
 import Foundation
 import AppCore
 
-/// Reusable outbound async-stream pump. Consumes an `AsyncStream<C>`,
-/// encodes each value to JSON via `JNICoder`, and delivers to a
-/// `CommandSink`.
+/// Outbound async-stream pump for `AppCommand`. Consumes
+/// `AppModel.commands` and dispatches each command to the matching
+/// typed method on a `CommandSink`. No JSON crosses the JNI boundary —
+/// the case switch lives here so the wire is plain primitives.
 ///
-/// Replaces the inline `commandTask` shape from the previous
-/// `AndroidBridge` actor. The single-iterator constraint of `AsyncStream`
-/// is respected — there's one consumer per platform binary, and the
-/// model's continuation outlives this pump (so `stop()` leaves the
-/// stream open for a re-`start()`).
+/// The single-iterator constraint of `AsyncStream` is respected — there's
+/// one consumer per platform binary, and the model's continuation outlives
+/// this pump (so `stop()` leaves the stream open for a re-`start()`).
 @JavaUIActor
-public final class AndroidCommands<C: Encodable & Sendable> {
-    private let stream: AsyncStream<C>
+public final class AndroidCommands {
+    private let stream: AsyncStream<AppCommand>
     private let sink: any CommandSink
     private var task: Task<Void, Never>?
 
-    public init(stream: AsyncStream<C>, sink: any CommandSink) {
+    public init(stream: AsyncStream<AppCommand>, sink: any CommandSink) {
         self.stream = stream
         self.sink = sink
     }
@@ -26,7 +25,10 @@ public final class AndroidCommands<C: Encodable & Sendable> {
         task?.cancel()
         task = Task { [stream, sink] in
             for await command in stream {
-                sink.deliverCommand(commandJSON: JNICoder.encode(command))
+                switch command {
+                case .presentURL(let value):
+                    sink.presentURL(value: value)
+                }
             }
         }
     }

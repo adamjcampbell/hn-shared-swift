@@ -45,7 +45,7 @@ class BridgePerfTest {
     }
 
     private class CapturingSink : CommandSink {
-        override fun deliverCommand(commandJSON: String) {}
+        override fun presentURL(value: String) {}
     }
 
     private class CapturingCallback : ObservationCallback {
@@ -56,16 +56,23 @@ class BridgePerfTest {
     private val noOp = object : ObservationCallback { override fun onChange() {} }
 
     private companion object {
-        const val TOGGLE_FOO_JSON = """{"type":"toggleRead","id":"foo"}"""
-        const val REFRESH_JSON    = """{"type":"refresh"}"""
-        val FIRST_ID_REGEX = Regex("\"id\":\"([^\"]+)\"")
+        const val TOGGLE_FOO_ID = "foo"
+    }
+
+    /**
+     * Registers stories observation and releases the peer immediately. The
+     * peer was retained on the Swift side; tests that only care about firing
+     * the dependency (not the values) must release to avoid a Swift-side leak.
+     */
+    private fun registerStoriesObservation(cb: ObservationCallback) {
+        AppCoreAndroid.appcoreStoriesRelease(AppCoreAndroid.appcoreObserveGetStoriesHandle(cb))
     }
 
     /** Registers all five fused thunks with a shared callback — any property change fires it. */
     private fun registerObserveAll(): CapturingCallback {
         val cb = CapturingCallback()
         onMain {
-            AppCoreAndroid.appcoreObserveGetStoriesJSON(cb)
+            registerStoriesObservation(cb)
             AppCoreAndroid.appcoreObserveGetIsLoading(cb)
             AppCoreAndroid.appcoreObserveGetSearchQuery(cb)
             AppCoreAndroid.appcoreObserveGetLastRefreshedAt(cb)
@@ -76,7 +83,7 @@ class BridgePerfTest {
 
     private fun registerObserveStories(): CapturingCallback {
         val cb = CapturingCallback()
-        onMain { AppCoreAndroid.appcoreObserveGetStoriesJSON(cb) }
+        onMain { registerStoriesObservation(cb) }
         return cb
     }
 
@@ -84,6 +91,26 @@ class BridgePerfTest {
         val cb = CapturingCallback()
         onMain { AppCoreAndroid.appcoreObserveGetSearchQuery(cb) }
         return cb
+    }
+
+    /**
+     * Reads the first story's id (if any), releasing the peer afterwards.
+     * Used by [endToEnd_toggleRoundTrip] which needs a real id to toggle.
+     */
+    private fun firstStoryIdOrNull(): String? {
+        val peer = AppCoreAndroid.appcoreObserveGetStoriesHandle(noOp)
+        return try {
+            if (AppCoreAndroid.appcoreStoriesCount(peer) > 0)
+                AppCoreAndroid.appcoreStoryId(peer, 0) else null
+        } finally {
+            AppCoreAndroid.appcoreStoriesRelease(peer)
+        }
+    }
+
+    private fun storiesCount(): Int {
+        val peer = AppCoreAndroid.appcoreObserveGetStoriesHandle(noOp)
+        return try { AppCoreAndroid.appcoreStoriesCount(peer) }
+        finally { AppCoreAndroid.appcoreStoriesRelease(peer) }
     }
 
     // MARK: - Cold-start tests (prefixed a_ to run first)
@@ -97,7 +124,7 @@ class BridgePerfTest {
     fun a_coldStart_gettersReturnDefaults() = runBlocking {
         onMain { AppCoreAndroid.appcoreCreate(CapturingSink()) }
         try {
-            assertEquals("[]", onMainResult { AppCoreAndroid.appcoreObserveGetStoriesJSON(noOp) })
+            assertEquals(0, onMainResult { storiesCount() })
             assertEquals(false, onMainResult { AppCoreAndroid.appcoreObserveGetIsLoading(noOp) })
             assertEquals("", onMainResult { AppCoreAndroid.appcoreObserveGetSearchQuery(noOp) })
             assertEquals("", onMainResult { AppCoreAndroid.appcoreObserveGetLastRefreshedAt(noOp) })
@@ -118,7 +145,7 @@ class BridgePerfTest {
             onMain { AppCoreAndroid.appcoreCreate(CapturingSink()) }
             try {
                 val cb = registerObserveAll()
-                onMain { AppCoreAndroid.appcoreDispatch(REFRESH_JSON) }
+                onMain { AppCoreAndroid.appcoreRefresh() }
                 // 10s covers real HN API latency; typically < 100 ms for the
                 // first isLoading transition alone.
                 withTimeout(10_000) { cb.changes.receive() }
@@ -135,14 +162,14 @@ class BridgePerfTest {
     fun syncJniCall_overhead() = runBlocking {
         onMain { AppCoreAndroid.appcoreCreate(CapturingSink()) }
         try {
-            repeat(20) { onMain { AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON) } }
+            repeat(20) { onMain { AppCoreAndroid.appcoreToggleRead(TOGGLE_FOO_ID) } }
             val samples = mutableListOf<Long>()
             repeat(200) {
                 samples += measureNanoTime {
-                    onMain { AppCoreAndroid.appcoreDispatch(TOGGLE_FOO_JSON) }
+                    onMain { AppCoreAndroid.appcoreToggleRead(TOGGLE_FOO_ID) }
                 }
             }
-            report("sync JNI call (dispatch — incl. JSON decode)", samples)
+            report("sync JNI call (typed appcoreToggleRead)", samples)
         } finally {
             onMain { AppCoreAndroid.appcoreDestroy() }
         }
@@ -154,24 +181,22 @@ class BridgePerfTest {
         try {
             // Dispatch refresh once, then re-register scope on each onChange
             // until stories are populated.
-            onMain { AppCoreAndroid.appcoreDispatch(REFRESH_JSON) }
+            onMain { AppCoreAndroid.appcoreRefresh() }
             val storyId = withTimeout(15_000) {
                 var id: String? = null
                 while (id == null) {
                     val cb = registerObserveAll()
                     cb.changes.receive()
-                    val json = onMainResult { AppCoreAndroid.appcoreObserveGetStoriesJSON(noOp) }
-                    id = FIRST_ID_REGEX.find(json)?.groupValues?.get(1)
+                    id = onMainResult { firstStoryIdOrNull() ?: "" }.ifEmpty { null }
                 }
                 id
             }
-            val toggleStory = """{"type":"toggleRead","id":"$storyId"}"""
 
             // Warm-up: each toggle flips Story.isRead in the computed
             // `stories` property, firing onChange on the stories observer.
             repeat(20) {
                 val cb = registerObserveStories()
-                onMain { AppCoreAndroid.appcoreDispatch(toggleStory) }
+                onMain { AppCoreAndroid.appcoreToggleRead(storyId) }
                 withTimeout(1_000) { cb.changes.receive() }
             }
 
@@ -179,7 +204,7 @@ class BridgePerfTest {
             repeat(100) {
                 val cb = registerObserveStories()
                 val t0 = System.nanoTime()
-                onMain { AppCoreAndroid.appcoreDispatch(toggleStory) }
+                onMain { AppCoreAndroid.appcoreToggleRead(storyId) }
                 withTimeout(1_000) { cb.changes.receive() }
                 samples += System.nanoTime() - t0
             }
@@ -191,21 +216,21 @@ class BridgePerfTest {
     }
 
     @Test
-    fun storiesPayload_size() = runBlocking {
+    fun storiesPayload_shape() = runBlocking {
         onMain { AppCoreAndroid.appcoreCreate(CapturingSink()) }
         try {
             // Load until stories are non-empty.
-            onMain { AppCoreAndroid.appcoreDispatch(REFRESH_JSON) }
-            val loaded = withTimeout(15_000) {
-                var json = "[]"
-                while (!json.contains("{")) {
+            onMain { AppCoreAndroid.appcoreRefresh() }
+            val rowCount = withTimeout(15_000) {
+                var n = 0
+                while (n == 0) {
                     val cb = registerObserveStories()
                     cb.changes.receive()
-                    json = onMainResult { AppCoreAndroid.appcoreObserveGetStoriesJSON(noOp) }
+                    n = onMainResult { storiesCount() }
                 }
-                json
+                n
             }
-            println("[BridgePerf] stories JSON bytes (loaded, no reads): ${loaded.toByteArray().size}")
+            println("[BridgePerf] stories rows (loaded): $rowCount")
         } finally {
             onMain { AppCoreAndroid.appcoreDestroy() }
         }
@@ -232,13 +257,13 @@ class BridgePerfTest {
                 override fun onChange() { capturedLooper.trySend(android.os.Looper.myLooper()) }
             }
             onMain {
-                AppCoreAndroid.appcoreObserveGetStoriesJSON(cb)
+                registerStoriesObservation(cb)
                 AppCoreAndroid.appcoreObserveGetIsLoading(cb)
                 AppCoreAndroid.appcoreObserveGetSearchQuery(cb)
                 AppCoreAndroid.appcoreObserveGetLastRefreshedAt(cb)
                 AppCoreAndroid.appcoreObserveGetLoadError(cb)
             }
-            onMain { AppCoreAndroid.appcoreDispatch(REFRESH_JSON) }
+            onMain { AppCoreAndroid.appcoreRefresh() }
             val looper = withTimeout(5_000) { capturedLooper.receive() }
             assertEquals(
                 "ObservationCallback.onChange must run on Android's main Looper",

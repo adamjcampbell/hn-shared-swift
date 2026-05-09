@@ -25,7 +25,7 @@ enum Bridge {
     /// `JavaUIActor.assumeIsolated { ... }`).
     static let appModel = AppModel()
 
-    private static var commandPump: AndroidCommands<AppCommand>!
+    private static var commandPump: AndroidCommands!
     private static var queryWatcherTask: Task<Void, Never>!
 
     static func attach(commandSink: any CommandSink) {

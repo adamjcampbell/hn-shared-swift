@@ -1,7 +1,7 @@
 /// Sink for one-shot command deliveries from Swift to Kotlin — the
-/// symmetric counterpart to `SnapshotSink`. `SnapshotSink` carries
-/// `AppState` snapshots (UI ← Core, state); this protocol carries
-/// `AppCommand` values (UI ← Core, imperative requests).
+/// counterpart to the per-property observation reads. Each `AppCommand`
+/// case has its own typed method; the Swift side does the case dispatch
+/// in `AndroidCommands` and never serialises a wire payload.
 ///
 /// jextract turns this protocol into a Java interface
 /// (`com.example.appcore.bridge.CommandSink`) thanks to
@@ -9,11 +9,9 @@
 /// implements the interface and registers an instance with
 /// `appcoreCreate`.
 ///
-/// **Why `deliverCommand`, not `deliver`:** the JVM method signature is
-/// (Ljava/lang/String;)V regardless of parameter name, so naming this
-/// `deliver` would collide with `SnapshotSink.deliver(snapshotJSON:)`
-/// when a single Kotlin object implements both interfaces (which is
-/// exactly what `AppModelHolder` does).
+/// Adding a new `AppCommand` case means adding a new method here, a new
+/// `case` arm in `AndroidCommands.start()`, and a Kotlin override on
+/// `AppModelHolder`.
 public protocol CommandSink: Sendable {
-    func deliverCommand(commandJSON: String)
+    func presentURL(value: String)
 }
