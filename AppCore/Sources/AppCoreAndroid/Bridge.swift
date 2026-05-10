@@ -28,6 +28,15 @@ enum Bridge {
     private static var commandPump: AndroidCommands!
     private static var queryWatcherTask: Task<Void, Never>!
 
+    /// Outstanding observation Tasks, keyed by token. Each
+    /// `appcoreObserve*` thunk registers via [registerObservation] and
+    /// returns the token; `appcoreCancelObservation` removes by token
+    /// and cancels the Task. [detach] cancels all that haven't been
+    /// individually cancelled yet — important for tests that
+    /// `appcoreDestroy` without pairing each register with a cancel.
+    private static var observations: [Int64: Task<Void, Never>] = [:]
+    private static var nextObservationToken: Int64 = 1
+
     static func attach(commandSink: any CommandSink) {
         precondition(commandPump == nil, "Bridge.attach called while already attached")
 
@@ -42,6 +51,19 @@ enum Bridge {
     static func detach() {
         commandPump?.stop(); commandPump = nil
         queryWatcherTask?.cancel(); queryWatcherTask = nil
+        observations.values.forEach { $0.cancel() }
+        observations.removeAll()
+    }
+
+    static func registerObservation(_ task: Task<Void, Never>) -> Int64 {
+        let token = nextObservationToken
+        nextObservationToken += 1
+        observations[token] = task
+        return token
+    }
+
+    static func cancelObservation(_ token: Int64) {
+        observations.removeValue(forKey: token)?.cancel()
     }
 
     static func dispatch(_ event: AppEvent) async {

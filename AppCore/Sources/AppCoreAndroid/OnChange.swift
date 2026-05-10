@@ -20,11 +20,15 @@
 /// `appcoreObserveGet*` again to re-arm and read the post-mutation
 /// value. No `Handler.post` deferral is needed.
 ///
-/// **One-shot.** Each `appcoreObserveGet*` call sets up a fresh
-/// `Observations { … }.dropFirst().prefix(1)` Task that emits one
-/// onChange and terminates. Re-registration is the composable's
-/// responsibility via the `SwiftBinding`-driven re-arm cycle in
-/// `SwiftState.kt`.
+/// **Lifecycle.** Each `appcoreObserve*` call spawns a long-lived
+/// `Observations { … }.dropFirst()` Task and returns a cancellation
+/// token. The Task fires `onChange()` on every emission until cancelled.
+/// `SwiftBinding.dispose()` calls `appcoreCancelObservation(token)` to
+/// tear the chain down immediately on Compose disposal — the for-await
+/// loop exits, the JNI global ref drops, and GC reclaims the callback
+/// without waiting for a future Swift mutation. `Bridge.detach` (called
+/// by `appcoreDestroy`) also cancels any tokens still outstanding, so
+/// tests that destroy without explicit cancel don't leak Tasks.
 public protocol OnChange: Sendable {
     func onChange()
 }

@@ -226,52 +226,67 @@ the cached `MutableState`.
 
 ---
 
-## Option E — `Observations` AsyncSequence (current implementation)
+## Option E — `Observations` AsyncSequence with cancel-on-dispose (current implementation)
 
 ```swift
 @JavaUIActor
-private func observeGet<T: Sendable>(
+private func observe<T: Sendable>(
     _ read: @escaping @Sendable (AppState) -> T,
     callback: some OnChange,
-) -> T {
-    let initial = read(Bridge.appModel.state)
-    Task { @JavaUIActor in
-        for await _ in Observations({ read(Bridge.appModel.state) })
-            .dropFirst().prefix(1) {
+) -> Int64 {
+    let task = Task {
+        for await _ in Observations({ read(Bridge.appModel.state) }).dropFirst() {
             callback.onChange()
         }
     }
-    return initial
+    return Bridge.registerObservation(task)
+}
+
+public func appcoreCancelObservation(token: Int64) {
+    JavaUIActor.assumeIsolated { Bridge.cancelObservation(token) }
 }
 ```
 
 ```kotlin
-private class SwiftBinding<T>(private val track: (OnChange) -> T) {
-    private var active = true
-    val state: MutableState<T> = mutableStateOf(observe())
-    fun dispose() { active = false }
-    private fun observe(): T = track(OnChange {
-        if (active) state.value = observe()      // synchronous re-arm
-    })
+class SwiftState<T>(
+    val observe: (OnChange) -> Long,
+    val read: () -> T,
+)
+
+private class SwiftBinding<T>(swiftState: SwiftState<T>) {
+    private val read = swiftState.read
+    val state: MutableState<T> = mutableStateOf(read())
+    private val token: Long = swiftState.observe(OnChange { state.value = read() })
+    fun dispose() { AppCoreAndroid.appcoreCancelObservation(token) }
 }
 ```
 
 **Mechanism.** Swift's `Observations` AsyncSequence (SE-0475) emits at
-**transaction end** — *after* the property's didSet, after the mutation
-has fully committed. The willSet race that bit `withObservationTracking`
-doesn't apply because we're not running anything inside willSet at all.
-Both the writer (a `@JavaUIActor`-isolated dispatch arm) and the
-awaiting Task share the same `LooperExecutor`, so when the AsyncSequence
-fires the post-didSet emission, the continuation resumes on the
-executor's main thread on the very next runloop iteration. Kotlin's
-`OnChange.onChange` runs there, can synchronously re-call
-`appcoreObserveGet*` to re-arm, and the read sees post-mutation state.
+**transaction end** — *after* the property's didSet. The bridge spawns
+one long-lived Task per binding that iterates the sequence and fires
+`callback.onChange()` on every change. The Task is registered with the
+`Bridge` registry, which returns a token; Kotlin holds the token and
+calls `appcoreCancelObservation(token)` on `SwiftBinding.dispose()`.
+Cancellation tears the Task down immediately — the for-await loop
+exits, the OnChange capture is released, the JNI global ref drops, and
+GC reclaims the chain.
 
-**willSet race avoided?** Yes — by *not occurring during willSet at
-all*. The emission machinery doesn't run inside the setter's stack.
+`Bridge.detach` (called by `appcoreDestroy`) also iterates the registry
+and cancels any tokens still outstanding, so tests that destroy without
+explicit cancellation don't leak Tasks across runs.
 
-**Cost per Swift change:** 1 `Task` continuation resumption (essentially
-1 looper job) + 1 JNI call (the re-arm `track`).
+**willSet race avoided?** Yes — the emission machinery doesn't run
+inside the setter's stack at all. By the time `onChange` fires the
+mutation has committed, so the synchronous re-read inside Kotlin's
+`OnChange` body returns post-mutation state.
+
+**Lifecycle.** Per binding: 1 register call + 1 initial read on
+construction; 1 read per emission; 1 cancel on dispose. Tasks are
+torn down promptly on dispose — no "leak until next mutation"
+window.
+
+**Cost per Swift change:** 1 `Task` continuation resumption (≈1 looper
+job) + 1 JNI call (the read).
 **Cost per `.value` read:** Free (standard MutableState read).
 **Multi-reader scaling:** Same as D — one tracker per binding, all
 readers share the cached `MutableState`.
@@ -284,15 +299,18 @@ readers share the cached `MutableState`.
   (Android SDK 6.3 has it; on Apple platforms `Observations` is
   iOS 26+, which is why iOS-17-floor consumers in `AppCore` use the
   local `ObservedKeyPath` fallback in `Observed.swift`).
-- Per-emission cost is one `Task` resumption rather than the atomic
-  int of A/B or the `Handler.post` of D. In practice all three are
-  microsecond-scale and converge to the same Choreographer frame.
+- Per-property API is now a pair: `appcoreObserve*(callback) -> Int64`
+  and `appcoreReadX() -> T`. The previous fused `appcoreObserveGet*`
+  is gone. Slight increase in thunk surface (5 reads + 1 cancel),
+  in exchange for prompt cleanup and an end to the Kotlin-side
+  `active` flag.
 
 **Trade-offs vs D.** E is strictly cleaner: no `Handler` dependency,
-no Looper post per emission, no comments explaining "why we defer". The
-cost is being on a Swift toolchain that has `Observations` and accepting
-the `T: Sendable` constraint on observed types. For this app, both are
-non-issues.
+no Looper post per emission, no `active` flag, no "leak until next
+mutation" window, and no comments explaining "why we defer". The cost
+is being on a Swift toolchain that has `Observations` and accepting
+the `T: Sendable` constraint on observed types. For this app, both
+are non-issues.
 
 ---
 

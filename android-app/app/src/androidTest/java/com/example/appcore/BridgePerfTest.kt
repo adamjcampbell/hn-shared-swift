@@ -21,11 +21,10 @@ import kotlin.system.measureNanoTime
 /**
  * Latency micro-benchmarks and regression guards for the Swift→Kotlin bridge.
  *
- * The bridge uses fused `appcoreObserveGet*` thunks: each atomically registers
- * a per-property dependency AND returns the current value in one JNI hop.
- * Re-registration is the composable's responsibility — these tests mirror that
- * cycle explicitly via [registerObserveAll], [registerObserveStories], and
- * [registerObserveSearchQuery].
+ * The bridge uses `appcoreObserve*` / `appcoreRead*` thunks: observe registers
+ * a long-lived Task and returns a cancellation token; read fetches the current
+ * value. These tests use the observe thunks to register and let
+ * `appcoreDestroy` tear them down (no per-test cancellation).
  *
  * **Lifecycle reset.** Instrumented tests run in the same process as the
  * app, so `AppCoreApplication.onCreate` has already called
@@ -59,37 +58,28 @@ class BridgePerfTest {
         const val TOGGLE_FOO_ID = "foo"
     }
 
-    /**
-     * Registers stories observation and releases the peer immediately. The
-     * peer was retained on the Swift side; tests that only care about firing
-     * the dependency (not the values) must release to avoid a Swift-side leak.
-     */
-    private fun registerStoriesObservation(cb: OnChange) {
-        AppCoreAndroid.appcoreStoriesRelease(AppCoreAndroid.appcoreObserveGetStoriesHandle(cb))
-    }
-
-    /** Registers all five fused thunks with a shared callback — any property change fires it. */
+    /** Registers all five observe thunks with a shared callback — any property change fires it. */
     private fun registerObserveAll(): CapturingCallback {
         val cb = CapturingCallback()
         onMain {
-            registerStoriesObservation(cb)
-            AppCoreAndroid.appcoreObserveGetIsLoading(cb)
-            AppCoreAndroid.appcoreObserveGetSearchQuery(cb)
-            AppCoreAndroid.appcoreObserveGetLastRefreshedAt(cb)
-            AppCoreAndroid.appcoreObserveGetLoadError(cb)
+            AppCoreAndroid.appcoreObserveStories(cb)
+            AppCoreAndroid.appcoreObserveIsLoading(cb)
+            AppCoreAndroid.appcoreObserveSearchQuery(cb)
+            AppCoreAndroid.appcoreObserveLastRefreshedAt(cb)
+            AppCoreAndroid.appcoreObserveLoadError(cb)
         }
         return cb
     }
 
     private fun registerObserveStories(): CapturingCallback {
         val cb = CapturingCallback()
-        onMain { registerStoriesObservation(cb) }
+        onMain { AppCoreAndroid.appcoreObserveStories(cb) }
         return cb
     }
 
     private fun registerObserveSearchQuery(): CapturingCallback {
         val cb = CapturingCallback()
-        onMain { AppCoreAndroid.appcoreObserveGetSearchQuery(cb) }
+        onMain { AppCoreAndroid.appcoreObserveSearchQuery(cb) }
         return cb
     }
 
@@ -98,7 +88,7 @@ class BridgePerfTest {
      * Used by [endToEnd_toggleRoundTrip] which needs a real id to toggle.
      */
     private fun firstStoryIdOrNull(): String? {
-        val peer = AppCoreAndroid.appcoreObserveGetStoriesHandle(noOp)
+        val peer = AppCoreAndroid.appcoreReadStoriesHandle()
         return try {
             if (AppCoreAndroid.appcoreStoriesCount(peer) > 0)
                 AppCoreAndroid.appcoreStoryId(peer, 0) else null
@@ -108,7 +98,7 @@ class BridgePerfTest {
     }
 
     private fun storiesCount(): Int {
-        val peer = AppCoreAndroid.appcoreObserveGetStoriesHandle(noOp)
+        val peer = AppCoreAndroid.appcoreReadStoriesHandle()
         return try { AppCoreAndroid.appcoreStoriesCount(peer) }
         finally { AppCoreAndroid.appcoreStoriesRelease(peer) }
     }
@@ -125,10 +115,10 @@ class BridgePerfTest {
         onMain { AppCoreAndroid.appcoreCreate(CapturingSink()) }
         try {
             assertEquals(0, onMainResult { storiesCount() })
-            assertEquals(false, onMainResult { AppCoreAndroid.appcoreObserveGetIsLoading(noOp) })
-            assertEquals("", onMainResult { AppCoreAndroid.appcoreObserveGetSearchQuery(noOp) })
-            assertEquals(java.util.Optional.empty<String>(), onMainResult { AppCoreAndroid.appcoreObserveGetLastRefreshedAt(noOp) })
-            assertEquals(java.util.Optional.empty<String>(), onMainResult { AppCoreAndroid.appcoreObserveGetLoadError(noOp) })
+            assertEquals(false, onMainResult { AppCoreAndroid.appcoreReadIsLoading() })
+            assertEquals("", onMainResult { AppCoreAndroid.appcoreReadSearchQuery() })
+            assertEquals(java.util.Optional.empty<String>(), onMainResult { AppCoreAndroid.appcoreReadLastRefreshedAt() })
+            assertEquals(java.util.Optional.empty<String>(), onMainResult { AppCoreAndroid.appcoreReadLoadError() })
         } finally {
             onMain { AppCoreAndroid.appcoreDestroy() }
         }
@@ -257,11 +247,11 @@ class BridgePerfTest {
                 override fun onChange() { capturedLooper.trySend(android.os.Looper.myLooper()) }
             }
             onMain {
-                registerStoriesObservation(cb)
-                AppCoreAndroid.appcoreObserveGetIsLoading(cb)
-                AppCoreAndroid.appcoreObserveGetSearchQuery(cb)
-                AppCoreAndroid.appcoreObserveGetLastRefreshedAt(cb)
-                AppCoreAndroid.appcoreObserveGetLoadError(cb)
+                AppCoreAndroid.appcoreObserveStories(cb)
+                AppCoreAndroid.appcoreObserveIsLoading(cb)
+                AppCoreAndroid.appcoreObserveSearchQuery(cb)
+                AppCoreAndroid.appcoreObserveLastRefreshedAt(cb)
+                AppCoreAndroid.appcoreObserveLoadError(cb)
             }
             onMain { AppCoreAndroid.appcoreRefresh() }
             val looper = withTimeout(5_000) { capturedLooper.receive() }
@@ -282,10 +272,10 @@ class BridgePerfTest {
         onMain { AppCoreAndroid.appcoreCreate(CapturingSink()) }
         try {
             assertEquals("cold-start getter is empty", "",
-                onMainResult { AppCoreAndroid.appcoreObserveGetSearchQuery(noOp) })
+                onMainResult { AppCoreAndroid.appcoreReadSearchQuery() })
             onMain { AppCoreAndroid.appcoreSetSearchQuery("hello") }
             assertEquals("getter returns value just set, synchronously", "hello",
-                onMainResult { AppCoreAndroid.appcoreObserveGetSearchQuery(noOp) })
+                onMainResult { AppCoreAndroid.appcoreReadSearchQuery() })
         } finally {
             onMain { AppCoreAndroid.appcoreDestroy() }
         }
@@ -303,7 +293,7 @@ class BridgePerfTest {
             val cb = registerObserveSearchQuery()
             onMain { AppCoreAndroid.appcoreSetSearchQuery("rust") }
             withTimeout(1_000) { cb.changes.receive() }
-            assertEquals("rust", onMainResult { AppCoreAndroid.appcoreObserveGetSearchQuery(noOp) })
+            assertEquals("rust", onMainResult { AppCoreAndroid.appcoreReadSearchQuery() })
         } finally {
             onMain { AppCoreAndroid.appcoreDestroy() }
         }

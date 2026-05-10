@@ -74,34 +74,49 @@ object AppModelHolder : CommandSink {
         AppCoreAndroid.appcoreSetSearchQuery(value)
 
     // MARK: - Per-property observable fields
-    // Each is a SwiftState backed by the matching fused Swift
-    // `appcoreObserveGet*` thunk. Use `by` in a Composable to subscribe:
+    // Each is a SwiftState backed by a Swift `appcoreObserve*` /
+    // `appcoreRead*` pair. Use `by` in a Composable to subscribe:
     //   val stories by holder.stories.asState()
 
-    val stories = SwiftState<List<Story>> { cb ->
-        val peer = AppCoreAndroid.appcoreObserveGetStoriesHandle(cb)
-        try {
-            val n = AppCoreAndroid.appcoreStoriesCount(peer)
-            List(n) { i ->
-                Story(
-                    id           = AppCoreAndroid.appcoreStoryId(peer, i),
-                    title        = AppCoreAndroid.appcoreStoryTitle(peer, i),
-                    author       = AppCoreAndroid.appcoreStoryAuthor(peer, i),
-                    points       = AppCoreAndroid.appcoreStoryPoints(peer, i),
-                    commentCount = AppCoreAndroid.appcoreStoryCommentCount(peer, i),
-                    url          = AppCoreAndroid.appcoreStoryURL(peer, i).getOrNull(),
-                    createdAt    = AppCoreAndroid.appcoreStoryCreatedAtMillis(peer, i),
-                    isRead       = AppCoreAndroid.appcoreStoryIsRead(peer, i),
-                )
+    val stories = SwiftState(
+        observe = AppCoreAndroid::appcoreObserveStories,
+        read = {
+            val peer = AppCoreAndroid.appcoreReadStoriesHandle()
+            try {
+                val n = AppCoreAndroid.appcoreStoriesCount(peer)
+                List(n) { i ->
+                    Story(
+                        id           = AppCoreAndroid.appcoreStoryId(peer, i),
+                        title        = AppCoreAndroid.appcoreStoryTitle(peer, i),
+                        author       = AppCoreAndroid.appcoreStoryAuthor(peer, i),
+                        points       = AppCoreAndroid.appcoreStoryPoints(peer, i),
+                        commentCount = AppCoreAndroid.appcoreStoryCommentCount(peer, i),
+                        url          = AppCoreAndroid.appcoreStoryURL(peer, i).getOrNull(),
+                        createdAt    = AppCoreAndroid.appcoreStoryCreatedAtMillis(peer, i),
+                        isRead       = AppCoreAndroid.appcoreStoryIsRead(peer, i),
+                    )
+                }
+            } finally {
+                AppCoreAndroid.appcoreStoriesRelease(peer)
             }
-        } finally {
-            AppCoreAndroid.appcoreStoriesRelease(peer)
-        }
-    }
-    val isLoading = SwiftState(AppCoreAndroid::appcoreObserveGetIsLoading)
-    val searchQuery = SwiftState(AppCoreAndroid::appcoreObserveGetSearchQuery)
-    val lastRefreshedAt = SwiftState.ofNullable(AppCoreAndroid::appcoreObserveGetLastRefreshedAt)
-    val loadError = SwiftState.ofNullable(AppCoreAndroid::appcoreObserveGetLoadError)
+        },
+    )
+    val isLoading = SwiftState(
+        observe = AppCoreAndroid::appcoreObserveIsLoading,
+        read = AppCoreAndroid::appcoreReadIsLoading,
+    )
+    val searchQuery = SwiftState(
+        observe = AppCoreAndroid::appcoreObserveSearchQuery,
+        read = AppCoreAndroid::appcoreReadSearchQuery,
+    )
+    val lastRefreshedAt = SwiftState.ofNullable(
+        observe = AppCoreAndroid::appcoreObserveLastRefreshedAt,
+        read = AppCoreAndroid::appcoreReadLastRefreshedAt,
+    )
+    val loadError = SwiftState.ofNullable(
+        observe = AppCoreAndroid::appcoreObserveLoadError,
+        read = AppCoreAndroid::appcoreReadLoadError,
+    )
 
     fun dispatch(event: AppEvent) = when (event) {
         is AppEvent.ToggleRead -> AppCoreAndroid.appcoreToggleRead(event.id)

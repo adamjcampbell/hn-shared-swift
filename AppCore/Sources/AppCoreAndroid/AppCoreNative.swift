@@ -94,66 +94,79 @@ public func appcoreSetSearchQuery(value: String) {
     #endif
 }
 
-/// Private helper, Android-only. `@JavaUIActor`-isolated so `read` and
-/// `Bridge.appModel.state` are accessed in the same domain — no actor
-/// boundary to cross.
-///
-/// **`Observations` instead of `withObservationTracking`.** Apple's
-/// `Observations` (SE-0475) emits at *transaction end* (after didSet),
-/// not inside willSet — the willSet race that bit `withObservationTracking`
-/// doesn't apply. The for-await loop yields the post-mutation value, so
-/// Kotlin's `onChange` can re-register synchronously and read fresh
-/// state without the `Handler.post` deferral.
-///
-/// **Why this can fire synchronously on didSet.** Both the writer (a
-/// `@JavaUIActor`-isolated dispatch arm) and this Task are isolated to
-/// the same global actor with the same `LooperExecutor`. When
-/// `Observations`' transaction-end machinery resumes the awaiting
-/// continuation, the resumption is enqueued on `JavaUIActor`'s
-/// executor — and we're already on that executor's thread, so the
-/// continuation runs in the next runloop iteration after the writer's
-/// setter unwinds. No willSet stack to read through.
-///
-/// `dropFirst()` skips the iteration-start emission so we only fire on
-/// real changes, mirroring `withObservationTracking`'s one-shot
-/// semantics; `prefix(1)` reduces the loop to a single iteration so the
-/// Task terminates after delivering one onChange (Kotlin re-arms by
-/// calling `appcoreObserveGet*` again, spawning a fresh Task).
+// MARK: - Observation registration / cancellation
+//
+// `appcoreObserve*` registers a long-lived observation: spawns a Task
+// that iterates `Observations { … }.dropFirst()` for the property and
+// fires `callback.onChange()` on every emission. Returns an `Int64`
+// token that Kotlin holds for the binding's lifetime; on
+// `SwiftBinding.dispose()` Kotlin calls `appcoreCancelObservation(token)`
+// to cancel the Task immediately — the for-await loop exits, the
+// OnChange capture is released, the JNI global ref drops, and the
+// chain is reclaimed without waiting for a future Swift mutation.
+//
+// `appcoreRead*` reads the current value of a property without
+// registering. The binding calls it once on construction for the initial
+// state and once per onChange firing to refresh.
+//
+// **Why `Observations` (not `withObservationTracking`).** `Observations`
+// (SE-0475) emits at transaction end (after didSet), not inside willSet —
+// so synchronous re-reads from the OnChange handler see post-mutation
+// state. Both the writer and the awaiting Task share `LooperExecutor`,
+// so the AsyncSequence's continuation resumes on the main thread on the
+// next runloop iteration after the writer's setter unwinds.
+
 #if canImport(Android)
 @JavaUIActor
-private func observeGet<T: Sendable>(_ read: @escaping @Sendable (AppState) -> T, callback: some OnChange) -> T {
-    let initial = read(Bridge.appModel.state)
-    Task {
-        for await _ in Observations({ read(Bridge.appModel.state) }).dropFirst().prefix(1) {
+private func observe<T: Sendable>(_ read: @escaping @Sendable (AppState) -> T, callback: some OnChange) -> Int64 {
+    let task = Task {
+        for await _ in Observations({ read(Bridge.appModel.state) }).dropFirst() {
             callback.onChange()
         }
     }
-    return initial
+    return Bridge.registerObservation(task)
 }
 #endif
 
-/// Fused observe+read thunks. Each atomically registers a per-property
-/// observation scope AND returns the current value via `withObservationTracking`'s
-/// apply-closure return, so Kotlin can cache it in `remember(counter.intValue)` —
-/// no separate trailing `read()` call. Public declarations are outside the
-/// `#if canImport(Android)` guard so jextract sees them on macOS; the `#else`
-/// bodies are unreachable stubs (the JNI runtime is absent on macOS).
-/// Fused observe-and-snapshot for `[Story]`. Atomically registers a
-/// per-property dependency on `state.stories` AND returns an `Int64`
-/// peer pointer to a frozen `StoriesSnapshotPeer` capturing the current
-/// value. Kotlin reads fields with `appcoreStory*(handle:, index:)` and
-/// must call `appcoreStoriesRelease(handle:)` exactly once when done.
+/// Cancels the observation Task identified by [token]. Safe to call from
+/// any thread that holds the `JavaUIActor` contract (Compose's main
+/// thread). Calling twice with the same token is a no-op (the token has
+/// already been removed from the registry).
+public func appcoreCancelObservation(token: Int64) {
+    #if canImport(Android)
+    JavaUIActor.assumeIsolated { Bridge.cancelObservation(token) }
+    #endif
+}
+
+// MARK: - Per-property observe + read thunks
+//
+// Public declarations are outside the `#if canImport(Android)` guard so
+// jextract sees them on macOS; the `#else` bodies are unreachable stubs
+// (the JNI runtime is absent on macOS).
+
+public func appcoreObserveStories(callback: some OnChange) -> Int64 {
+    #if canImport(Android)
+    return JavaUIActor.assumeIsolated {
+        observe({ _ = $0.stories }, callback: callback)
+    }
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+/// Returns an `Int64` peer pointer to a fresh `StoriesSnapshotPeer`
+/// capturing the current `state.stories`. Kotlin reads fields with
+/// `appcoreStory*(handle:, index:)` and must call
+/// `appcoreStoriesRelease(handle:)` exactly once when done.
 ///
 /// The peer is created with `Unmanaged.passRetained`, so the Swift-side
 /// retain count is +1 on return. `appcoreStoriesRelease` undoes that;
 /// the eager Kotlin walk wraps reads in `try { … } finally { release }`.
-public func appcoreObserveGetStoriesHandle(callback: some OnChange) -> Int64 {
+public func appcoreReadStoriesHandle() -> Int64 {
     #if canImport(Android)
     return JavaUIActor.assumeIsolated {
-        observeGet({ state -> Int64 in
-            let peer = StoriesSnapshotPeer(state.stories)
-            return Int64(Int(bitPattern: Unmanaged.passRetained(peer).toOpaque()))
-        }, callback: callback)
+        let peer = StoriesSnapshotPeer(Bridge.appModel.state.stories)
+        return Int64(Int(bitPattern: Unmanaged.passRetained(peer).toOpaque()))
     }
     #else
     fatalError("Android-only")
@@ -248,33 +261,69 @@ private func storiesPeer(_ handle: Int64) -> StoriesSnapshotPeer {
 }
 #endif
 
-public func appcoreObserveGetIsLoading(callback: some OnChange) -> Bool {
+public func appcoreObserveIsLoading(callback: some OnChange) -> Int64 {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { observeGet(\.isLoading, callback: callback) }
+    return JavaUIActor.assumeIsolated { observe(\.isLoading, callback: callback) }
     #else
     fatalError("Android-only")
     #endif
 }
 
-public func appcoreObserveGetSearchQuery(callback: some OnChange) -> String {
+public func appcoreReadIsLoading() -> Bool {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { observeGet(\.searchQuery, callback: callback) }
+    return JavaUIActor.assumeIsolated { Bridge.appModel.state.isLoading }
     #else
     fatalError("Android-only")
     #endif
 }
 
-public func appcoreObserveGetLastRefreshedAt(callback: some OnChange) -> String? {
+public func appcoreObserveSearchQuery(callback: some OnChange) -> Int64 {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { observeGet({ $0.lastRefreshedAt.map { ISO8601DateFormatter().string(from: $0) } }, callback: callback) }
+    return JavaUIActor.assumeIsolated { observe(\.searchQuery, callback: callback) }
     #else
     fatalError("Android-only")
     #endif
 }
 
-public func appcoreObserveGetLoadError(callback: some OnChange) -> String? {
+public func appcoreReadSearchQuery() -> String {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { observeGet({ $0.loadError }, callback: callback) }
+    return JavaUIActor.assumeIsolated { Bridge.appModel.state.searchQuery }
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreObserveLastRefreshedAt(callback: some OnChange) -> Int64 {
+    #if canImport(Android)
+    return JavaUIActor.assumeIsolated {
+        observe({ $0.lastRefreshedAt.map { ISO8601DateFormatter().string(from: $0) } }, callback: callback)
+    }
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreReadLastRefreshedAt() -> String? {
+    #if canImport(Android)
+    return JavaUIActor.assumeIsolated {
+        Bridge.appModel.state.lastRefreshedAt.map { ISO8601DateFormatter().string(from: $0) }
+    }
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreObserveLoadError(callback: some OnChange) -> Int64 {
+    #if canImport(Android)
+    return JavaUIActor.assumeIsolated { observe(\.loadError, callback: callback) }
+    #else
+    fatalError("Android-only")
+    #endif
+}
+
+public func appcoreReadLoadError() -> String? {
+    #if canImport(Android)
+    return JavaUIActor.assumeIsolated { Bridge.appModel.state.loadError }
     #else
     fatalError("Android-only")
     #endif
