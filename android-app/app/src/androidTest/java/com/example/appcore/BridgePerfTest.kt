@@ -4,7 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.CommandSink
-import com.example.appcore.bridge.ObservationCallback
+import com.example.appcore.bridge.OnChange
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -48,12 +48,12 @@ class BridgePerfTest {
         override fun presentURL(value: String) {}
     }
 
-    private class CapturingCallback : ObservationCallback {
+    private class CapturingCallback : OnChange {
         val changes = Channel<Unit>(Channel.UNLIMITED)
         override fun onChange() { changes.trySend(Unit) }
     }
 
-    private val noOp = object : ObservationCallback { override fun onChange() {} }
+    private val noOp = object : OnChange { override fun onChange() {} }
 
     private companion object {
         const val TOGGLE_FOO_ID = "foo"
@@ -64,7 +64,7 @@ class BridgePerfTest {
      * peer was retained on the Swift side; tests that only care about firing
      * the dependency (not the values) must release to avoid a Swift-side leak.
      */
-    private fun registerStoriesObservation(cb: ObservationCallback) {
+    private fun registerStoriesObservation(cb: OnChange) {
         AppCoreAndroid.appcoreStoriesRelease(AppCoreAndroid.appcoreObserveGetStoriesHandle(cb))
     }
 
@@ -239,7 +239,7 @@ class BridgePerfTest {
     // MARK: - Thread contract
 
     /**
-     * Canary for the `LooperExecutor` contract: `ObservationCallback.onChange`
+     * Canary for the `LooperExecutor` contract: `OnChange.onChange`
      * must always arrive on Android's main Looper. Swift delivers it via
      * `Task { @JavaUIActor in callback.onChange() }`, which pins to the main
      * Looper through `LooperExecutor`. If a future refactor drops this,
@@ -253,7 +253,7 @@ class BridgePerfTest {
 
         onMain { AppCoreAndroid.appcoreCreate(CapturingSink()) }
         try {
-            val cb = object : ObservationCallback {
+            val cb = object : OnChange {
                 override fun onChange() { capturedLooper.trySend(android.os.Looper.myLooper()) }
             }
             onMain {
@@ -266,7 +266,7 @@ class BridgePerfTest {
             onMain { AppCoreAndroid.appcoreRefresh() }
             val looper = withTimeout(5_000) { capturedLooper.receive() }
             assertEquals(
-                "ObservationCallback.onChange must run on Android's main Looper",
+                "OnChange.onChange must run on Android's main Looper",
                 mainLooper,
                 looper,
             )

@@ -3,7 +3,7 @@ package com.example.appcore.state
 import com.example.appcore.bridge.AndroidCompletion
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.CommandSink
-import com.example.appcore.bridge.ObservationCallback
+import com.example.appcore.bridge.OnChange
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow

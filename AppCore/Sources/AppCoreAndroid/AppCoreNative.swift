@@ -110,7 +110,7 @@ public func appcoreSetSearchQuery(value: String) {
 /// allocate a Task per change for no gain.
 #if canImport(Android)
 @JavaUIActor
-private func observeGet<T>(_ read: (AppState) -> T, callback: some ObservationCallback) -> T {
+private func observeGet<T>(_ read: (AppState) -> T, callback: some OnChange) -> T {
     withObservationTracking {
         read(Bridge.appModel.state)
     } onChange: {
@@ -134,7 +134,7 @@ private func observeGet<T>(_ read: (AppState) -> T, callback: some ObservationCa
 /// The peer is created with `Unmanaged.passRetained`, so the Swift-side
 /// retain count is +1 on return. `appcoreStoriesRelease` undoes that;
 /// the eager Kotlin walk wraps reads in `try { … } finally { release }`.
-public func appcoreObserveGetStoriesHandle(callback: some ObservationCallback) -> Int64 {
+public func appcoreObserveGetStoriesHandle(callback: some OnChange) -> Int64 {
     #if canImport(Android)
     return JavaUIActor.assumeIsolated {
         observeGet({ state -> Int64 in
@@ -235,7 +235,7 @@ private func storiesPeer(_ handle: Int64) -> StoriesSnapshotPeer {
 }
 #endif
 
-public func appcoreObserveGetIsLoading(callback: some ObservationCallback) -> Bool {
+public func appcoreObserveGetIsLoading(callback: some OnChange) -> Bool {
     #if canImport(Android)
     return JavaUIActor.assumeIsolated { observeGet(\.isLoading, callback: callback) }
     #else
@@ -243,7 +243,7 @@ public func appcoreObserveGetIsLoading(callback: some ObservationCallback) -> Bo
     #endif
 }
 
-public func appcoreObserveGetSearchQuery(callback: some ObservationCallback) -> String {
+public func appcoreObserveGetSearchQuery(callback: some OnChange) -> String {
     #if canImport(Android)
     return JavaUIActor.assumeIsolated { observeGet(\.searchQuery, callback: callback) }
     #else
@@ -251,7 +251,7 @@ public func appcoreObserveGetSearchQuery(callback: some ObservationCallback) -> 
     #endif
 }
 
-public func appcoreObserveGetLastRefreshedAt(callback: some ObservationCallback) -> String? {
+public func appcoreObserveGetLastRefreshedAt(callback: some OnChange) -> String? {
     #if canImport(Android)
     return JavaUIActor.assumeIsolated { observeGet({ $0.lastRefreshedAt.map { ISO8601DateFormatter().string(from: $0) } }, callback: callback) }
     #else
@@ -259,7 +259,7 @@ public func appcoreObserveGetLastRefreshedAt(callback: some ObservationCallback)
     #endif
 }
 
-public func appcoreObserveGetLoadError(callback: some ObservationCallback) -> String? {
+public func appcoreObserveGetLoadError(callback: some OnChange) -> String? {
     #if canImport(Android)
     return JavaUIActor.assumeIsolated { observeGet({ $0.loadError }, callback: callback) }
     #else

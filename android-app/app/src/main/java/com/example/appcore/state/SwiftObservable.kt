@@ -8,7 +8,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import com.example.appcore.bridge.ObservationCallback
+import com.example.appcore.bridge.OnChange
 import java.util.Optional
 import kotlin.jvm.optionals.getOrNull
 
@@ -39,7 +39,7 @@ fun interface SwiftState<T> {
      * as a one-shot tracker on the read properties and returns the current
      * value.
      */
-    fun observe(callback: ObservationCallback): T
+    fun observe(callback: OnChange): T
 
     companion object {
         /**
@@ -56,8 +56,8 @@ fun interface SwiftState<T> {
          * Modelled on `Optional.ofNullable` — a static factory that lifts
          * a presence-or-absence value into a containing type.
          */
-        fun <T : Any> ofNullable(thunk: (ObservationCallback) -> Optional<T>): SwiftState<T?> =
-            SwiftState { cb -> thunk(cb).getOrNull() }
+        fun <T : Any> ofNullable(track: (OnChange) -> Optional<T>): SwiftState<T?> =
+            SwiftState { cb -> track(cb).getOrNull() }
     }
 }
 
@@ -73,7 +73,7 @@ fun <T> SwiftState<T>.asState(): State<T> = rememberSwiftState(this::observe)
  * gets reclaimed. See [SwiftBinding] for the willSet-race mechanics.
  */
 @Composable
-private fun <T> rememberSwiftState(observe: (ObservationCallback) -> T): State<T> {
+private fun <T> rememberSwiftState(observe: (OnChange) -> T): State<T> {
     val binding = remember { SwiftBinding(observe) }
     DisposableEffect(Unit) { onDispose { binding.dispose() } }
     return binding.state
@@ -84,7 +84,7 @@ private fun <T> rememberSwiftState(observe: (ObservationCallback) -> T): State<T
  * gate that lets the re-arming chain unwind when the composable leaves.
  *
  * **Why [dispose] matters.** Swift's `withObservationTracking` registry
- * holds a JNI global ref to the [ObservationCallback], which captures
+ * holds a JNI global ref to the [OnChange], which captures
  * `this`. Even after Compose drops its `remember`-slot reference, this
  * binding stays pinned by Swift until the registered callback fires and
  * isn't replaced. [dispose] is the signal to *not* replace it: a
@@ -94,7 +94,7 @@ private fun <T> rememberSwiftState(observe: (ObservationCallback) -> T): State<T
  * **Why re-registration is deferred via [mainHandler].** Swift's
  * `withObservationTracking` fires `onChange` *inside* the property's
  * `willSet`, before the mutation has committed. A synchronous re-call of
- * [thunk] would re-enter Swift and read the pre-mutation backing storage
+ * [track] would re-enter Swift and read the pre-mutation backing storage
  * (the getter still returns the old `_hits` etc. during willSet). Posting
  * the re-registration onto Android's main looper defers it to the next
  * loop iteration — after the writer's setter (and any sibling commits in
@@ -102,14 +102,14 @@ private fun <T> rememberSwiftState(observe: (ObservationCallback) -> T): State<T
  * committed state. The post runs strictly before the next Compose frame,
  * so `state.value` carries the fresh value by recomposition time.
  */
-private class SwiftBinding<T>(private val thunk: (ObservationCallback) -> T) {
+private class SwiftBinding<T>(private val track: (OnChange) -> T) {
     private var active = true
 
     val state: MutableState<T> = mutableStateOf(observe())
 
     fun dispose() { active = false }
 
-    private fun observe(): T = thunk(ObservationCallback {
+    private fun observe(): T = track(OnChange {
         mainHandler.post { if (active) state.value = observe() }
     })
 }

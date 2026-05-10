@@ -1,8 +1,8 @@
 import SwiftJava
 
-/// `JavaCommandSink`, `JavaAndroidCompletion`, and `JavaObservationCallback`
+/// `JavaCommandSink`, `JavaAndroidCompletion`, and `JavaOnChange`
 /// are jextract-generated Swift wrappers for the Kotlin-implemented
-/// `CommandSink` / `AndroidCompletion` / `ObservationCallback` interfaces.
+/// `CommandSink` / `AndroidCompletion` / `OnChange` interfaces.
 /// They are thin handles to a JNI `jobject` and are safe to share across
 /// isolation domains: jextract's generated thunks attach/detach the JVM
 /// thread per call.
@@ -16,4 +16,4 @@ import SwiftJava
 /// synthesise the conformance themselves.
 extension JavaCommandSink: @unchecked Sendable {}
 extension JavaAndroidCompletion: @unchecked Sendable {}
-extension JavaObservationCallback: @unchecked Sendable {}
+extension JavaOnChange: @unchecked Sendable {}
