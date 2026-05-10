@@ -39,8 +39,10 @@ public struct HNHit: Sendable, Identifiable, Codable, Equatable {
 
 /// View row: `HNHit` fields plus the per-user `isRead` flag, projected
 /// from `AppState.readIds` at read time. Constructed by `AppState.stories`
-/// and emitted to Android per-field via the `appcoreStory*` JNI accessors
-/// with `isRead` already merged in.
+/// from `HNHit` + `readIds`. SkipFuse bridges `Story` to Kotlin as a
+/// peer-backed class; each `// SKIP @bridge` field below becomes a
+/// Kotlin property getter that JNI-calls back into the Swift struct
+/// (so dropping a marker hides that field on the Android side).
 // SKIP @bridge
 public struct Story: Sendable, Identifiable, Equatable {
     // SKIP @bridge

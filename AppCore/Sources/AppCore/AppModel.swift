@@ -100,9 +100,10 @@ public final class AppModel {
     }
 
     /// Long-lived loop that drives a debounced fetch on every write to
-    /// `state.searchQuery`. The host (`RootView`'s `.task` on iOS,
-    /// `Bridge.attach` on Android) `await`s this from inside its
-    /// own Task; cancellation propagates from the host's surrounding
+    /// `state.searchQuery`. The host `await`s this from inside its own
+    /// Task — `RootView`'s `.task` on iOS,
+    /// `LaunchedEffect(appModel) { appModel.runSearchQueryWatcher() }`
+    /// on Android. Cancellation propagates from the host's surrounding
     /// Task.
     ///
     /// Why this works as a plain async method (where `start()` spawning
