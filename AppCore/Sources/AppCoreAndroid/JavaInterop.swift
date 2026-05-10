@@ -1,9 +1,8 @@
 import SwiftJava
 
-/// `JavaCommandSink`, `JavaAndroidCompletion`, `JavaOnChange`, and
-/// `JavaSubscription` are jextract-generated Swift wrappers for the
-/// Kotlin-implemented `CommandSink` / `AndroidCompletion` / `OnChange`
-/// / `Subscription` interfaces.
+/// `JavaCommandSink`, `JavaAndroidCompletion`, and `JavaOnChange`
+/// are jextract-generated Swift wrappers for the Kotlin-implemented
+/// `CommandSink` / `AndroidCompletion` / `OnChange` interfaces.
 /// They are thin handles to a JNI `jobject` and are safe to share across
 /// isolation domains: jextract's generated thunks attach/detach the JVM
 /// thread per call.
@@ -18,4 +17,3 @@ import SwiftJava
 extension JavaCommandSink: @unchecked Sendable {}
 extension JavaAndroidCompletion: @unchecked Sendable {}
 extension JavaOnChange: @unchecked Sendable {}
-extension JavaSubscription: @unchecked Sendable {}

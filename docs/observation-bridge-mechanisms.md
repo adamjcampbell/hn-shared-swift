@@ -233,13 +233,14 @@ the cached `MutableState`.
 private func observe<T: Sendable>(
     _ read: @escaping @Sendable (AppState) -> T,
     callback: some OnChange,
-) -> Int64 {
+) -> (Int64, T) {
     let task = Task {
         for await _ in Observations({ read(Bridge.appModel.state) }).dropFirst() {
             callback.onChange()
         }
     }
-    return Bridge.registerObservation(task)
+    let token = Bridge.registerObservation(task)
+    return (token, read(Bridge.appModel.state))
 }
 
 public func appcoreCancelObservation(token: Int64) {
@@ -249,17 +250,27 @@ public func appcoreCancelObservation(token: Int64) {
 
 ```kotlin
 class SwiftState<T>(
-    val observe: (OnChange) -> Long,
+    val observe: (OnChange) -> Tuple2<Long, T>,
     val read: () -> T,
 )
 
 private class SwiftBinding<T>(swiftState: SwiftState<T>) {
     private val read = swiftState.read
-    val state: MutableState<T> = mutableStateOf(read())
-    private val token: Long = swiftState.observe(OnChange { state.value = read() })
+    val state: MutableState<T>
+    private val token: Long
+    init {
+        val (capturedToken, initial) = swiftState.observe(OnChange { state.value = read() })
+        token = capturedToken
+        state = mutableStateOf(initial)
+    }
     fun dispose() { AppCoreAndroid.appcoreCancelObservation(token) }
 }
 ```
+
+The tuple return fuses what would otherwise need two thunk calls (one
+for the token, one for the initial value) into one round-trip. See
+`docs/observation-bridge-tuple-return.md` for the full rationale and
+the alternatives considered.
 
 **Mechanism.** Swift's `Observations` AsyncSequence (SE-0475) emits at
 **transaction end** — *after* the property's didSet. The bridge spawns

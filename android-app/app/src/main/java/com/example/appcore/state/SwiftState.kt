@@ -8,18 +8,26 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.OnChange
-import com.example.appcore.bridge.Subscription
+import org.swift.swiftkit.core.tuple.Tuple2
 import java.util.Optional
 import kotlin.jvm.optionals.getOrNull
 
 /**
+ * Destructuring components for the swift-java [Tuple2] wrapper. jextract
+ * emits Swift `(A, B)` returns as `Tuple2<A, B>` with public final
+ * fields `$0` and `$1`. These extensions let Kotlin call sites destructure
+ * with the standard `val (a, b) = tuple` syntax.
+ */
+operator fun <A, B> Tuple2<A, B>.component1(): A = `$0`
+operator fun <A, B> Tuple2<A, B>.component2(): B = `$1`
+
+/**
  * A Swift `@Observable` property bridged to Kotlin. Construct one in a
  * model holder by passing the matching pair of Swift thunks: an
- * `appcoreObserve*` (registers a long-lived Task, returns the initial
- * value, and fires the [Subscription]'s `attached` callback inline with
- * the cancellation token) and an `appcoreRead*` (reads the current value
- * for re-reads on each emission). Convert it to a Compose [State] inside
- * a composable via [asState].
+ * `appcoreObserve*` (registers a long-lived Task and returns a
+ * `(token, initialValue)` tuple) and an `appcoreRead*` (reads the
+ * current value for re-reads on each emission). Convert it to a Compose
+ * [State] inside a composable via [asState].
  *
  * Usage:
  * ```kotlin
@@ -40,13 +48,11 @@ import kotlin.jvm.optionals.getOrNull
  */
 class SwiftState<T>(
     /**
-     * Registers a long-lived Swift-side observation Task, fires the
-     * [Subscription]'s `attached` callback synchronously with the
-     * cancellation token, and returns the initial value. Cancellation
-     * tears the Task down and releases the JNI ref to the [OnChange]
-     * callback.
+     * Registers a long-lived Swift-side observation Task and returns a
+     * `(token, initialValue)` tuple. Cancellation tears the Task down
+     * and releases the JNI ref to the [OnChange] callback.
      */
-    val observe: (OnChange, Subscription) -> T,
+    val observe: (OnChange) -> Tuple2<Long, T>,
     /**
      * Reads the current value of the bridged property. Called by the
      * binding's [OnChange] handler on every emission to refresh
@@ -56,10 +62,11 @@ class SwiftState<T>(
 ) {
     companion object {
         /**
-         * Adapter for thunks that return `Optional<T>` — the shape jextract
-         * generates for Swift `T?` returns. Unwraps to a Kotlin nullable
-         * `T?` so model holders can use method-reference syntax for
-         * nullable fields the same way as non-null ones:
+         * Adapter for thunks whose initial-value tuple slot is
+         * `Optional<T>` (the shape jextract generates for Swift `T?`)
+         * and whose read returns `Optional<T>`. Unwraps both to a Kotlin
+         * nullable `T?` so model holders can use method-reference syntax
+         * for nullable fields the same way as non-null ones:
          *
          * ```kotlin
          * val lastRefreshed = SwiftState.ofNullable(
@@ -67,15 +74,15 @@ class SwiftState<T>(
          *     read    = AppCoreAndroid::appcoreReadLastRefreshedAt,
          * )
          * ```
-         *
-         * Modelled on `Optional.ofNullable` — a static factory that lifts
-         * a presence-or-absence value into a containing type.
          */
         fun <T : Any> ofNullable(
-            observe: (OnChange, Subscription) -> Optional<T>,
+            observe: (OnChange) -> Tuple2<Long, Optional<T>>,
             read: () -> Optional<T>,
         ): SwiftState<T?> = SwiftState(
-            observe = { onChange, subscription -> observe(onChange, subscription).getOrNull() },
+            observe = { onChange ->
+                val (token, initial) = observe(onChange)
+                Tuple2(token, initial.getOrNull())
+            },
             read = { read().getOrNull() },
         )
     }
@@ -102,10 +109,9 @@ private fun <T> rememberSwiftState(swiftState: SwiftState<T>): State<T> {
  * Holds the [MutableState] backing a single observation, plus the
  * cancellation token returned by Swift's `appcoreObserve*` thunk.
  *
- * **Construction.** Calls [SwiftState.observe] once. The thunk fires the
- * [Subscription]'s `attached` callback inline (Kotlin captures the
- * token), then returns the initial value (Kotlin seeds [state]). One
- * round-trip delivers both.
+ * **Construction.** Calls [SwiftState.observe] once. The thunk returns
+ * a `(token, initialValue)` tuple — the token is stored for cancellation
+ * and the initial value seeds [state]. One round-trip delivers both.
  *
  * **Per emission.** Swift's [OnChange] callback fires; the handler reads
  * the current value via [SwiftState.read] and writes it to [state].
@@ -127,13 +133,9 @@ private class SwiftBinding<T>(swiftState: SwiftState<T>) {
     private val token: Long
 
     init {
-        var capturedToken = -1L
-        val initial = swiftState.observe(
-            OnChange { state.value = read() },
-            Subscription { capturedToken = it },
-        )
-        state = mutableStateOf(initial)
+        val (capturedToken, initial) = swiftState.observe(OnChange { state.value = read() })
         token = capturedToken
+        state = mutableStateOf(initial)
     }
 
     fun dispose() {

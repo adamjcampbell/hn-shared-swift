@@ -79,7 +79,10 @@ object AppModelHolder : CommandSink {
     //   val stories by holder.stories.asState()
 
     val stories = SwiftState(
-        observe = { cb, sub -> walkStoriesPeer(AppCoreAndroid.appcoreObserveStories(cb, sub)) },
+        observe = { cb ->
+            val (token, peer) = AppCoreAndroid.appcoreObserveStories(cb)
+            org.swift.swiftkit.core.tuple.Tuple2(token, walkStoriesPeer(peer))
+        },
         read = { walkStoriesPeer(AppCoreAndroid.appcoreReadStoriesHandle()) },
     )
     val isLoading = SwiftState(

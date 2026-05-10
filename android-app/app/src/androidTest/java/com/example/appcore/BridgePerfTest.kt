@@ -5,7 +5,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.example.appcore.bridge.AppCoreAndroid
 import com.example.appcore.bridge.CommandSink
 import com.example.appcore.bridge.OnChange
-import com.example.appcore.bridge.Subscription
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -54,7 +53,6 @@ class BridgePerfTest {
     }
 
     private val noOp = object : OnChange { override fun onChange() {} }
-    private val ignoreToken = Subscription { _ -> }
 
     private companion object {
         const val TOGGLE_FOO_ID = "foo"
@@ -64,24 +62,24 @@ class BridgePerfTest {
     private fun registerObserveAll(): CapturingCallback {
         val cb = CapturingCallback()
         onMain {
-            AppCoreAndroid.appcoreObserveStories(cb, ignoreToken)
-            AppCoreAndroid.appcoreObserveIsLoading(cb, ignoreToken)
-            AppCoreAndroid.appcoreObserveSearchQuery(cb, ignoreToken)
-            AppCoreAndroid.appcoreObserveLastRefreshedAt(cb, ignoreToken)
-            AppCoreAndroid.appcoreObserveLoadError(cb, ignoreToken)
+            AppCoreAndroid.appcoreObserveStories(cb)
+            AppCoreAndroid.appcoreObserveIsLoading(cb)
+            AppCoreAndroid.appcoreObserveSearchQuery(cb)
+            AppCoreAndroid.appcoreObserveLastRefreshedAt(cb)
+            AppCoreAndroid.appcoreObserveLoadError(cb)
         }
         return cb
     }
 
     private fun registerObserveStories(): CapturingCallback {
         val cb = CapturingCallback()
-        onMain { AppCoreAndroid.appcoreObserveStories(cb, ignoreToken) }
+        onMain { AppCoreAndroid.appcoreObserveStories(cb) }
         return cb
     }
 
     private fun registerObserveSearchQuery(): CapturingCallback {
         val cb = CapturingCallback()
-        onMain { AppCoreAndroid.appcoreObserveSearchQuery(cb, ignoreToken) }
+        onMain { AppCoreAndroid.appcoreObserveSearchQuery(cb) }
         return cb
     }
 
@@ -249,11 +247,11 @@ class BridgePerfTest {
                 override fun onChange() { capturedLooper.trySend(android.os.Looper.myLooper()) }
             }
             onMain {
-                AppCoreAndroid.appcoreObserveStories(cb, ignoreToken)
-                AppCoreAndroid.appcoreObserveIsLoading(cb, ignoreToken)
-                AppCoreAndroid.appcoreObserveSearchQuery(cb, ignoreToken)
-                AppCoreAndroid.appcoreObserveLastRefreshedAt(cb, ignoreToken)
-                AppCoreAndroid.appcoreObserveLoadError(cb, ignoreToken)
+                AppCoreAndroid.appcoreObserveStories(cb)
+                AppCoreAndroid.appcoreObserveIsLoading(cb)
+                AppCoreAndroid.appcoreObserveSearchQuery(cb)
+                AppCoreAndroid.appcoreObserveLastRefreshedAt(cb)
+                AppCoreAndroid.appcoreObserveLoadError(cb)
             }
             onMain { AppCoreAndroid.appcoreRefresh() }
             val looper = withTimeout(5_000) { capturedLooper.receive() }

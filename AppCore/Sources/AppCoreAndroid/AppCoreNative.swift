@@ -97,10 +97,9 @@ public func appcoreSetSearchQuery(value: String) {
 // MARK: - Observation registration / cancellation
 //
 // `appcoreObserve*` is the fused registration thunk: spawns a Task that
-// iterates `Observations { … }.dropFirst()` for the property, fires
-// `subscription.attached(token:)` synchronously to deliver the
-// cancellation token to Kotlin, and returns the initial value. The
-// `OnChange` callback fires on every subsequent emission until cancelled.
+// iterates `Observations { … }.dropFirst()` for the property and
+// returns a `(token, initialValue)` tuple. The `OnChange` callback
+// fires on every subsequent emission until cancelled.
 //
 // `appcoreRead*` reads the current value without registering — Kotlin's
 // `OnChange` handler calls it once per emission to refresh
@@ -118,27 +117,27 @@ public func appcoreSetSearchQuery(value: String) {
 // so the AsyncSequence's continuation resumes on the main thread on the
 // next runloop iteration after the writer's setter unwinds.
 //
-// **Why a Subscription callback.** jextract can't return a Swift tuple
-// across JNI, so a single thunk that delivers both the initial value
-// AND the cancellation token would otherwise need two round-trips. The
-// `Subscription` SAM lets the thunk fire `attached(token:)` inline
-// before returning the value — Kotlin gets both in one round-trip.
+// **Why a tuple return.** jextract bridges Swift tuples to
+// `org.swift.swiftkit.core.tuple.Tuple2` via a single thunk that uses
+// per-element out-param arrays internally and constructs the wrapper
+// on return. Returning `(token, value)` from one thunk fuses what
+// would otherwise need two round-trips (register → token, then read →
+// initial value). See `docs/observation-bridge-tuple-return.md` for
+// the rationale.
 
 #if canImport(Android)
 @JavaUIActor
 private func observe<T: Sendable>(
     _ read: @escaping @Sendable (AppState) -> T,
     callback: some OnChange,
-    subscription: some Subscription,
-) -> T {
+) -> (Int64, T) {
     let task = Task {
         for await _ in Observations({ read(Bridge.appModel.state) }).dropFirst() {
             callback.onChange()
         }
     }
     let token = Bridge.registerObservation(task)
-    subscription.attached(token: token)
-    return read(Bridge.appModel.state)
+    return (token, read(Bridge.appModel.state))
 }
 #endif
 
@@ -158,8 +157,8 @@ public func appcoreCancelObservation(token: Int64) {
 // jextract sees them on macOS; the `#else` bodies are unreachable stubs
 // (the JNI runtime is absent on macOS).
 
-/// Registers a long-lived observation on `state.stories`, fires
-/// `subscription.attached(token:)` inline, and returns an `Int64` peer
+/// Registers a long-lived observation on `state.stories` and returns
+/// `(token, peerHandle)` — the cancellation token plus an `Int64` peer
 /// pointer to a `StoriesSnapshotPeer` capturing the current snapshot.
 /// Kotlin reads fields with `appcoreStory*(handle:, index:)` and must
 /// call `appcoreStoriesRelease(handle:)` exactly once when done.
@@ -167,13 +166,13 @@ public func appcoreCancelObservation(token: Int64) {
 /// The peer is created with `Unmanaged.passRetained`, so the Swift-side
 /// retain count is +1 on return. `appcoreStoriesRelease` undoes that;
 /// the eager Kotlin walk wraps reads in `try { … } finally { release }`.
-public func appcoreObserveStories(callback: some OnChange, subscription: some Subscription) -> Int64 {
+public func appcoreObserveStories(callback: some OnChange) -> (Int64, Int64) {
     #if canImport(Android)
     return JavaUIActor.assumeIsolated {
         observe({ state -> Int64 in
             let peer = StoriesSnapshotPeer(state.stories)
             return Int64(Int(bitPattern: Unmanaged.passRetained(peer).toOpaque()))
-        }, callback: callback, subscription: subscription)
+        }, callback: callback)
     }
     #else
     fatalError("Android-only")
@@ -283,9 +282,9 @@ private func storiesPeer(_ handle: Int64) -> StoriesSnapshotPeer {
 }
 #endif
 
-public func appcoreObserveIsLoading(callback: some OnChange, subscription: some Subscription) -> Bool {
+public func appcoreObserveIsLoading(callback: some OnChange) -> (Int64, Bool) {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { observe(\.isLoading, callback: callback, subscription: subscription) }
+    return JavaUIActor.assumeIsolated { observe(\.isLoading, callback: callback) }
     #else
     fatalError("Android-only")
     #endif
@@ -299,9 +298,9 @@ public func appcoreReadIsLoading() -> Bool {
     #endif
 }
 
-public func appcoreObserveSearchQuery(callback: some OnChange, subscription: some Subscription) -> String {
+public func appcoreObserveSearchQuery(callback: some OnChange) -> (Int64, String) {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { observe(\.searchQuery, callback: callback, subscription: subscription) }
+    return JavaUIActor.assumeIsolated { observe(\.searchQuery, callback: callback) }
     #else
     fatalError("Android-only")
     #endif
@@ -315,10 +314,10 @@ public func appcoreReadSearchQuery() -> String {
     #endif
 }
 
-public func appcoreObserveLastRefreshedAt(callback: some OnChange, subscription: some Subscription) -> String? {
+public func appcoreObserveLastRefreshedAt(callback: some OnChange) -> (Int64, String?) {
     #if canImport(Android)
     return JavaUIActor.assumeIsolated {
-        observe({ $0.lastRefreshedAt.map { ISO8601DateFormatter().string(from: $0) } }, callback: callback, subscription: subscription)
+        observe({ $0.lastRefreshedAt.map { ISO8601DateFormatter().string(from: $0) } }, callback: callback)
     }
     #else
     fatalError("Android-only")
@@ -335,9 +334,9 @@ public func appcoreReadLastRefreshedAt() -> String? {
     #endif
 }
 
-public func appcoreObserveLoadError(callback: some OnChange, subscription: some Subscription) -> String? {
+public func appcoreObserveLoadError(callback: some OnChange) -> (Int64, String?) {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { observe(\.loadError, callback: callback, subscription: subscription) }
+    return JavaUIActor.assumeIsolated { observe(\.loadError, callback: callback) }
     #else
     fatalError("Android-only")
     #endif
