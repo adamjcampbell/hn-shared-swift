@@ -63,10 +63,8 @@ private class ObservationHandle<T>(private val thunk: (ObservationCallback) -> T
 
     fun dispose() { active = false }
 
-    private fun observe(): T = thunk(object : ObservationCallback {
-        override fun onChange() {
-            mainHandler.post { if (active) state.value = observe() }
-        }
+    private fun observe(): T = thunk(ObservationCallback {
+        mainHandler.post { if (active) state.value = observe() }
     })
 }
 
