@@ -277,24 +277,22 @@ Per spec §12 plus what verification surfaced:
     still scans these so the Java surface generates correctly. We
     don't need a fake macOS impl because `AppCoreTests` doesn't
     exercise the bridge primitives.
-- **Re-registration deferral lives on the Kotlin side, not Swift.**
-  `withObservationTracking`'s `onChange` fires synchronously *inside*
-  the property's `willSet`, before the mutation has committed. Kotlin's
-  `onChange` re-enters Swift to re-register tracking via another
-  `appcoreObserveGet*` call — and that nested read, if synchronous,
-  sees the pre-mutation value (the getter still returns the old backing
-  storage during willSet). The result would be `MutableState` written
-  with stale values: `isLoading=false` observed as `true`, spinner
-  stuck on, stories never painting. The fix is on the Kotlin side:
-  `ObservationHandle.start` in `SwiftObservable.kt` wraps the recursive
-  re-registration in `mainHandler.post { … }`, which defers it to the
-  next main-looper iteration — after the writer's setter (and any
-  sibling commits) unwinds. Swift's `observeGet` therefore stays
-  synchronous: `JavaUIActor.assumeIsolated { callback.onChange() }`,
-  no Swift `Task` allocation per change. Don't move the deferral back
-  into Swift; either side fixes the race, but Kotlin is cheaper
-  (no per-emission `Task.init`) and the deferral mechanism — main
-  looper post — already exists.
+- **Use `Observations` (not `withObservationTracking`) for the JNI
+  bridge.** `withObservationTracking`'s `onChange` fires *inside* the
+  property's `willSet`, before the mutation has committed — a
+  synchronous re-read from Kotlin would see pre-mutation backing
+  storage. Apple's `Observations` AsyncSequence (SE-0475) emits at
+  transaction end (after didSet), so the willSet race doesn't apply.
+  `observeGet` in `AppCoreNative.swift` spawns a `@JavaUIActor`-
+  isolated Task that iterates `Observations({ read(state) })
+  .dropFirst().prefix(1)` and fires `callback.onChange()` once. The
+  Task's executor is `LooperExecutor` (same as the writer's), so the
+  emission resumes on the main thread post-didSet, and Kotlin's
+  `OnChange` can synchronously re-arm with no `Handler.post` deferral.
+  Don't switch back to `withObservationTracking` — the willSet race
+  is a real footgun, and the Observations-based path is the cleanest
+  way to side-step it without a Swift-side Task hop or a Kotlin-side
+  Looper post.
 - **Inject `clock: any Clock<Duration>` into `AppModel` for tests.**
   Default is `ContinuousClock()`. `runFetch`'s Task body uses
   `clock.sleep(for:)` for the debounce wait. Tests pass a `TestClock`

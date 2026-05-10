@@ -1,26 +1,30 @@
-/// JNI mirror of the closure passed to Swift's
-/// `withObservationTracking { read } onChange: { … }` — fires once when
-/// any `@Observable` property accessed during a prior `appcoreObserveGet*`
-/// call is mutated.
+/// JNI mirror of the closure that fires when an `@Observable` property
+/// observed by `appcoreObserveGet*` mutates.
 ///
 /// jextract generates a Java interface `com.example.appcore.bridge.OnChange`
 /// from this protocol. Kotlin uses it as a SAM-convertible interface:
 /// `OnChange { … }` is a one-shot callback whose body runs on the bridge's
 /// main-looper thread.
 ///
-/// **Thread contract.** Swift fires `onChange()` synchronously inside
-/// the property's `willSet`, on whichever thread did the write — for
-/// the bridge that is always Android's main `Looper` (writes go through
-/// `JavaUIActor`-isolated dispatch arms). Kotlin's implementation must
-/// not re-enter Swift to re-read the property synchronously: the read
-/// during willSet would see pre-mutation backing storage. Instead defer
-/// the re-registration through `Handler.post(...)` (see `SwiftBinding`
-/// in `SwiftState.kt`), which runs it on the next main-looper
-/// iteration after the writer's setter unwinds.
+/// **Thread contract.** Swift fires `onChange()` from a `@JavaUIActor`-
+/// isolated Task that's iterating an `Observations` AsyncSequence. The
+/// Task's executor is `LooperExecutor`, pinned to Android's main
+/// `Looper`, so `onChange()` always arrives on the UI thread. Kotlin's
+/// implementation can read and write Compose `MutableState` directly.
 ///
-/// **One-shot.** `withObservationTracking`'s `onChange` fires at most
-/// once per registration. Re-registration is the composable's
-/// responsibility via the `SwiftBinding`-driven re-arm cycle.
+/// **Synchronous re-arm is safe.** Unlike `withObservationTracking`'s
+/// `onChange` (which fires *inside* the property's willSet, before the
+/// mutation has committed), `Observations` emits at transaction end —
+/// after didSet. The new value is fully committed by the time
+/// `onChange()` fires, so Kotlin's `OnChange` can synchronously call
+/// `appcoreObserveGet*` again to re-arm and read the post-mutation
+/// value. No `Handler.post` deferral is needed.
+///
+/// **One-shot.** Each `appcoreObserveGet*` call sets up a fresh
+/// `Observations { … }.dropFirst().prefix(1)` Task that emits one
+/// onChange and terminates. Re-registration is the composable's
+/// responsibility via the `SwiftBinding`-driven re-arm cycle in
+/// `SwiftState.kt`.
 public protocol OnChange: Sendable {
     func onChange()
 }

@@ -96,26 +96,39 @@ public func appcoreSetSearchQuery(value: String) {
 
 /// Private helper, Android-only. `@JavaUIActor`-isolated so `read` and
 /// `Bridge.appModel.state` are accessed in the same domain — no actor
-/// boundary to cross, no Sendable requirement on `read`.
+/// boundary to cross.
 ///
-/// **Synchronous `onChange` is intentional — Kotlin owns the deferral.**
-/// `withObservationTracking`'s `onChange` fires *inside* the property's
-/// `willSet`, before the mutation has committed. Kotlin's `onChange`
-/// re-registers tracking via another `appcoreObserveGet*` call, and a
-/// nested read during willSet would see the pre-mutation backing
-/// storage. The Kotlin-side `ObservationHandle` defers the
-/// re-registration through `Handler.post(...)` so it runs on the next
-/// main-looper iteration, after the writer's setter unwinds. Don't
-/// add a Swift-side `Task` hop here — it'd duplicate the deferral and
-/// allocate a Task per change for no gain.
+/// **`Observations` instead of `withObservationTracking`.** Apple's
+/// `Observations` (SE-0475) emits at *transaction end* (after didSet),
+/// not inside willSet — the willSet race that bit `withObservationTracking`
+/// doesn't apply. The for-await loop yields the post-mutation value, so
+/// Kotlin's `onChange` can re-register synchronously and read fresh
+/// state without the `Handler.post` deferral.
+///
+/// **Why this can fire synchronously on didSet.** Both the writer (a
+/// `@JavaUIActor`-isolated dispatch arm) and this Task are isolated to
+/// the same global actor with the same `LooperExecutor`. When
+/// `Observations`' transaction-end machinery resumes the awaiting
+/// continuation, the resumption is enqueued on `JavaUIActor`'s
+/// executor — and we're already on that executor's thread, so the
+/// continuation runs in the next runloop iteration after the writer's
+/// setter unwinds. No willSet stack to read through.
+///
+/// `dropFirst()` skips the iteration-start emission so we only fire on
+/// real changes, mirroring `withObservationTracking`'s one-shot
+/// semantics; `prefix(1)` reduces the loop to a single iteration so the
+/// Task terminates after delivering one onChange (Kotlin re-arms by
+/// calling `appcoreObserveGet*` again, spawning a fresh Task).
 #if canImport(Android)
 @JavaUIActor
-private func observeGet<T>(_ read: (AppState) -> T, callback: some OnChange) -> T {
-    withObservationTracking {
-        read(Bridge.appModel.state)
-    } onChange: {
-        JavaUIActor.assumeIsolated { callback.onChange() }
+private func observeGet<T: Sendable>(_ read: @escaping @Sendable (AppState) -> T, callback: some OnChange) -> T {
+    let initial = read(Bridge.appModel.state)
+    Task { @JavaUIActor in
+        for await _ in Observations({ read(Bridge.appModel.state) }).dropFirst().prefix(1) {
+            callback.onChange()
+        }
     }
+    return initial
 }
 #endif
 

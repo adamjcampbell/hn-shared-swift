@@ -1,13 +1,15 @@
 # Observation bridge: mechanism options
 
-This document compares four ways to surface a Swift `@Observable` property
+This document compares five ways to surface a Swift `@Observable` property
 as Compose state on Android. It's an architectural reference for the
 existing `SwiftState` / `SwiftBinding` design, not a how-to guide.
 
-The current implementation (`android-app/.../state/SwiftState.kt`) uses
-**Option D — `Handler.post`**. The other three options are real
-alternatives that came up during design and would be the first places to
-look if the current shape ever needs to change.
+The current implementation (`android-app/.../state/SwiftState.kt` + the
+Swift-side `observeGet` in `AppCoreNative.swift`) uses **Option E —
+`Observations` AsyncSequence**, which sidesteps the willSet race at the
+source rather than working around it on the consumer side. Options A–D
+remain valid alternatives; D in particular was the production
+implementation before E was viable.
 
 ---
 
@@ -195,7 +197,7 @@ after a change.
 
 ---
 
-## Option D — `Handler.post` (current implementation)
+## Option D — `Handler.post`
 
 ```kotlin
 private class SwiftBinding<T>(private val track: (OnChange) -> T) {
@@ -219,8 +221,78 @@ recomposition pipeline.
 **Cost per Swift change:** 1 `Handler.post` enqueue + 1 looper hop +
 1 JNI call (the re-arm `track`).
 **Cost per `.value` read:** Free (standard MutableState read).
-**Multi-reader scaling:** Best of all four — one tracker per binding,
-all readers share the cached `MutableState`.
+**Multi-reader scaling:** One tracker per binding, all readers share
+the cached `MutableState`.
+
+---
+
+## Option E — `Observations` AsyncSequence (current implementation)
+
+```swift
+@JavaUIActor
+private func observeGet<T: Sendable>(
+    _ read: @escaping @Sendable (AppState) -> T,
+    callback: some OnChange,
+) -> T {
+    let initial = read(Bridge.appModel.state)
+    Task { @JavaUIActor in
+        for await _ in Observations({ read(Bridge.appModel.state) })
+            .dropFirst().prefix(1) {
+            callback.onChange()
+        }
+    }
+    return initial
+}
+```
+
+```kotlin
+private class SwiftBinding<T>(private val track: (OnChange) -> T) {
+    private var active = true
+    val state: MutableState<T> = mutableStateOf(observe())
+    fun dispose() { active = false }
+    private fun observe(): T = track(OnChange {
+        if (active) state.value = observe()      // synchronous re-arm
+    })
+}
+```
+
+**Mechanism.** Swift's `Observations` AsyncSequence (SE-0475) emits at
+**transaction end** — *after* the property's didSet, after the mutation
+has fully committed. The willSet race that bit `withObservationTracking`
+doesn't apply because we're not running anything inside willSet at all.
+Both the writer (a `@JavaUIActor`-isolated dispatch arm) and the
+awaiting Task share the same `LooperExecutor`, so when the AsyncSequence
+fires the post-didSet emission, the continuation resumes on the
+executor's main thread on the very next runloop iteration. Kotlin's
+`OnChange.onChange` runs there, can synchronously re-call
+`appcoreObserveGet*` to re-arm, and the read sees post-mutation state.
+
+**willSet race avoided?** Yes — by *not occurring during willSet at
+all*. The emission machinery doesn't run inside the setter's stack.
+
+**Cost per Swift change:** 1 `Task` continuation resumption (essentially
+1 looper job) + 1 JNI call (the re-arm `track`).
+**Cost per `.value` read:** Free (standard MutableState read).
+**Multi-reader scaling:** Same as D — one tracker per binding, all
+readers share the cached `MutableState`.
+
+**Constraints.**
+- `T` must be `Sendable` (Observations' `Element` requirement). The
+  `read` closure must be `@escaping @Sendable`. All current callers
+  satisfy this — primitive returns and key-path-style closures.
+- Requires `Observations` in the Swift stdlib. Available in Swift 6.2+
+  (Android SDK 6.3 has it; on Apple platforms `Observations` is
+  iOS 26+, which is why iOS-17-floor consumers in `AppCore` use the
+  local `ObservedKeyPath` fallback in `Observed.swift`).
+- Per-emission cost is one `Task` resumption rather than the atomic
+  int of A/B or the `Handler.post` of D. In practice all three are
+  microsecond-scale and converge to the same Choreographer frame.
+
+**Trade-offs vs D.** E is strictly cleaner: no `Handler` dependency,
+no Looper post per emission, no comments explaining "why we defer". The
+cost is being on a Swift toolchain that has `Observations` and accepting
+the `T: Sendable` constraint on observed types. For this app, both are
+non-issues.
 
 ---
 
@@ -284,19 +356,19 @@ The only API you genuinely *need* `@Composable` for is one that calls
 
 ## Comparison
 
-| | A: counter, no cache | B: counter + cache | C′: scope-set + invalidate | D: Handler.post (current) |
-|---|---|---|---|---|
-| willSet race avoided | ✓ | ✓ | ✓ | ✓ |
-| Synchronous mark-dirty | ✓ | ✓ | ✓ | ✗ (deferred) |
-| Frame at which Compose recomposes | Next | Next | Next | Next |
-| Cost per Swift change | 1 atomic int | 1 atomic int | 1 sentinel + N invalidates | 1 `Handler.post` + 1 JNI |
-| Cost per read (cached) | 1 JNI (always) | Free | Free | Free |
-| Cost per read (cold) | 1 JNI | 1 JNI | 1 JNI | n/a (set on post) |
-| Multi-reader behaviour | Each read pays JNI | All share cache | All share cache | All share `MutableState` |
-| Standard `State<T>.value` API | ✓ | ✓ | ✗ (`@Composable read()`) | ✓ |
-| Reader tracking | Automatic via snapshot | Automatic via snapshot | Manual via `WeakHashMap` | Automatic via snapshot |
-| Compose API surface used | `mutableIntStateOf` (public) | `mutableIntStateOf` (public) | `currentRecomposeScope` + manual scope tracking | `mutableStateOf` (public) |
-| Implementation size | ~7 lines | ~13 lines | ~25 lines | ~10 lines |
+| | A: counter, no cache | B: counter + cache | C′: scope-set + invalidate | D: Handler.post | E: Observations (current) |
+|---|---|---|---|---|---|
+| willSet race avoided | ✓ (deferral) | ✓ (deferral) | ✓ (deferral) | ✓ (deferral) | ✓ (no willSet involvement at all) |
+| Swift-side primitive | `withObservationTracking` | `withObservationTracking` | `withObservationTracking` | `withObservationTracking` | `Observations` |
+| Frame at which Compose recomposes | Next | Next | Next | Next | Next |
+| Cost per Swift change | 1 atomic int | 1 atomic int | 1 sentinel + N invalidates | 1 `Handler.post` + 1 JNI | 1 `Task` resume + 1 JNI |
+| Cost per read (cached) | 1 JNI (always) | Free | Free | Free | Free |
+| Cost per read (cold) | 1 JNI | 1 JNI | 1 JNI | n/a | n/a |
+| Multi-reader behaviour | Each read pays JNI | All share cache | All share cache | All share `MutableState` | All share `MutableState` |
+| Standard `State<T>.value` API | ✓ | ✓ | ✗ (`@Composable read()`) | ✓ | ✓ |
+| Compose API surface used | `mutableIntStateOf` | `mutableIntStateOf` | `currentRecomposeScope` + WeakHashMap | `mutableStateOf` | `mutableStateOf` |
+| Swift toolchain requirement | Any | Any | Any | Any | Swift 6.2+ stdlib |
+| Implementation size | ~7 lines | ~13 lines | ~25 lines | ~10 lines | ~10 lines (Swift) + ~10 lines (Kotlin) |
 
 ### What "synchronous mark-dirty" actually buys you
 
@@ -316,11 +388,9 @@ which doesn't happen in this codebase.
 for a binding read once per frame; bad for a binding read in many
 places.
 
-**B is the cleanest theoretical alternative.** Synchronous dirty
-signal, lazy cache, standard `.value` API. The cost compared to D is
-~5 extra lines for the cache bookkeeping and the discipline to make
-sure `cached` and `lastTick` are only touched on the recomposition
-thread (in this codebase, always main).
+**B is the cleanest `withObservationTracking`-based alternative.**
+Synchronous dirty signal, lazy cache, standard `.value` API. About 5
+extra lines vs D for the cache bookkeeping.
 
 **C′ is the most direct invalidation path** but trades the standard
 state-read API for `@Composable` reads. The lifecycle plumbing
@@ -328,59 +398,56 @@ state-read API for `@Composable` reads. The lifecycle plumbing
 adds up to more code than B and gates downstream uses on always being
 inside a `@Composable` context.
 
-**D (current)** is the simplest implementation and uses only public
-Compose APIs. It pays a `Handler.post` per Swift change but the cost is
-indistinguishable from synchronous mark-dirty at this app's mutation
-rate.
+**D works around the willSet race** with a `Handler.post` deferral.
+Simple, public APIs, well-understood. The looper-hop cost is invisible
+at this app's mutation rate. Was the production implementation before
+E.
+
+**E (current)** sidesteps the willSet race at the source by using
+`Observations` — the AsyncSequence emits at transaction end, post-
+didSet, so synchronous re-arm in Kotlin reads fresh state directly.
+No `Handler` dependency, no deferral, no "why this works" comment block
+explaining a workaround. Requires Swift 6.2+ stdlib and `T: Sendable`
+on observed types — both met for this codebase.
 
 ---
 
 ## When to switch
 
-- If profiling shows `Handler.post` enqueue + dispatch as a measurable
-  cost (high mutation frequency, low-end device): switch to **B**.
-  Same multi-reader story, drops the looper hop.
-- If you want to remove the `android.os.Handler` dependency entirely
-  (e.g. moving the bridge to a non-Android target that still needs
-  Compose Multiplatform): switch to **B**. Pure stdlib + Compose APIs.
-- If you find yourself wanting the snapshot system to *not* dedupe
-  redundant writes (e.g. fire onChange even when the new value equals
-  the old): consider **C′**. Direct `invalidate()` doesn't go through
-  the snapshot's policy comparison, so you get invalidations even on
-  no-op writes — though this is rarely what you want.
-- If a future field has multi-reader composables on a hot path and the
-  per-frame JNI re-fetch shows up in traces: still **B**, never A.
-- For "I want the simplest thing that works": stay on **D**.
+If E ever stops being viable (downgraded toolchain, observed types
+that can't be `Sendable`):
+
+- **D** is the most conservative fallback — same Compose surface, same
+  multi-reader story, just adds the `Handler.post` deferral back.
+- **B** if you want to drop the `Handler` dependency entirely while
+  keeping `withObservationTracking`. More moving parts than D in
+  exchange for slightly tighter dirty-signal timing.
+- **C′** is interesting as a "what if we bypassed the snapshot system
+  entirely?" exploration but the cost exceeds the benefit for this
+  bridge.
+- **A** is academic — the per-read JNI cost makes it impractical.
 
 ---
 
 ## Recommendation
 
-Stay on **D**. The looper-hop cost isn't measurable for this app's
-workload, and the implementation is the smallest of the four. The
-`mainHandler` is a pre-existing bridge dependency (every JavaUIActor
-job already round-trips through it), so adding one more post per Swift
-change costs nothing structurally.
+Stay on **E**. The combination of "no willSet race to work around" and
+"simplest implementation of any option" makes it the obvious choice
+once `Observations` is available. Future iOS-shared code will hit the
+same crossover when iOS 26 becomes the deployment floor — at which
+point `ObservedKeyPath` in `AppCore/Sources/AppCore/Observed.swift`
+also collapses to plain `Observations { … }`.
 
-If a switch ever becomes warranted, **B** is the right destination —
-not C′. The reasons:
-
-1. B uses public Compose APIs end-to-end. C′ relies on
-   `currentRecomposeScope`, which is public but lower-level and gates
-   read sites on `@Composable` context.
-2. B's reader tracking is automatic via the snapshot system. C′
-   reimplements that bookkeeping manually.
-3. B preserves the standard `State<T>.value` API. C′ breaks it.
-
-C′ is interesting as a thought experiment — it's the limit case of
-"what if we bypassed the snapshot system entirely and pushed
-invalidations directly?" — but the cost of doing so exceeds any benefit
-for a callback-driven bridge.
+If a regression ever forces a fallback, the order of preference is
+**D → B → C′ → A**. D is simplest and uses no esoteric APIs.
 
 ---
 
 ## Source pointers
 
+- Apple's `Observations` AsyncSequence — SE-0475. Emits at
+  transaction end (post-didSet), avoiding the `withObservationTracking`
+  willSet race entirely.
 - `androidx.compose.runtime.snapshots.Snapshot.readable` —
   `Snapshot.kt:2121`. Fires `readObserver` on state read.
 - `Snapshot.observe(readObserver, writeObserver, block)` —

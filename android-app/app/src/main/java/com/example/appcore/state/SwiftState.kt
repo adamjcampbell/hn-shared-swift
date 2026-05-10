@@ -1,7 +1,5 @@
 package com.example.appcore.state
 
-import android.os.Handler
-import android.os.Looper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
@@ -11,8 +9,6 @@ import androidx.compose.runtime.remember
 import com.example.appcore.bridge.OnChange
 import java.util.Optional
 import kotlin.jvm.optionals.getOrNull
-
-private val mainHandler = Handler(Looper.getMainLooper())
 
 /**
  * A Swift `@Observable` property bridged to Kotlin. Construct one in a
@@ -70,7 +66,7 @@ fun <T> SwiftState<T>.asState(): State<T> = rememberSwiftState(this::observe)
  *
  * The composable lifetime owns the observation chain — disposal stops the
  * re-arming so Swift's one-shot tracker can drain and the JNI-pinned chain
- * gets reclaimed. See [SwiftBinding] for the willSet-race mechanics.
+ * gets reclaimed. See [SwiftBinding] for the lifetime mechanics.
  */
 @Composable
 private fun <T> rememberSwiftState(observe: (OnChange) -> T): State<T> {
@@ -83,24 +79,20 @@ private fun <T> rememberSwiftState(observe: (OnChange) -> T): State<T> {
  * Holds the [MutableState] backing a single observation, plus a [dispose]
  * gate that lets the re-arming chain unwind when the composable leaves.
  *
- * **Why [dispose] matters.** Swift's `withObservationTracking` registry
- * holds a JNI global ref to the [OnChange], which captures
- * `this`. Even after Compose drops its `remember`-slot reference, this
- * binding stays pinned by Swift until the registered callback fires and
- * isn't replaced. [dispose] is the signal to *not* replace it: a
- * post-dispose `onChange` posts a no-op, the existing one-shot tracker
- * drains, the global ref is freed, and GC can reclaim the chain.
+ * **Why [dispose] matters.** Swift's `Observations` registry holds a JNI
+ * global ref to the [OnChange], which captures `this`. Even after
+ * Compose drops its `remember`-slot reference, this binding stays pinned
+ * by Swift until the registered callback fires and isn't replaced.
+ * [dispose] is the signal to *not* replace it: a post-dispose `onChange`
+ * runs `if (active)` and skips, the existing one-shot tracker drains,
+ * the global ref is freed, and GC can reclaim the chain.
  *
- * **Why re-registration is deferred via [mainHandler].** Swift's
- * `withObservationTracking` fires `onChange` *inside* the property's
- * `willSet`, before the mutation has committed. A synchronous re-call of
- * [track] would re-enter Swift and read the pre-mutation backing storage
- * (the getter still returns the old `_hits` etc. during willSet). Posting
- * the re-registration onto Android's main looper defers it to the next
- * loop iteration — after the writer's setter (and any sibling commits in
- * the same dispatch arm) unwinds — so the recursive read sees the final
- * committed state. The post runs strictly before the next Compose frame,
- * so `state.value` carries the fresh value by recomposition time.
+ * **Re-registration is synchronous.** Swift's `Observations` AsyncSequence
+ * emits at *transaction end* (after the property's didSet), not inside
+ * willSet, so by the time `OnChange.onChange` fires the mutation has
+ * committed. The recursive re-call of [track] reads post-mutation state
+ * directly — no `Handler.post` deferral needed. See `observeGet` in
+ * `AppCoreNative.swift` for the Swift-side mechanism.
  */
 private class SwiftBinding<T>(private val track: (OnChange) -> T) {
     private var active = true
@@ -110,6 +102,6 @@ private class SwiftBinding<T>(private val track: (OnChange) -> T) {
     fun dispose() { active = false }
 
     private fun observe(): T = track(OnChange {
-        mainHandler.post { if (active) state.value = observe() }
+        if (active) state.value = observe()
     })
 }
