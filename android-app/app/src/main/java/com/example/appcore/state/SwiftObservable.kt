@@ -41,7 +41,7 @@ fun interface SwiftState<T> {
 }
 
 @Composable
-fun <T> SwiftState<T>.asState(): State<T> = rememberSwiftValue(this::observe)
+fun <T> SwiftState<T>.asState(): State<T> = rememberSwiftState(this::observe)
 
 /**
  * Remembers a [SwiftBinding] that mirrors the current value of a Swift
@@ -52,7 +52,7 @@ fun <T> SwiftState<T>.asState(): State<T> = rememberSwiftValue(this::observe)
  * gets reclaimed. See [SwiftBinding] for the willSet-race mechanics.
  */
 @Composable
-private fun <T> rememberSwiftValue(observe: (ObservationCallback) -> T): State<T> {
+private fun <T> rememberSwiftState(observe: (ObservationCallback) -> T): State<T> {
     val binding = remember { SwiftBinding(observe) }
     DisposableEffect(Unit) { onDispose { binding.dispose() } }
     return binding.state
