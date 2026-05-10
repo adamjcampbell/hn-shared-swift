@@ -19,8 +19,9 @@ import Observation
 // `AppEvent` case (`appcoreToggleRead`, `appcoreOpenStory`, `appcoreRefresh`),
 // each of which builds the matching `AppEvent` value on the Swift side and
 // enqueues it on the model. Per-composable reactive reads use the fused
-// `appcoreObserveGet*` thunks; each atomically registers a per-property
-// dependency and returns the current value in one JNI hop.
+// `appcoreObserve*` thunks; each spawns a long-lived `Observations` Task
+// for the property and returns `(token, initialValue)`. Subsequent
+// emissions deliver values via per-type `*OnChange` callbacks.
 //
 // **Sync entry via `JavaUIActor.assumeIsolated`.** `JavaUIActor` is a
 // global actor pinned to Android's main `Looper` via `LooperExecutor`.
@@ -108,10 +109,13 @@ public func appcoreSetSearchQuery(value: String) {
 // Kotlin's handler writes it directly to `MutableState.value` without
 // a separate read round-trip.
 //
-// `appcoreCancelObservation(token)` cancels the Task immediately — the
+// `appcoreCancelTask(token)` cancels the Task immediately — the
 // for-await loop exits, the OnChange capture is released, the JNI
 // global ref drops, and GC reclaims the chain. `Bridge.detach`
-// sweep-cancels any tokens still outstanding.
+// sweep-cancels any tokens still outstanding. The same registry
+// also tracks awaitable dispatch Tasks (`appcoreRefreshAwait`),
+// so `appcoreCancelTask` covers both observation cleanup and
+// cooperative cancellation of in-flight dispatches.
 //
 // **Why `Observations` (not `withObservationTracking`).** `Observations`
 // (SE-0475) emits at transaction end (after didSet), not inside willSet —

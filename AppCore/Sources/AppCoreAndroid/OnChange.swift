@@ -11,8 +11,8 @@
 ///
 /// **Why value-carrying?** The callback delivers the new value
 /// directly, so Kotlin's handler can write it to Compose state without
-/// a separate Kotlin→Swift `appcoreReadX` round-trip. Per emission:
-/// 1 S→K callback instead of 1 callback + 1 read thunk.
+/// a separate Kotlin → Swift round-trip. Per emission: 1 S→K thunk
+/// that carries the value, instead of 1 notification + 1 read.
 ///
 /// **Thread contract.** Swift fires `onChange(value:)` from a
 /// `@JavaUIActor`-isolated Task that's iterating an `Observations`
@@ -30,9 +30,9 @@
 /// `Observations { … }.dropFirst()` Task and returns
 /// `(token, initialValue)`. The Task fires `onChange(value:)` on every
 /// emission until cancelled. `SwiftBinding.dispose()` calls
-/// `appcoreCancelObservation(token)` to tear the chain down
-/// immediately; `Bridge.detach` (called by `appcoreDestroy`) sweeps
-/// any tokens still outstanding.
+/// `appcoreCancelTask(token)` to tear the chain down immediately;
+/// `Bridge.detach` (called by `appcoreDestroy`) sweeps any tokens
+/// still outstanding.
 
 public protocol BoolOnChange: Sendable {
     func onChange(value: Bool)

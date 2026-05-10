@@ -4,12 +4,14 @@ import AppCore
 
 /// Opaque snapshot wrapper for `[Story]` crossing the JNI boundary.
 ///
-/// `appcoreObserveGetStoriesHandle` returns an `Int64` peer pointer
-/// (`Unmanaged.passRetained(...).toOpaque()`) into one of these. The
-/// Kotlin side reads fields via per-accessor thunks (`appcoreStoryId`,
-/// etc.), each of which `takeUnretainedValue()`s the peer back from the
-/// raw pointer. Lifetime is bounded by Kotlin: the eager `BridgedProperty`
-/// closure wraps the read-walk in `try { ... } finally {
+/// `appcoreObserveStories` returns `(token, initialPeer)` for the
+/// initial snapshot and emits a fresh peer pointer via `LongOnChange`
+/// on every subsequent change — each peer is created via
+/// `Unmanaged.passRetained(...).toOpaque()`. The Kotlin side reads
+/// fields via per-accessor thunks (`appcoreStoryId`, etc.), each of
+/// which `takeUnretainedValue()`s the peer back from the raw pointer.
+/// Lifetime is bounded by Kotlin: the `SwiftState`'s observe lambda
+/// wraps the per-emission walk in `try { ... } finally {
 /// appcoreStoriesRelease(peer) }`, so the peer dies as soon as the
 /// `List<Story>` is materialised — no Cleaner / AutoCloseable plumbing
 /// needed.

@@ -229,55 +229,72 @@ the cached `MutableState`.
 ## Option E — `Observations` AsyncSequence with cancel-on-dispose (current implementation)
 
 ```swift
+// Per-type onChange protocols (one per observed Swift type).
+public protocol BoolOnChange: Sendable    { func onChange(value: Bool) }
+public protocol StringOnChange: Sendable  { func onChange(value: String) }
+public protocol OptionalStringOnChange: Sendable { func onChange(value: String?) }
+public protocol LongOnChange: Sendable    { func onChange(value: Int64) }
+
 @JavaUIActor
 private func observe<T: Sendable>(
     _ read: @escaping @Sendable (AppState) -> T,
-    callback: some OnChange,
+    onChange: @escaping @Sendable (T) -> Void,
 ) -> (Int64, T) {
+    let initial = read(Bridge.appModel.state)
     let task = Task {
-        for await _ in Observations({ read(Bridge.appModel.state) }).dropFirst() {
-            callback.onChange()
+        for await value in Observations({ read(Bridge.appModel.state) }).dropFirst() {
+            onChange(value)
         }
     }
-    let token = Bridge.registerObservation(task)
-    return (token, read(Bridge.appModel.state))
+    let token = Bridge.registerTask(task)
+    return (token, initial)
 }
 
-public func appcoreCancelObservation(token: Int64) {
-    JavaUIActor.assumeIsolated { Bridge.cancelObservation(token) }
+public func appcoreCancelTask(token: Int64) {
+    JavaUIActor.assumeIsolated { Bridge.cancelTask(token) }
 }
 ```
 
 ```kotlin
 class SwiftState<T>(
-    val observe: (OnChange) -> Tuple2<Long, T>,
-    val read: () -> T,
+    val observe: ((T) -> Unit) -> Tuple2<Long, T>,
 )
 
 private class SwiftBinding<T>(swiftState: SwiftState<T>) {
-    private val read = swiftState.read
     val state: MutableState<T>
     private val token: Long
     init {
-        val (capturedToken, initial) = swiftState.observe(OnChange { state.value = read() })
+        val (capturedToken, initial) = swiftState.observe { value ->
+            state.value = value      // value carried in callback; no read round-trip
+        }
         token = capturedToken
         state = mutableStateOf(initial)
     }
-    fun dispose() { AppCoreAndroid.appcoreCancelObservation(token) }
+    fun dispose() { AppCoreAndroid.appcoreCancelTask(token) }
 }
 ```
 
-The tuple return fuses what would otherwise need two thunk calls (one
-for the token, one for the initial value) into one round-trip. See
-`docs/observation-bridge-tuple-return.md` for the full rationale and
-the alternatives considered.
+Two fusions over earlier shapes:
+- **Tuple return** delivers `(token, initial)` from one thunk call —
+  see `docs/observation-bridge-tuple-return.md`.
+- **Value-carrying onChange** halves the per-emission JNI cost —
+  callbacks deliver the new value directly, no separate read thunk.
+  Cost: one typed protocol per observed Swift type
+  (`BoolOnChange`, `StringOnChange`, etc.) because jextract doesn't
+  bridge generic protocols.
+
+The same `Bridge.tasks` registry that backs observations also tracks
+awaitable dispatch Tasks (`appcoreRefreshAwait`); Kotlin's
+`dispatchAwait` wires `appcoreCancelTask(token)` into
+`cont.invokeOnCancellation` so an awaiting coroutine that gets
+cancelled cooperatively cancels the Swift dispatch.
 
 **Mechanism.** Swift's `Observations` AsyncSequence (SE-0475) emits at
 **transaction end** — *after* the property's didSet. The bridge spawns
 one long-lived Task per binding that iterates the sequence and fires
 `callback.onChange()` on every change. The Task is registered with the
 `Bridge` registry, which returns a token; Kotlin holds the token and
-calls `appcoreCancelObservation(token)` on `SwiftBinding.dispose()`.
+calls `appcoreCancelTask(token)` on `SwiftBinding.dispose()`.
 Cancellation tears the Task down immediately — the for-await loop
 exits, the OnChange capture is released, the JNI global ref drops, and
 GC reclaims the chain.
@@ -310,11 +327,11 @@ readers share the cached `MutableState`.
   (Android SDK 6.3 has it; on Apple platforms `Observations` is
   iOS 26+, which is why iOS-17-floor consumers in `AppCore` use the
   local `ObservedKeyPath` fallback in `Observed.swift`).
-- Per-property API is now a pair: `appcoreObserve*(callback) -> Int64`
-  and `appcoreReadX() -> T`. The previous fused `appcoreObserveGet*`
-  is gone. Slight increase in thunk surface (5 reads + 1 cancel),
-  in exchange for prompt cleanup and an end to the Kotlin-side
-  `active` flag.
+- Per-property API surface: `appcoreObserve*(callback) -> (Int64, T)`
+  plus a typed `*OnChange` protocol per observed value type. The old
+  fused `appcoreObserveGet*` thunks and the per-property read thunks
+  are both gone. Net surface: one observe thunk per property + four
+  typed callback protocols + one universal `appcoreCancelTask`.
 
 **Trade-offs vs D.** E is strictly cleaner: no `Handler` dependency,
 no Looper post per emission, no `active` flag, no "leak until next
@@ -492,7 +509,7 @@ If a regression ever forces a fallback, the order of preference is
 
 Local references:
 - `AppCore/Sources/AppCoreAndroid/AppCoreNative.swift` — the
-  `appcoreObserveGet*` thunks and the `observeGet` helper that does
+  `appcoreObserve*` thunks and the `observe` helper that does
   the Swift-side `withObservationTracking { … } onChange: { … }` setup.
 - `AppCore/Sources/AppCoreAndroid/OnChange.swift` — JNI mirror of the
   onChange closure. Documents the thread contract.

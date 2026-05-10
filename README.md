@@ -21,12 +21,15 @@ goals and non-goals at a glance.
   - `AppCoreAndroid` — Android-only JNI bridge. Friendly Swift functions
     + a `JavaUIActor` global actor pinned to Android's main `Looper`,
     with a `Bridge` namespace, an `AndroidCommands` pump, and per-
-    property `appcoreObserveGet*` thunks that fuse `withObservationTracking`
-    registration with the current-value read in one JNI hop. The wire is
-    typed primitives end-to-end — no JSON crosses the boundary; complex
-    snapshots like `[Story]` cross as opaque `Int64` peer pointers
-    (`StoriesSnapshotPeer` retained via `Unmanaged`). jextract turns the
-    public surface into a `.so` + Java interface set.
+    property `appcoreObserve*` thunks that spawn long-lived
+    `Observations` Tasks and return `(token, initialValue)` tuples;
+    typed `*OnChange` callbacks deliver new values per emission and a
+    universal `appcoreCancelTask(token)` tears them down on Compose
+    disposal. The wire is typed primitives end-to-end — no JSON crosses
+    the boundary; complex snapshots like `[Story]` cross as opaque
+    `Int64` peer pointers (`StoriesSnapshotPeer` retained via
+    `Unmanaged`). jextract turns the public surface into a `.so` + Java
+    interface set.
   - `AppCoreTests` / `AppCoreAndroidTests` — Swift Testing targets;
     `AppCoreTests` runs on macOS host, `AppCoreAndroidTests` cross-
     compiles for Android too.
@@ -57,8 +60,9 @@ real differences from spec §1–§13:
    struct so tests inject mock closures directly. `searchQuery` is
    per-property bridged rather than dispatched as an event: iOS uses
    `@Bindable` + `$state.searchQuery`, Android uses the per-property
-   JNI setter `appcoreSetSearchQuery` and the fused observe-and-read
-   thunk `appcoreObserveGetSearchQuery`.
+   JNI setter `appcoreSetSearchQuery` and the observe thunk
+   `appcoreObserveSearchQuery` (returns `(token, initial)`; subsequent
+   values arrive via a `StringOnChange` callback).
    `AppModel.runSearchQueryWatcher` iterates `state.observe(\.searchQuery)`
    (a small `AsyncSequence` over a single `@Observable` key path,
    modelled after `Observations`) and on every willSet calls
@@ -81,28 +85,31 @@ real differences from spec §1–§13:
    exposes the entry points as plain public functions: `appcoreCreate`,
    typed `AppEvent` thunks (`appcoreToggleRead`, `appcoreOpenStory`,
    `appcoreRefresh`, `appcoreRefreshAwait`), `appcoreSetSearchQuery`,
-   the fused `appcoreObserveGet*` reads (one per `AppState` field), the
-   boxed-snapshot accessors `appcoreObserveGetStoriesHandle` +
-   per-field `appcoreStory*` + `appcoreStoriesRelease`, and
+   the `appcoreObserve*` family (one per observable property, each
+   returning `(Int64, T)`), per-field `appcoreStory*` accessors plus
+   `appcoreStoriesRelease`, the universal `appcoreCancelTask`, and
    `appcoreDestroy`. The single hand-written `@_cdecl` is
    `Java_com_example_appcore_bridge_LooperPoster_runSwiftJob` in
    `LooperExecutor.swift` — the upcall that runs a queued Swift job on
    Android's main `Looper`. jextract doesn't (yet) generate this shape,
    so the JNI naming is hand-mangled.
 3. **`enableJavaCallbacks: true`** turns Swift `CommandSink` /
-   `ObservationCallback` / `AndroidCompletion` protocols into Java
-   interfaces; Kotlin's `AppModelHolder` implements `CommandSink`
-   (`presentURL(value:)` per `AppCommand` case) and
-   `rememberSwiftObserved` instantiates short-lived `ObservationCallback`s.
-   No hand-rolled Swift→Java JNI calls.
+   `*OnChange` / `AndroidCompletion` protocols into Java interfaces;
+   Kotlin's `AppModelHolder` implements `CommandSink` (`presentURL(value:)`
+   per `AppCommand` case) and adapts the typed `*OnChange` protocols
+   (`BoolOnChange`, `StringOnChange`, `OptionalStringOnChange`,
+   `LongOnChange`) to a generic value handler in `SwiftState`'s
+   `observe` lambda. No hand-rolled Swift→Java JNI calls.
 4. **`native` is a Java reserved keyword** so the generated package is
    `com.example.appcore.bridge`, not `…native` as the spec suggested.
-5. **No eager cold-start snapshot.** With per-property `appcoreObserveGet*`
-   thunks, each composable reads the current value at registration time —
-   there's no asynchronous push channel that needs priming. `LaunchedEffect(Unit)`
-   in `StoryScreen` fires `dispatchAwait(AppEvent.Refresh)` to populate the
-   front page on first appear; before that, the per-property reads return
-   their zero values (`isLoading=false`, empty stories, etc.).
+5. **No eager cold-start snapshot.** With per-property `appcoreObserve*`
+   thunks, each composable reads the initial value (returned in the
+   registration thunk's `(token, initial)` tuple) at registration time —
+   there's no asynchronous push channel that needs priming.
+   `LaunchedEffect(Unit)` in `StoryScreen` fires
+   `dispatchAwait(AppEvent.Refresh)` to populate the front page on first
+   appear; before that, the initial values are AppState's defaults
+   (`isLoading=false`, empty stories, etc.).
 6. **`swift-java` is a path dependency** at
    `/Users/adam/Developer/tools/swift-java`, not a remote git URL. SwiftPM
    correctly omits it from iOS resolution because no iOS target uses it.

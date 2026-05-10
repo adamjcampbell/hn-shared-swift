@@ -50,11 +50,13 @@ sealed class AppCommand {
 /**
  * Process-wide holder for the Swift AppModel bridge.
  *
- * Implements [CommandSink] only — the observation-scope pattern replaces
- * the old push-based snapshot/binding sinks. Each Kotlin composable opens
- * its own scope via `rememberSwiftObserved`, reading exactly the Swift
- * properties it needs. Swift fires `onChange` only for those specific
- * properties, so recomposition is per-composable and per-property.
+ * Implements [CommandSink] only. Each Kotlin composable subscribes to a
+ * Swift property via `holder.x.asState()` (the [SwiftState.asState]
+ * extension), which constructs a [SwiftBinding] that registers an
+ * `appcoreObserve*` Task and writes each emission's value into a
+ * Compose `MutableState`. Swift fires only the typed `*OnChange`
+ * callback for the property that changed, so recomposition is
+ * per-composable and per-property.
  */
 object AppModelHolder : CommandSink {
     /**

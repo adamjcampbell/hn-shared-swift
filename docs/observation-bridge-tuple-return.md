@@ -9,7 +9,7 @@ splitting into two thunks. It's an implementation note for the
 
 A single observation registration needs to deliver two things to Kotlin:
 1. The **cancellation token** (an `Int64` that names the registered Task
-   in `Bridge.observations`).
+   in `Bridge.tasks`).
 2. The **initial value** of the observed property (so `MutableState` has
    something to seed with).
 
@@ -18,7 +18,7 @@ the construction step. The options:
 
 | Shape | Round-trips | Notes |
 |---|---|---|
-| Two thunks (`appcoreObserveX → token`, `appcoreReadX → value`) | 2 K→S | Forces the binding to read twice on construction |
+| Two thunks (`appcoreObserveX → token`, separate read for the value) | 2 K→S | Forces the binding to read twice on construction |
 | One thunk + Kotlin-implemented `Subscription` callback for the token | 1 K→S + 1 inner S→K | Adds a protocol; small allocation per call |
 | One thunk that returns the tuple `(Int64, T)` | 1 K→S | What we use today |
 
@@ -56,15 +56,20 @@ naturally.
 
 ## Why we picked this over the alternatives
 
-### Two thunks (`appcoreObserveX` + `appcoreReadX` for the initial value)
+### Two thunks (`appcoreObserveX` returns token + a separate read for the initial value)
 
-We tried this first. Issue: every binding pays an extra `appcoreReadX`
-call at construction just to fetch the initial value, on top of the
-register-and-get-token call. For a binding with N emissions, that's
-**N + 3** K→S thunk calls per lifecycle vs **N + 2** for the fused shape.
-Doesn't sound like much, but it's a wasted call where the *only* reason
-it exists is jextract's tuple-return support being unknown to us at the
-time.
+We tried this first. Issue: every binding pays an extra read call at
+construction just to fetch the initial value, on top of the
+register-and-get-token call. Doesn't sound like much, but it's a wasted
+call where the *only* reason it exists is jextract's tuple-return
+support being unknown to us at the time.
+
+This shape was also our model for **per-emission re-reads**:
+`appcoreObserveX` returned just a notification, and Kotlin's onChange
+handler called a separate read thunk to fetch the new value. The
+value-carrying onChange callbacks (`BoolOnChange`,
+`StringOnChange`, etc.) eliminated those re-read thunks entirely —
+each emission carries its value through the callback.
 
 ### `Subscription` callback for the token
 
