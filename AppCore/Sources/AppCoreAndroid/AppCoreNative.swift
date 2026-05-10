@@ -123,7 +123,7 @@ public func appcoreSetSearchQuery(value: String) {
 @JavaUIActor
 private func observeGet<T: Sendable>(_ read: @escaping @Sendable (AppState) -> T, callback: some OnChange) -> T {
     let initial = read(Bridge.appModel.state)
-    Task { @JavaUIActor in
+    Task {
         for await _ in Observations({ read(Bridge.appModel.state) }).dropFirst().prefix(1) {
             callback.onChange()
         }
