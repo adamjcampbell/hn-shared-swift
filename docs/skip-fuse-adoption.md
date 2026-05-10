@@ -83,6 +83,108 @@ and
 [`MutableStateBacking.swift`](https://github.com/skiptools/skip-model/blob/main/Sources/SkipModel/MutableStateBacking.swift)
 in the Skip projects.
 
+## Actor isolation under SkipFuse
+
+The migration plan abandoned per-platform actor pinning (`@MainActor`
+on iOS, `@JavaUIActor` on Android) on the assumption that SkipFuse
+couldn't handle actor-isolated bridged classes — that was the lesson
+from the earlier `swift-java jextract` experiments, where adding
+`@JavaUIActor` to AppState produced ~20 compile errors in
+auto-generated cdecl thunks. **The assumption doesn't hold for
+SkipFuse**: its bridge codegen is fully actor-aware, and Apple's
+`MainActor` is plumbed to Android's main looper at runtime. You can
+pin to `@MainActor` and recover the compile-time isolation safety the
+old `JavaUIActor` design was after, with no extra plumbing.
+
+### What `skipstone` does with `@MainActor`
+
+Annotate a bridged class with `@MainActor` and `skipstone` wraps
+every cdecl thunk's body in `SkipBridge.assumeMainActorUnchecked
+{ ... }`:
+
+```swift
+@MainActor
+@Observable
+public final class AppState {
+    public var searchQuery: String = ""
+    // …
+}
+```
+
+```swift
+// Generated AppState_Bridge.swift
+@_cdecl("Java_app_core_AppState_Swift_1searchQuery")
+public func AppState_Swift_searchQuery(...) -> JavaString {
+    let peer_swift: AppState = Swift_peer.pointee()!
+    return SkipBridge.assumeMainActorUnchecked {
+        return peer_swift.searchQuery.toJavaObject(options: [])!
+    }
+}
+
+@_cdecl("Java_app_core_AppModel_Swift_1callback_1dispatch_11")
+public func AppModel_Swift_callback_dispatch_1(...) {
+    let f_callback_swift = ...
+    let peer_swift: AppModel = Swift_peer.pointee()!
+    let p_0_swift = AppEvent.fromJavaObject(p_0, options: [])
+    Task {
+        await peer_swift.dispatch(p_0_swift)
+        f_callback_swift()
+    }
+}
+```
+
+`assumeMainActorUnchecked` is literally `MainActor.assumeIsolated`
+(`skip-bridge/Sources/SkipBridge/BridgeSupport.swift:101`). Async
+dispatches stay simple — `Task { await peer.dispatch(...) }` — because
+under SE-0461 the await hops to MainActor automatically.
+
+### Why MainActor reaches Android's main thread
+
+Apple's `MainActor` schedules onto libdispatch's main queue. Android
+doesn't drain libdispatch by default. Skip's `swift-android-native`
+bridges the gap: `AndroidLooper.setupMainLooper()` (called during
+`AndroidBridgeBootstrap.initAndroidBridge()` at app launch — visible
+in logcat as `swift.android.native/AndroidLooper: setupMainLooper`)
+registers libdispatch's main queue file descriptor with Android's
+`ALooper`. When the main queue has work, the looper's callback runs
+`CFRunLoopRunInMode(...)` which drains both CFRunLoop and the
+dispatch main queue. Net effect: jobs scheduled to MainActor execute
+on Android's main looper thread.
+
+This is the same trick the old `JavaUIActor` + `LooperExecutor`
+pulled, hand-written. SkipFuse's runtime ships the equivalent,
+upstream.
+
+### Runtime guarantees if you pin
+
+- Compose calls from `Dispatchers.Main` (the typical case) land on
+  the main looper, which IS MainActor's executor → the
+  `assumeIsolated` precondition passes and the access succeeds.
+- Background-thread JNI calls (e.g. a `Dispatchers.IO` coroutine
+  accidentally invoking a bridged member) trap with `Incorrect actor
+  executor assumption; expected MainActor` — same dynamic check the
+  old `JavaUIActor.assumeIsolated` did.
+- The Compose `MutableStateBacking` cells are still updated from
+  whatever thread the willSet runs on (MainActor under pinning,
+  arbitrary under nonisolated); Compose's snapshot system handles
+  both correctly.
+
+### Verified empirically
+
+Adding `@MainActor` to both `AppState` and `AppModel` in this
+codebase produces:
+
+- A clean `swift build` (the `// SKIP @bridge` markers stay the same).
+- A clean `skip export` — `skipstone` regenerates the bridge thunks
+  with the `assumeMainActorUnchecked` wrapping.
+- A clean `./gradlew :app:assembleDebug`.
+- An app that boots, fetches HN stories, and handles search end-to-end
+  with no behaviour change.
+
+If you ever decide compile-time isolation safety is worth the
+migration cost, the diff is two lines: `@MainActor` on the class
+declarations.
+
 ## Gotchas worth knowing
 
 1. **Per-field `// SKIP @bridge` markers are required** on a struct's
@@ -141,6 +243,7 @@ the Swift sources. The APK packages the `.aar` files directly via
 | Cancellation on suspend | wired                     | not propagated upstream        |
 | APK size impact         | ~99 MB debug              | ~99 MB debug (parity)          |
 | Bridge tests            | `BridgePerfTest` cold-start regression | none yet — needs reseeding |
+| Per-platform actor pinning | `@MainActor` on iOS, `@JavaUIActor` on Android (custom executor) | `@MainActor` on both — Skip's runtime drains libdispatch from `ALooper` |
 
 ## Where the previous bridge lives
 

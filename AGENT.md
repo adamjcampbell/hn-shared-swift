@@ -137,6 +137,16 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `suspendCancellableCoroutine`. Kotlin coroutine cancellation
   doesn't propagate to the underlying Swift Task.
 - `AsyncStream<T>` requires `.kotlin()` to convert to `Flow<T>`.
+- **`@MainActor`-pinned bridged classes work.** Skip's `swift-android-
+  native` calls `AndroidLooper.setupMainLooper()` at startup, which
+  drains libdispatch's main queue from Android's `ALooper`, so
+  Apple's `MainActor` executes on the main thread on Android too.
+  `skipstone` wraps cdecl thunks for `@MainActor`-isolated members
+  in `SkipBridge.assumeMainActorUnchecked { ... }` (which is
+  `MainActor.assumeIsolated`). AppCore is currently nonisolated;
+  pinning to `@MainActor` is a two-line change that would recover
+  the compile-time isolation safety the old `JavaUIActor` design
+  was after — see `docs/skip-fuse-adoption.md` § Actor isolation.
 
 ## Build & test
 
