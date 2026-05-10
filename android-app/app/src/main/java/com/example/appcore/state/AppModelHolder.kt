@@ -73,11 +73,11 @@ object AppModelHolder : CommandSink {
         AppCoreAndroid.appcoreSetSearchQuery(value)
 
     // MARK: - Per-property observable fields
-    // Each is a BridgedProperty backed by the matching fused Swift
+    // Each is a SwiftState backed by the matching fused Swift
     // `appcoreObserveGet*` thunk. Use `by` in a Composable to subscribe:
     //   val stories by holder.stories.asState()
 
-    val stories = BridgedProperty<List<Story>> { cb ->
+    val stories = SwiftState<List<Story>> { cb ->
         val peer = AppCoreAndroid.appcoreObserveGetStoriesHandle(cb)
         try {
             val n = AppCoreAndroid.appcoreStoriesCount(peer)
@@ -98,19 +98,19 @@ object AppModelHolder : CommandSink {
         }
     }
 
-    val isLoading = BridgedProperty { cb ->
+    val isLoading = SwiftState { cb ->
         AppCoreAndroid.appcoreObserveGetIsLoading(cb)
     }
 
-    val searchQuery = BridgedProperty { cb ->
+    val searchQuery = SwiftState { cb ->
         AppCoreAndroid.appcoreObserveGetSearchQuery(cb)
     }
 
-    val lastRefreshedAt = BridgedProperty<String?> { cb ->
+    val lastRefreshedAt = SwiftState<String?> { cb ->
         AppCoreAndroid.appcoreObserveGetLastRefreshedAt(cb).takeIf { it.isNotEmpty() }
     }
 
-    val loadError = BridgedProperty<String?> { cb ->
+    val loadError = SwiftState<String?> { cb ->
         AppCoreAndroid.appcoreObserveGetLoadError(cb).takeIf { it.isNotEmpty() }
     }
 
