@@ -15,7 +15,7 @@
 /// not re-enter Swift to re-read the property synchronously: the read
 /// during willSet would see pre-mutation backing storage. Instead defer
 /// the re-registration through `Handler.post(...)` (see `SwiftBinding`
-/// in `SwiftObservable.kt`), which runs it on the next main-looper
+/// in `SwiftState.kt`), which runs it on the next main-looper
 /// iteration after the writer's setter unwinds.
 ///
 /// **One-shot.** `withObservationTracking`'s `onChange` fires at most
