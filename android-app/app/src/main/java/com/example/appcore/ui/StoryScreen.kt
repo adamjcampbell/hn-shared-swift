@@ -49,12 +49,12 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.core.AppCommand
+import app.core.AppEvent
+import app.core.AppModel
+import app.core.AppState
+import app.core.Story
 import com.example.appcore.R
-import com.example.appcore.state.AppCommand
-import com.example.appcore.state.AppEvent
-import com.example.appcore.state.AppModelHolder
-import com.example.appcore.state.Story
-import com.example.appcore.state.asState
 import com.example.appcore.state.rememberAppModel
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -62,25 +62,26 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StoryScreen() {
-    val holder = rememberAppModel()
+    val appModel = rememberAppModel()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
-    // searchQuery stays at StoryScreen level; the other four properties move
-    // into StoriesContent so that content-only changes (stories, isLoading,
-    // lastRefreshedAt, loadError) do not recompose the TopAppBar or Scaffold.
-    val authoritativeSearchQuery by holder.searchQuery.asState()
+    // Initial fetch on first composition.
+    LaunchedEffect(appModel) {
+        appModel.dispatch(AppEvent.refresh)
+    }
 
-    // Initial fetch: front page on first composition.
-    LaunchedEffect(Unit) {
-        holder.dispatchAwait(AppEvent.Refresh)
+    // Long-lived debounced-fetch loop on every searchQuery write.
+    LaunchedEffect(appModel) {
+        appModel.runSearchQueryWatcher()
     }
 
     // One-shot commands from the core.
-    LaunchedEffect(holder) {
-        holder.commands.collect { command ->
+    LaunchedEffect(appModel) {
+        appModel.commands.kotlin().collect { command ->
             when (command) {
-                is AppCommand.PresentURL -> context.launchCustomTab(command.value)
+                is AppCommand.PresentURLCase -> context.launchCustomTab(command.value)
             }
         }
     }
@@ -98,11 +99,10 @@ fun StoryScreen() {
         },
     ) { innerPadding ->
         StoriesContent(
-            holder = holder,
-            authoritativeSearchQuery = authoritativeSearchQuery,
-            onRefresh = { holder.dispatchAwait(AppEvent.Refresh) },
-            onToggleRead = { holder.dispatch(AppEvent.ToggleRead(it)) },
-            onOpenStory = { holder.dispatch(AppEvent.OpenStory(it)) },
+            state = appModel.state,
+            onRefresh = { appModel.dispatch(AppEvent.refresh) },
+            onToggleRead = { id -> scope.launch { appModel.dispatch(AppEvent.toggleRead(id)) } },
+            onOpenStory = { id -> scope.launch { appModel.dispatch(AppEvent.openStory(id)) } },
             modifier = Modifier
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
@@ -114,32 +114,36 @@ fun StoryScreen() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StoriesContent(
-    holder: AppModelHolder,
-    authoritativeSearchQuery: String,
+    state: AppState,
     onRefresh: suspend () -> Unit,
     onToggleRead: (String) -> Unit,
     onOpenStory: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val stories         by holder.stories.asState()
-    val isRefreshing    by holder.isLoading.asState()
-    val lastRefreshedAt by holder.lastRefreshedAt.asState()
-    val loadError       by holder.loadError.asState()
+    // SkipFuse routes @Observable property reads through Compose's snapshot
+    // system; reading these properties inside a @Composable registers them
+    // for tracking and mutations from any thread trigger recomposition.
+    val authoritativeSearchQuery = state.searchQuery
+    @Suppress("UNCHECKED_CAST")
+    val stories = state.stories.kotlin() as List<Story>
+    val isRefreshing = state.isLoading
+    val lastRefreshedAt = state.lastRefreshedAt
+    val loadError = state.loadError
 
     val searchBarState = rememberSearchBarState()
     val textFieldState = rememberTextFieldState(initialText = authoritativeSearchQuery)
     val scope = rememberCoroutineScope()
 
-    // User typing → AppCore. Calls the JNI setter synchronously; the
-    // per-property observation scope re-registers and writes the new value
-    // inside onChange (before recompose), so the next frame sees it immediately.
-    LaunchedEffect(Unit) {
+    // User typing → AppCore. Direct property setter; Swift's @Observable
+    // willSet routes through SkipFuse to invalidate any composable reading
+    // searchQuery (including the next StoriesContent recomposition).
+    LaunchedEffect(state) {
         snapshotFlow { textFieldState.text.toString() }
             .distinctUntilChanged()
-            .collect { holder.setSearchQuery(it) }
+            .collect { state.searchQuery = it }
     }
-    // Authoritative writes from AppCore (cold-start initial,
-    // programmatic clears) → TextFieldState.
+    // Authoritative writes from AppCore (cold-start initial, programmatic
+    // clears) → TextFieldState.
     LaunchedEffect(authoritativeSearchQuery) {
         if (textFieldState.text.toString() != authoritativeSearchQuery) {
             textFieldState.edit { replace(0, length, authoritativeSearchQuery) }
@@ -222,7 +226,7 @@ private fun HeaderCard(
     searchQuery: String,
     storyCount: Int,
     unreadCount: Int,
-    lastRefreshedAt: String?,
+    lastRefreshedAt: skip.foundation.Date?,
     loadError: String?,
 ) {
     val never = stringResource(R.string.last_refreshed_never)
@@ -231,15 +235,11 @@ private fun HeaderCard(
     } else {
         stringResource(R.string.search_title, searchQuery)
     }
+    val refreshLabel = lastRefreshedAt?.let(::formatTimestamp) ?: never
     val meta = if (storyCount == 0) {
-        stringResource(R.string.last_refreshed_label, lastRefreshedAt?.let(::formatTimestamp) ?: never)
+        stringResource(R.string.last_refreshed_label, refreshLabel)
     } else {
-        stringResource(
-            R.string.unread_meta_label,
-            unreadCount,
-            storyCount,
-            lastRefreshedAt?.let(::formatTimestamp) ?: never,
-        )
+        stringResource(R.string.unread_meta_label, unreadCount, storyCount, refreshLabel)
     }
 
     Card(
@@ -251,10 +251,7 @@ private fun HeaderCard(
             .padding(horizontal = 16.dp, vertical = 16.dp),
     ) {
         Column(Modifier.padding(16.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-            )
+            Text(text = title, style = MaterialTheme.typography.titleMedium)
             Text(
                 text = meta,
                 style = MaterialTheme.typography.bodySmall,
@@ -360,6 +357,7 @@ private fun EmptyResultsOverlay(query: String) {
     }
 }
 
-// Best-effort; production code would use kotlinx-datetime.
-private fun formatTimestamp(iso8601: String): String =
-    iso8601.substringAfter("T").substringBeforeLast(".").take(8)
+private fun formatTimestamp(date: skip.foundation.Date): String {
+    val formatter = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+    return formatter.format(java.util.Date((date.timeIntervalSince1970 * 1000.0).toLong()))
+}

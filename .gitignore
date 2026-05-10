@@ -38,3 +38,9 @@ android-app/core-jni/generated-swift/
 # Android build outputs
 android-app/.gradle/
 android-app/**/build/
+
+# Phase 0 SkipFuse spike — see skip-spike/SPIKE_RESULTS.md
+skip-spike/
+
+# SkipFuse-exported AARs — built locally via `skip export`, treated as artifacts
+android-app/skip-libs/

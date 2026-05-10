@@ -15,5 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "appcore-bridge-example"
-include(":core-jni")
 include(":app")
