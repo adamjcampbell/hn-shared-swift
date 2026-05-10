@@ -79,27 +79,8 @@ object AppModelHolder : CommandSink {
     //   val stories by holder.stories.asState()
 
     val stories = SwiftState(
-        observe = AppCoreAndroid::appcoreObserveStories,
-        read = {
-            val peer = AppCoreAndroid.appcoreReadStoriesHandle()
-            try {
-                val n = AppCoreAndroid.appcoreStoriesCount(peer)
-                List(n) { i ->
-                    Story(
-                        id           = AppCoreAndroid.appcoreStoryId(peer, i),
-                        title        = AppCoreAndroid.appcoreStoryTitle(peer, i),
-                        author       = AppCoreAndroid.appcoreStoryAuthor(peer, i),
-                        points       = AppCoreAndroid.appcoreStoryPoints(peer, i),
-                        commentCount = AppCoreAndroid.appcoreStoryCommentCount(peer, i),
-                        url          = AppCoreAndroid.appcoreStoryURL(peer, i).getOrNull(),
-                        createdAt    = AppCoreAndroid.appcoreStoryCreatedAtMillis(peer, i),
-                        isRead       = AppCoreAndroid.appcoreStoryIsRead(peer, i),
-                    )
-                }
-            } finally {
-                AppCoreAndroid.appcoreStoriesRelease(peer)
-            }
-        },
+        observe = { cb, sub -> walkStoriesPeer(AppCoreAndroid.appcoreObserveStories(cb, sub)) },
+        read = { walkStoriesPeer(AppCoreAndroid.appcoreReadStoriesHandle()) },
     )
     val isLoading = SwiftState(
         observe = AppCoreAndroid::appcoreObserveIsLoading,
@@ -117,6 +98,31 @@ object AppModelHolder : CommandSink {
         observe = AppCoreAndroid::appcoreObserveLoadError,
         read = AppCoreAndroid::appcoreReadLoadError,
     )
+
+    /**
+     * Walks a `StoriesSnapshotPeer` peer pointer into a `List<Story>`,
+     * releasing the peer in the `finally` so Swift reclaims it whether
+     * the walk succeeded or threw.
+     */
+    private fun walkStoriesPeer(peer: Long): List<Story> {
+        return try {
+            val n = AppCoreAndroid.appcoreStoriesCount(peer)
+            List(n) { i ->
+                Story(
+                    id           = AppCoreAndroid.appcoreStoryId(peer, i),
+                    title        = AppCoreAndroid.appcoreStoryTitle(peer, i),
+                    author       = AppCoreAndroid.appcoreStoryAuthor(peer, i),
+                    points       = AppCoreAndroid.appcoreStoryPoints(peer, i),
+                    commentCount = AppCoreAndroid.appcoreStoryCommentCount(peer, i),
+                    url          = AppCoreAndroid.appcoreStoryURL(peer, i).getOrNull(),
+                    createdAt    = AppCoreAndroid.appcoreStoryCreatedAtMillis(peer, i),
+                    isRead       = AppCoreAndroid.appcoreStoryIsRead(peer, i),
+                )
+            }
+        } finally {
+            AppCoreAndroid.appcoreStoriesRelease(peer)
+        }
+    }
 
     fun dispatch(event: AppEvent) = when (event) {
         is AppEvent.ToggleRead -> AppCoreAndroid.appcoreToggleRead(event.id)
