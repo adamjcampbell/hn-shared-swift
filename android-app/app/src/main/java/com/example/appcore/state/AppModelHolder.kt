@@ -143,37 +143,37 @@ object AppModelHolder : CommandSink {
 
     /**
      * Awaitable cousin of [dispatch] — mirrors iOS's
-     * `AppEventDispatch.run(.refresh) async`. The coroutine suspends until the
-     * Swift dispatch completes. Pull-to-refresh uses this so the indicator
-     * stays visible for the actual fetch lifetime.
+     * `AppEventDispatch.run(.refresh) async`. The coroutine suspends until
+     * the Swift dispatch completes. Pull-to-refresh uses this so the
+     * indicator stays visible for the actual fetch lifetime.
      *
-     * Only [AppEvent.Refresh] has a Swift-side awaitable thunk; toggle/open
-     * are fire-and-forget on both platforms, so this falls back to firing
-     * the sync thunk and resuming immediately for those cases.
+     * **Cooperative cancellation.** [AppEvent.Refresh] returns a Swift-side
+     * Task token; if the awaiting coroutine is cancelled (e.g. its host
+     * scope was torn down) we hand the token back via
+     * `appcoreCancelTask` to cancel the in-flight dispatch. Toggle/open
+     * are fire-and-forget on both platforms, so they fire the sync
+     * thunk and resume immediately — no token to track.
      */
-    suspend fun dispatchAwait(event: AppEvent) = awaitWithCompletion { completion ->
+    suspend fun dispatchAwait(event: AppEvent): Unit = suspendCancellableCoroutine { cont ->
+        val completion = AndroidCompletion {
+            if (cont.isActive) cont.resume(Unit) { _, _, _ -> }
+        }
         when (event) {
-            AppEvent.Refresh       -> AppCoreAndroid.appcoreRefreshAwait(completion)
-            is AppEvent.ToggleRead -> { AppCoreAndroid.appcoreToggleRead(event.id); completion.complete() }
-            is AppEvent.OpenStory  -> { AppCoreAndroid.appcoreOpenStory(event.id); completion.complete() }
+            AppEvent.Refresh -> {
+                val token = AppCoreAndroid.appcoreRefreshAwait(completion)
+                cont.invokeOnCancellation { AppCoreAndroid.appcoreCancelTask(token) }
+            }
+            is AppEvent.ToggleRead -> {
+                AppCoreAndroid.appcoreToggleRead(event.id)
+                completion.complete()
+            }
+            is AppEvent.OpenStory -> {
+                AppCoreAndroid.appcoreOpenStory(event.id)
+                completion.complete()
+            }
         }
     }
 }
 
 @androidx.compose.runtime.Composable
 fun rememberAppModel(): AppModelHolder = AppModelHolder
-
-/**
- * Adapts a JNI thunk shaped as `(args…, AndroidCompletion)` into a
- * Kotlin `suspend fun`. The coroutine resumes when Swift fires
- * `completion.complete()`.
- */
-suspend inline fun awaitWithCompletion(
-    crossinline thunk: (AndroidCompletion) -> Unit,
-): Unit = suspendCancellableCoroutine { cont ->
-    thunk(object : AndroidCompletion {
-        override fun complete() {
-            if (cont.isActive) cont.resume(Unit) { _, _, _ -> }
-        }
-    })
-}

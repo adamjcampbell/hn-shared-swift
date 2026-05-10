@@ -28,14 +28,19 @@ enum Bridge {
     private static var commandPump: AndroidCommands!
     private static var queryWatcherTask: Task<Void, Never>!
 
-    /// Outstanding observation Tasks, keyed by token. Each
-    /// `appcoreObserve*` thunk registers via [registerObservation] and
-    /// returns the token; `appcoreCancelObservation` removes by token
-    /// and cancels the Task. [detach] cancels all that haven't been
-    /// individually cancelled yet — important for tests that
-    /// `appcoreDestroy` without pairing each register with a cancel.
-    private static var observations: [Int64: Task<Void, Never>] = [:]
-    private static var nextObservationToken: Int64 = 1
+    /// Outstanding cancellable Tasks, keyed by token. Used for both
+    /// observation Tasks (`appcoreObserve*`) and awaitable dispatch
+    /// Tasks (`appcoreRefreshAwait`). Any code that wants its Task
+    /// cancellable from Kotlin registers it via [registerTask] and
+    /// returns the token to Kotlin; Kotlin calls
+    /// `appcoreCancelTask(token)` to cancel.
+    ///
+    /// [detach] cancels everything still in the registry — important
+    /// for tests that `appcoreDestroy` without pairing each register
+    /// with an explicit cancel, and a defensive sweep for any
+    /// in-flight dispatch Tasks at app teardown.
+    private static var tasks: [Int64: Task<Void, Never>] = [:]
+    private static var nextTaskToken: Int64 = 1
 
     static func attach(commandSink: any CommandSink) {
         precondition(commandPump == nil, "Bridge.attach called while already attached")
@@ -51,19 +56,25 @@ enum Bridge {
     static func detach() {
         commandPump?.stop(); commandPump = nil
         queryWatcherTask?.cancel(); queryWatcherTask = nil
-        observations.values.forEach { $0.cancel() }
-        observations.removeAll()
+        tasks.values.forEach { $0.cancel() }
+        tasks.removeAll()
     }
 
-    static func registerObservation(_ task: Task<Void, Never>) -> Int64 {
-        let token = nextObservationToken
-        nextObservationToken += 1
-        observations[token] = task
+    /// Registers a Task in the cancellation registry and returns its
+    /// token. Used by both observation registrations and awaitable
+    /// dispatches.
+    static func registerTask(_ task: Task<Void, Never>) -> Int64 {
+        let token = nextTaskToken
+        nextTaskToken += 1
+        tasks[token] = task
         return token
     }
 
-    static func cancelObservation(_ token: Int64) {
-        observations.removeValue(forKey: token)?.cancel()
+    /// Cancels the Task identified by [token] and removes it from the
+    /// registry. No-op if [token] has already been cancelled or never
+    /// existed (e.g. after `detach` swept the registry).
+    static func cancelTask(_ token: Int64) {
+        tasks.removeValue(forKey: token)?.cancel()
     }
 
     static func dispatch(_ event: AppEvent) async {
@@ -74,11 +85,17 @@ enum Bridge {
         Task { await dispatch(event) }
     }
 
-    static func enqueueAwaitableDispatch(_ event: AppEvent, completion: some AndroidCompletion) {
-        Task {
+    /// Spawns a Task that awaits the dispatch end-to-end and fires
+    /// `completion.complete()`. Registers the Task in the cancellation
+    /// registry and returns its token so Kotlin can cooperatively cancel
+    /// the in-flight dispatch (e.g. when the awaiting coroutine is
+    /// cancelled because its host scope was torn down).
+    static func enqueueAwaitableDispatch(_ event: AppEvent, completion: some AndroidCompletion) -> Int64 {
+        let task = Task {
             await dispatch(event)
             completion.complete()
         }
+        return registerTask(task)
     }
 
     static func handleSetSearchQuery(_ value: String) {

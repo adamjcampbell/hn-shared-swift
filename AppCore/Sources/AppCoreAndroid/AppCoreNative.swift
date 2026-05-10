@@ -67,22 +67,27 @@ public func appcoreRefresh() {
 
 /// Awaitable cousin of `appcoreRefresh()`. Mirrors iOS's
 /// `AppEventDispatch.run(.refresh) async` — the awaitable side of the
-/// sync/async dispatch duality. The Kotlin-side `awaitWithCompletion`
-/// helper passes a single-shot `AndroidCompletion`; this thunk hands
-/// it to `Bridge.enqueueAwaitableDispatch`, which spawns a Task that
-/// awaits the model dispatch end-to-end and then fires
-/// `completion.complete()`.
+/// sync/async dispatch duality.
+///
+/// Returns a cancellation token (registered in `Bridge.tasks`) so the
+/// Kotlin-side coroutine can cooperatively cancel an in-flight refresh
+/// via `appcoreCancelTask(token)` if it's torn down before the dispatch
+/// completes. `Bridge.detach` (called by `appcoreDestroy`) also sweeps
+/// any tokens still outstanding.
 ///
 /// Pull-to-refresh in Compose is the primary consumer: the awaiting
 /// coroutine keeps the indicator visible for the full fetch lifetime,
 /// no race with snapshot propagation. Only `refresh` has an awaitable
 /// variant today; toggle/open are fire-and-forget on both platforms,
 /// so a parallel `*Await` on those cases would be unused weight.
-public func appcoreRefreshAwait(completion: some AndroidCompletion) {
+public func appcoreRefreshAwait(completion: some AndroidCompletion) -> Int64 {
     #if canImport(Android)
-    JavaUIActor.assumeIsolated { Bridge.enqueueAwaitableDispatch(.refresh, completion: completion) }
+    return JavaUIActor.assumeIsolated {
+        Bridge.enqueueAwaitableDispatch(.refresh, completion: completion)
+    }
     #else
     completion.complete()
+    return 0
     #endif
 }
 
@@ -147,18 +152,24 @@ private func observe<T: Sendable>(
             onChange(value)
         }
     }
-    let token = Bridge.registerObservation(task)
+    let token = Bridge.registerTask(task)
     return (token, initial)
 }
 #endif
 
-/// Cancels the observation Task identified by [token]. Safe to call from
-/// any thread that holds the `JavaUIActor` contract (Compose's main
-/// thread). Calling twice with the same token is a no-op (the token has
-/// already been removed from the registry).
-public func appcoreCancelObservation(token: Int64) {
+/// Cancels the Task identified by [token]. Used to:
+/// - Tear down an observation (token from `appcoreObserve*`) when the
+///   Compose binding disposes.
+/// - Cooperatively cancel an awaitable dispatch (token from
+///   `appcoreRefreshAwait`) when the awaiting Kotlin coroutine is
+///   cancelled.
+///
+/// Safe to call from any thread that holds the `JavaUIActor` contract
+/// (Compose's main thread). Calling twice with the same token is a
+/// no-op — the registry entry has already been removed.
+public func appcoreCancelTask(token: Int64) {
     #if canImport(Android)
-    JavaUIActor.assumeIsolated { Bridge.cancelObservation(token) }
+    JavaUIActor.assumeIsolated { Bridge.cancelTask(token) }
     #endif
 }
 
@@ -195,7 +206,7 @@ public func appcoreObserveStories(callback: some LongOnChange) -> (Int64, Int64)
                 callback.onChange(value: makeStoriesPeer())
             }
         }
-        let token = Bridge.registerObservation(task)
+        let token = Bridge.registerTask(task)
         return (token, initial)
     }
     #else

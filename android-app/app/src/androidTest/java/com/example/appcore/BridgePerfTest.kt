@@ -105,7 +105,7 @@ class BridgePerfTest {
     private fun snapshotStoriesPeer(): Long {
         val cb = CapturingCallback()
         val (token, peer) = AppCoreAndroid.appcoreObserveStories(cb)
-        AppCoreAndroid.appcoreCancelObservation(token)
+        AppCoreAndroid.appcoreCancelTask(token)
         return peer
     }
 
@@ -146,25 +146,25 @@ class BridgePerfTest {
             assertEquals(false, onMainResult {
                 val cb = CapturingCallback()
                 val (token, initial) = AppCoreAndroid.appcoreObserveIsLoading(cb)
-                AppCoreAndroid.appcoreCancelObservation(token)
+                AppCoreAndroid.appcoreCancelTask(token)
                 initial
             })
             assertEquals("", onMainResult {
                 val cb = CapturingCallback()
                 val (token, initial) = AppCoreAndroid.appcoreObserveSearchQuery(cb)
-                AppCoreAndroid.appcoreCancelObservation(token)
+                AppCoreAndroid.appcoreCancelTask(token)
                 initial
             })
             assertEquals(Optional.empty<String>(), onMainResult {
                 val cb = CapturingCallback()
                 val (token, initial) = AppCoreAndroid.appcoreObserveLastRefreshedAt(cb)
-                AppCoreAndroid.appcoreCancelObservation(token)
+                AppCoreAndroid.appcoreCancelTask(token)
                 initial
             })
             assertEquals(Optional.empty<String>(), onMainResult {
                 val cb = CapturingCallback()
                 val (token, initial) = AppCoreAndroid.appcoreObserveLoadError(cb)
-                AppCoreAndroid.appcoreCancelObservation(token)
+                AppCoreAndroid.appcoreCancelTask(token)
                 initial
             })
         } finally {
@@ -327,7 +327,7 @@ class BridgePerfTest {
                 onMainResult {
                     val cb = CapturingCallback()
                     val (token, initial) = AppCoreAndroid.appcoreObserveSearchQuery(cb)
-                    AppCoreAndroid.appcoreCancelObservation(token)
+                    AppCoreAndroid.appcoreCancelTask(token)
                     initial
                 })
             onMain { AppCoreAndroid.appcoreSetSearchQuery("hello") }
@@ -335,7 +335,7 @@ class BridgePerfTest {
                 onMainResult {
                     val cb = CapturingCallback()
                     val (token, initial) = AppCoreAndroid.appcoreObserveSearchQuery(cb)
-                    AppCoreAndroid.appcoreCancelObservation(token)
+                    AppCoreAndroid.appcoreCancelTask(token)
                     initial
                 })
         } finally {

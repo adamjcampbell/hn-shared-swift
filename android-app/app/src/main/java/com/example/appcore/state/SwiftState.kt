@@ -101,6 +101,6 @@ private class SwiftBinding<T>(swiftState: SwiftState<T>) {
     }
 
     fun dispose() {
-        AppCoreAndroid.appcoreCancelObservation(token)
+        AppCoreAndroid.appcoreCancelTask(token)
     }
 }
