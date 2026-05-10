@@ -97,22 +97,10 @@ object AppModelHolder : CommandSink {
             AppCoreAndroid.appcoreStoriesRelease(peer)
         }
     }
-
-    val isLoading = SwiftState { cb ->
-        AppCoreAndroid.appcoreObserveGetIsLoading(cb)
-    }
-
-    val searchQuery = SwiftState { cb ->
-        AppCoreAndroid.appcoreObserveGetSearchQuery(cb)
-    }
-
-    val lastRefreshedAt = SwiftState<String?> { cb ->
-        AppCoreAndroid.appcoreObserveGetLastRefreshedAt(cb).takeIf { it.isNotEmpty() }
-    }
-
-    val loadError = SwiftState<String?> { cb ->
-        AppCoreAndroid.appcoreObserveGetLoadError(cb).takeIf { it.isNotEmpty() }
-    }
+    val isLoading = SwiftState(AppCoreAndroid::appcoreObserveGetIsLoading)
+    val searchQuery = SwiftState(AppCoreAndroid::appcoreObserveGetSearchQuery)
+    val lastRefreshedAt = SwiftState<String?> { cb -> AppCoreAndroid.appcoreObserveGetLastRefreshedAt(cb).takeIf { it.isNotEmpty() } }
+    val loadError = SwiftState<String?> { cb -> AppCoreAndroid.appcoreObserveGetLoadError(cb).takeIf { it.isNotEmpty() } }
 
     fun dispatch(event: AppEvent) = when (event) {
         is AppEvent.ToggleRead -> AppCoreAndroid.appcoreToggleRead(event.id)
