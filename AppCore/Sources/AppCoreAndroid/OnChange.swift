@@ -1,34 +1,51 @@
 /// JNI mirror of the closure that fires when an `@Observable` property
-/// observed by `appcoreObserveGet*` mutates.
+/// observed by `appcoreObserve*` mutates. Each protocol below is the
+/// per-Swift-type variant of "OnChange" — jextract doesn't bridge
+/// generic protocols, so each observed value type needs its own
+/// SAM-friendly interface.
 ///
-/// jextract generates a Java interface `com.example.appcore.bridge.OnChange`
-/// from this protocol. Kotlin uses it as a SAM-convertible interface:
-/// `OnChange { … }` is a one-shot callback whose body runs on the bridge's
-/// main-looper thread.
+/// Adding a new observed type means:
+/// 1. A new protocol below (single method, single value parameter).
+/// 2. A new `Java<TypeName>: @unchecked Sendable {}` line in
+///    `JavaInterop.swift`.
 ///
-/// **Thread contract.** Swift fires `onChange()` from a `@JavaUIActor`-
-/// isolated Task that's iterating an `Observations` AsyncSequence. The
-/// Task's executor is `LooperExecutor`, pinned to Android's main
-/// `Looper`, so `onChange()` always arrives on the UI thread. Kotlin's
-/// implementation can read and write Compose `MutableState` directly.
+/// **Why value-carrying?** The callback delivers the new value
+/// directly, so Kotlin's handler can write it to Compose state without
+/// a separate Kotlin→Swift `appcoreReadX` round-trip. Per emission:
+/// 1 S→K callback instead of 1 callback + 1 read thunk.
 ///
-/// **Synchronous re-arm is safe.** Unlike `withObservationTracking`'s
-/// `onChange` (which fires *inside* the property's willSet, before the
-/// mutation has committed), `Observations` emits at transaction end —
-/// after didSet. The new value is fully committed by the time
-/// `onChange()` fires, so Kotlin's `OnChange` can synchronously call
-/// `appcoreObserveGet*` again to re-arm and read the post-mutation
-/// value. No `Handler.post` deferral is needed.
+/// **Thread contract.** Swift fires `onChange(value:)` from a
+/// `@JavaUIActor`-isolated Task that's iterating an `Observations`
+/// AsyncSequence. The Task's executor is `LooperExecutor`, pinned to
+/// Android's main `Looper`, so `onChange(value:)` always arrives on the
+/// UI thread. Kotlin's implementation can read and write Compose
+/// `MutableState` directly.
+///
+/// **Synchronous handler is safe.** `Observations` (SE-0475) emits at
+/// transaction end (after didSet), not inside willSet. The new value
+/// passed to `onChange(value:)` is fully committed by the time it
+/// fires — no willSet race to work around.
 ///
 /// **Lifecycle.** Each `appcoreObserve*` call spawns a long-lived
-/// `Observations { … }.dropFirst()` Task and returns a cancellation
-/// token. The Task fires `onChange()` on every emission until cancelled.
-/// `SwiftBinding.dispose()` calls `appcoreCancelObservation(token)` to
-/// tear the chain down immediately on Compose disposal — the for-await
-/// loop exits, the JNI global ref drops, and GC reclaims the callback
-/// without waiting for a future Swift mutation. `Bridge.detach` (called
-/// by `appcoreDestroy`) also cancels any tokens still outstanding, so
-/// tests that destroy without explicit cancel don't leak Tasks.
-public protocol OnChange: Sendable {
-    func onChange()
+/// `Observations { … }.dropFirst()` Task and returns
+/// `(token, initialValue)`. The Task fires `onChange(value:)` on every
+/// emission until cancelled. `SwiftBinding.dispose()` calls
+/// `appcoreCancelObservation(token)` to tear the chain down
+/// immediately; `Bridge.detach` (called by `appcoreDestroy`) sweeps
+/// any tokens still outstanding.
+
+public protocol BoolOnChange: Sendable {
+    func onChange(value: Bool)
+}
+
+public protocol StringOnChange: Sendable {
+    func onChange(value: String)
+}
+
+public protocol OptionalStringOnChange: Sendable {
+    func onChange(value: String?)
+}
+
+public protocol LongOnChange: Sendable {
+    func onChange(value: Int64)
 }

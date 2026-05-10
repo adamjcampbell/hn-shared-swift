@@ -2,13 +2,17 @@ package com.example.appcore.state
 
 import com.example.appcore.bridge.AndroidCompletion
 import com.example.appcore.bridge.AppCoreAndroid
+import com.example.appcore.bridge.BoolOnChange
 import com.example.appcore.bridge.CommandSink
-import com.example.appcore.bridge.OnChange
+import com.example.appcore.bridge.LongOnChange
+import com.example.appcore.bridge.OptionalStringOnChange
+import com.example.appcore.bridge.StringOnChange
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.jvm.optionals.getOrNull
+import org.swift.swiftkit.core.tuple.Tuple2
 
 data class Story(
     val id: String,
@@ -74,33 +78,37 @@ object AppModelHolder : CommandSink {
         AppCoreAndroid.appcoreSetSearchQuery(value)
 
     // MARK: - Per-property observable fields
-    // Each is a SwiftState backed by a Swift `appcoreObserve*` /
-    // `appcoreRead*` pair. Use `by` in a Composable to subscribe:
+    // Each is a SwiftState wrapping a Swift `appcoreObserve*` thunk plus
+    // its typed `*OnChange` callback. The handler lambda passed in by
+    // SwiftBinding receives the new value on every emission and writes
+    // it to the Compose MutableState directly. Use `by` in a Composable
+    // to subscribe:
     //   val stories by holder.stories.asState()
 
-    val stories = SwiftState(
-        observe = { cb ->
-            val (token, peer) = AppCoreAndroid.appcoreObserveStories(cb)
-            org.swift.swiftkit.core.tuple.Tuple2(token, walkStoriesPeer(peer))
-        },
-        read = { walkStoriesPeer(AppCoreAndroid.appcoreReadStoriesHandle()) },
-    )
-    val isLoading = SwiftState(
-        observe = AppCoreAndroid::appcoreObserveIsLoading,
-        read = AppCoreAndroid::appcoreReadIsLoading,
-    )
-    val searchQuery = SwiftState(
-        observe = AppCoreAndroid::appcoreObserveSearchQuery,
-        read = AppCoreAndroid::appcoreReadSearchQuery,
-    )
-    val lastRefreshedAt = SwiftState.ofNullable(
-        observe = AppCoreAndroid::appcoreObserveLastRefreshedAt,
-        read = AppCoreAndroid::appcoreReadLastRefreshedAt,
-    )
-    val loadError = SwiftState.ofNullable(
-        observe = AppCoreAndroid::appcoreObserveLoadError,
-        read = AppCoreAndroid::appcoreReadLoadError,
-    )
+    val stories = SwiftState<List<Story>>(observe = { handler ->
+        val (token, initialPeer) = AppCoreAndroid.appcoreObserveStories(LongOnChange { peer ->
+            handler(walkStoriesPeer(peer))
+        })
+        Tuple2(token, walkStoriesPeer(initialPeer))
+    })
+    val isLoading = SwiftState<Boolean>(observe = { handler ->
+        AppCoreAndroid.appcoreObserveIsLoading(BoolOnChange { handler(it) })
+    })
+    val searchQuery = SwiftState<String>(observe = { handler ->
+        AppCoreAndroid.appcoreObserveSearchQuery(StringOnChange { handler(it) })
+    })
+    val lastRefreshedAt = SwiftState<String?>(observe = { handler ->
+        val (token, initial) = AppCoreAndroid.appcoreObserveLastRefreshedAt(
+            OptionalStringOnChange { handler(it.getOrNull()) }
+        )
+        Tuple2(token, initial.getOrNull())
+    })
+    val loadError = SwiftState<String?>(observe = { handler ->
+        val (token, initial) = AppCoreAndroid.appcoreObserveLoadError(
+            OptionalStringOnChange { handler(it.getOrNull()) }
+        )
+        Tuple2(token, initial.getOrNull())
+    })
 
     /**
      * Walks a `StoriesSnapshotPeer` peer pointer into a `List<Story>`,

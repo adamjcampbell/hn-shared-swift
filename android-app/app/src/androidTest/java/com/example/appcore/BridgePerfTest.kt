@@ -3,8 +3,13 @@ package com.example.appcore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.appcore.bridge.AppCoreAndroid
+import com.example.appcore.bridge.BoolOnChange
 import com.example.appcore.bridge.CommandSink
-import com.example.appcore.bridge.OnChange
+import com.example.appcore.bridge.LongOnChange
+import com.example.appcore.bridge.OptionalStringOnChange
+import com.example.appcore.bridge.StringOnChange
+import com.example.appcore.state.component1
+import com.example.appcore.state.component2
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -15,16 +20,17 @@ import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.MethodSorters
+import java.util.Optional
 import kotlin.math.roundToLong
 import kotlin.system.measureNanoTime
 
 /**
  * Latency micro-benchmarks and regression guards for the Swift→Kotlin bridge.
  *
- * The bridge uses `appcoreObserve*` / `appcoreRead*` thunks: observe registers
- * a long-lived Task and returns a cancellation token; read fetches the current
- * value. These tests use the observe thunks to register and let
- * `appcoreDestroy` tear them down (no per-test cancellation).
+ * The bridge uses `appcoreObserve*` thunks: each registers a long-lived
+ * Task and returns `(token, initialValue)`. The typed `*OnChange`
+ * callback fires on every subsequent emission carrying the new value.
+ * `appcoreDestroy` sweep-cancels any tokens still outstanding.
  *
  * **Lifecycle reset.** Instrumented tests run in the same process as the
  * app, so `AppCoreApplication.onCreate` has already called
@@ -47,12 +53,19 @@ class BridgePerfTest {
         override fun presentURL(value: String) {}
     }
 
-    private class CapturingCallback : OnChange {
+    /**
+     * Implements every `*OnChange` protocol so a single instance can be
+     * registered against any property. Each variant routes a notification
+     * to the same channel — tests only care that *something* fired.
+     */
+    private class CapturingCallback :
+        BoolOnChange, StringOnChange, OptionalStringOnChange, LongOnChange {
         val changes = Channel<Unit>(Channel.UNLIMITED)
-        override fun onChange() { changes.trySend(Unit) }
+        override fun onChange(value: Boolean) { changes.trySend(Unit) }
+        override fun onChange(value: String) { changes.trySend(Unit) }
+        override fun onChange(value: Optional<String>) { changes.trySend(Unit) }
+        override fun onChange(value: Long) { changes.trySend(Unit) }
     }
-
-    private val noOp = object : OnChange { override fun onChange() {} }
 
     private companion object {
         const val TOGGLE_FOO_ID = "foo"
@@ -84,11 +97,24 @@ class BridgePerfTest {
     }
 
     /**
+     * Read-only snapshot of `state.stories`: register an observation,
+     * grab the initial peer from the tuple, cancel the Task immediately
+     * (we don't want the long-lived emission machinery for a one-shot
+     * read), then walk and release the peer.
+     */
+    private fun snapshotStoriesPeer(): Long {
+        val cb = CapturingCallback()
+        val (token, peer) = AppCoreAndroid.appcoreObserveStories(cb)
+        AppCoreAndroid.appcoreCancelObservation(token)
+        return peer
+    }
+
+    /**
      * Reads the first story's id (if any), releasing the peer afterwards.
      * Used by [endToEnd_toggleRoundTrip] which needs a real id to toggle.
      */
     private fun firstStoryIdOrNull(): String? {
-        val peer = AppCoreAndroid.appcoreReadStoriesHandle()
+        val peer = snapshotStoriesPeer()
         return try {
             if (AppCoreAndroid.appcoreStoriesCount(peer) > 0)
                 AppCoreAndroid.appcoreStoryId(peer, 0) else null
@@ -98,7 +124,7 @@ class BridgePerfTest {
     }
 
     private fun storiesCount(): Int {
-        val peer = AppCoreAndroid.appcoreReadStoriesHandle()
+        val peer = snapshotStoriesPeer()
         return try { AppCoreAndroid.appcoreStoriesCount(peer) }
         finally { AppCoreAndroid.appcoreStoriesRelease(peer) }
     }
@@ -106,19 +132,41 @@ class BridgePerfTest {
     // MARK: - Cold-start tests (prefixed a_ to run first)
 
     /**
-     * Immediately after `appcoreCreate`, all property getters return their
-     * zero-values. There's no Observations initial-emission race to guard
-     * against — the composable reads current values directly.
+     * Immediately after `appcoreCreate`, the initial values returned in
+     * each observe tuple match the AppState defaults. We register-and-
+     * cancel each observation just to read the initial value — the
+     * sweep-cancel in `appcoreDestroy` would also tear them down, but
+     * cancelling here means we don't accumulate Tasks across the test.
      */
     @Test
     fun a_coldStart_gettersReturnDefaults() = runBlocking {
         onMain { AppCoreAndroid.appcoreCreate(CapturingSink()) }
         try {
             assertEquals(0, onMainResult { storiesCount() })
-            assertEquals(false, onMainResult { AppCoreAndroid.appcoreReadIsLoading() })
-            assertEquals("", onMainResult { AppCoreAndroid.appcoreReadSearchQuery() })
-            assertEquals(java.util.Optional.empty<String>(), onMainResult { AppCoreAndroid.appcoreReadLastRefreshedAt() })
-            assertEquals(java.util.Optional.empty<String>(), onMainResult { AppCoreAndroid.appcoreReadLoadError() })
+            assertEquals(false, onMainResult {
+                val cb = CapturingCallback()
+                val (token, initial) = AppCoreAndroid.appcoreObserveIsLoading(cb)
+                AppCoreAndroid.appcoreCancelObservation(token)
+                initial
+            })
+            assertEquals("", onMainResult {
+                val cb = CapturingCallback()
+                val (token, initial) = AppCoreAndroid.appcoreObserveSearchQuery(cb)
+                AppCoreAndroid.appcoreCancelObservation(token)
+                initial
+            })
+            assertEquals(Optional.empty<String>(), onMainResult {
+                val cb = CapturingCallback()
+                val (token, initial) = AppCoreAndroid.appcoreObserveLastRefreshedAt(cb)
+                AppCoreAndroid.appcoreCancelObservation(token)
+                initial
+            })
+            assertEquals(Optional.empty<String>(), onMainResult {
+                val cb = CapturingCallback()
+                val (token, initial) = AppCoreAndroid.appcoreObserveLoadError(cb)
+                AppCoreAndroid.appcoreCancelObservation(token)
+                initial
+            })
         } finally {
             onMain { AppCoreAndroid.appcoreDestroy() }
         }
@@ -229,12 +277,11 @@ class BridgePerfTest {
     // MARK: - Thread contract
 
     /**
-     * Canary for the `LooperExecutor` contract: `OnChange.onChange`
-     * must always arrive on Android's main Looper. Swift delivers it via
-     * `Task { @JavaUIActor in callback.onChange() }`, which pins to the main
-     * Looper through `LooperExecutor`. If a future refactor drops this,
-     * Compose MutableState writes from `onChange` would crash with a
-     * thread-confinement violation.
+     * Canary for the `LooperExecutor` contract: `*OnChange.onChange` must
+     * always arrive on Android's main Looper. Swift delivers it via a
+     * `@JavaUIActor`-isolated Task whose executor is `LooperExecutor`.
+     * If a future refactor drops this, Compose MutableState writes from
+     * the handler would crash with a thread-confinement violation.
      */
     @Test
     fun bridgeWorkRunsOnUIThread() = runBlocking {
@@ -243,8 +290,12 @@ class BridgePerfTest {
 
         onMain { AppCoreAndroid.appcoreCreate(CapturingSink()) }
         try {
-            val cb = object : OnChange {
-                override fun onChange() { capturedLooper.trySend(android.os.Looper.myLooper()) }
+            val cb = object : BoolOnChange, StringOnChange, OptionalStringOnChange, LongOnChange {
+                private fun capture() { capturedLooper.trySend(android.os.Looper.myLooper()) }
+                override fun onChange(value: Boolean) = capture()
+                override fun onChange(value: String) = capture()
+                override fun onChange(value: Optional<String>) = capture()
+                override fun onChange(value: Long) = capture()
             }
             onMain {
                 AppCoreAndroid.appcoreObserveStories(cb)
@@ -256,7 +307,7 @@ class BridgePerfTest {
             onMain { AppCoreAndroid.appcoreRefresh() }
             val looper = withTimeout(5_000) { capturedLooper.receive() }
             assertEquals(
-                "OnChange.onChange must run on Android's main Looper",
+                "*OnChange.onChange must run on Android's main Looper",
                 mainLooper,
                 looper,
             )
@@ -271,11 +322,22 @@ class BridgePerfTest {
     fun getSearchQuery_returnsCurrentSwiftValue() = runBlocking {
         onMain { AppCoreAndroid.appcoreCreate(CapturingSink()) }
         try {
-            assertEquals("cold-start getter is empty", "",
-                onMainResult { AppCoreAndroid.appcoreReadSearchQuery() })
+            // Initial value via observe's tuple, then cancel.
+            assertEquals("cold-start initial value is empty", "",
+                onMainResult {
+                    val cb = CapturingCallback()
+                    val (token, initial) = AppCoreAndroid.appcoreObserveSearchQuery(cb)
+                    AppCoreAndroid.appcoreCancelObservation(token)
+                    initial
+                })
             onMain { AppCoreAndroid.appcoreSetSearchQuery("hello") }
-            assertEquals("getter returns value just set, synchronously", "hello",
-                onMainResult { AppCoreAndroid.appcoreReadSearchQuery() })
+            assertEquals("observe's initial slot reflects the value just set", "hello",
+                onMainResult {
+                    val cb = CapturingCallback()
+                    val (token, initial) = AppCoreAndroid.appcoreObserveSearchQuery(cb)
+                    AppCoreAndroid.appcoreCancelObservation(token)
+                    initial
+                })
         } finally {
             onMain { AppCoreAndroid.appcoreDestroy() }
         }
@@ -293,7 +355,6 @@ class BridgePerfTest {
             val cb = registerObserveSearchQuery()
             onMain { AppCoreAndroid.appcoreSetSearchQuery("rust") }
             withTimeout(1_000) { cb.changes.receive() }
-            assertEquals("rust", onMainResult { AppCoreAndroid.appcoreReadSearchQuery() })
         } finally {
             onMain { AppCoreAndroid.appcoreDestroy() }
         }
