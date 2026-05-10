@@ -42,25 +42,33 @@ private val mainHandler = Handler(Looper.getMainLooper())
  */
 @Composable
 fun <T> rememberSwiftObserved(observe: (ObservationCallback) -> T): State<T> {
-    val handle = remember {
-        ObservationHandle(mutableStateOf<Any?>(null)).also { it.start(observe) }
-    }
+    val handle = remember { ObservationHandle(observe) }
     DisposableEffect(Unit) { onDispose { handle.active = false } }
-    @Suppress("UNCHECKED_CAST")
-    return handle.state as State<T>
+    return handle.state
 }
 
-private class ObservationHandle(val state: MutableState<Any?>) {
+/**
+ * Holds the [MutableState] backing a single observation, plus the [active]
+ * gate that lets the re-arming chain unwind on disposal.
+ *
+ * **Why [active] matters.** Swift's `withObservationTracking` registry holds
+ * a JNI global ref to the [ObservationCallback], which captures `this`. So
+ * even after Compose drops its `remember`-slot reference, this handle stays
+ * pinned by Swift's side until the registered callback fires and isn't
+ * replaced. [active] is the signal to *not* replace it: a post-dispose
+ * `onChange` posts a no-op, the existing one-shot tracker drains, the
+ * global ref is freed, and GC can reclaim the chain.
+ */
+private class ObservationHandle<T>(private val thunk: (ObservationCallback) -> T) {
     var active = true
 
-    fun <T> start(observe: (ObservationCallback) -> T) {
-        state.value = observe(object : ObservationCallback {
-            override fun onChange() {
-                if (!active) return
-                mainHandler.post { if (active) start(observe) }
-            }
-        })
-    }
+    val state: MutableState<T> = mutableStateOf(observe())
+
+    private fun observe(): T = thunk(object : ObservationCallback {
+        override fun onChange() {
+            mainHandler.post { if (active) state.value = observe() }
+        }
+    })
 }
 
 /**
