@@ -8,6 +8,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.jvm.optionals.getOrNull
 
 data class Story(
     val id: String,
@@ -88,7 +89,7 @@ object AppModelHolder : CommandSink {
                     author       = AppCoreAndroid.appcoreStoryAuthor(peer, i),
                     points       = AppCoreAndroid.appcoreStoryPoints(peer, i),
                     commentCount = AppCoreAndroid.appcoreStoryCommentCount(peer, i),
-                    url          = AppCoreAndroid.appcoreStoryURL(peer, i).ifEmpty { null },
+                    url          = AppCoreAndroid.appcoreStoryURL(peer, i).getOrNull(),
                     createdAt    = AppCoreAndroid.appcoreStoryCreatedAtMillis(peer, i),
                     isRead       = AppCoreAndroid.appcoreStoryIsRead(peer, i),
                 )
@@ -99,8 +100,8 @@ object AppModelHolder : CommandSink {
     }
     val isLoading = SwiftState(AppCoreAndroid::appcoreObserveGetIsLoading)
     val searchQuery = SwiftState(AppCoreAndroid::appcoreObserveGetSearchQuery)
-    val lastRefreshedAt = SwiftState<String?> { cb -> AppCoreAndroid.appcoreObserveGetLastRefreshedAt(cb).takeIf { it.isNotEmpty() } }
-    val loadError = SwiftState<String?> { cb -> AppCoreAndroid.appcoreObserveGetLoadError(cb).takeIf { it.isNotEmpty() } }
+    val lastRefreshedAt = SwiftState.ofNullable(AppCoreAndroid::appcoreObserveGetLastRefreshedAt)
+    val loadError = SwiftState.ofNullable(AppCoreAndroid::appcoreObserveGetLoadError)
 
     fun dispatch(event: AppEvent) = when (event) {
         is AppEvent.ToggleRead -> AppCoreAndroid.appcoreToggleRead(event.id)

@@ -127,8 +127,8 @@ class BridgePerfTest {
             assertEquals(0, onMainResult { storiesCount() })
             assertEquals(false, onMainResult { AppCoreAndroid.appcoreObserveGetIsLoading(noOp) })
             assertEquals("", onMainResult { AppCoreAndroid.appcoreObserveGetSearchQuery(noOp) })
-            assertEquals("", onMainResult { AppCoreAndroid.appcoreObserveGetLastRefreshedAt(noOp) })
-            assertEquals("", onMainResult { AppCoreAndroid.appcoreObserveGetLoadError(noOp) })
+            assertEquals(java.util.Optional.empty<String>(), onMainResult { AppCoreAndroid.appcoreObserveGetLastRefreshedAt(noOp) })
+            assertEquals(java.util.Optional.empty<String>(), onMainResult { AppCoreAndroid.appcoreObserveGetLoadError(noOp) })
         } finally {
             onMain { AppCoreAndroid.appcoreDestroy() }
         }

@@ -9,6 +9,8 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import com.example.appcore.bridge.ObservationCallback
+import java.util.Optional
+import kotlin.jvm.optionals.getOrNull
 
 private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -38,6 +40,25 @@ fun interface SwiftState<T> {
      * value.
      */
     fun observe(callback: ObservationCallback): T
+
+    companion object {
+        /**
+         * Adapter for thunks that return `Optional<T>` — the shape jextract
+         * generates for Swift `T?` returns. Unwraps to a Kotlin nullable
+         * `T?` so model holders can use method-reference syntax for
+         * nullable fields the same way as non-null ones:
+         *
+         * ```kotlin
+         * val isLoading      = SwiftState(AppCoreAndroid::appcoreObserveGetIsLoading)
+         * val lastRefreshed  = SwiftState.ofNullable(AppCoreAndroid::appcoreObserveGetLastRefreshedAt)
+         * ```
+         *
+         * Modelled on `Optional.ofNullable` — a static factory that lifts
+         * a presence-or-absence value into a containing type.
+         */
+        fun <T : Any> ofNullable(thunk: (ObservationCallback) -> Optional<T>): SwiftState<T?> =
+            SwiftState { cb -> thunk(cb).getOrNull() }
+    }
 }
 
 @Composable

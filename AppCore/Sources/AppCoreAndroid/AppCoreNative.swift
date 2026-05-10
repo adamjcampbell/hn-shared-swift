@@ -195,12 +195,9 @@ public func appcoreStoryCommentCount(handle: Int64, index: Int32) -> Int32 {
     #endif
 }
 
-/// Empty string represents `nil` (Story.url is optional). Empty URLs
-/// don't occur in HN data, and a sentinel keeps the JNI surface a flat
-/// `String` instead of a separate hasURL/url pair.
-public func appcoreStoryURL(handle: Int64, index: Int32) -> String {
+public func appcoreStoryURL(handle: Int64, index: Int32) -> String? {
     #if canImport(Android)
-    return storiesPeer(handle).stories[Int(index)].url ?? ""
+    return storiesPeer(handle).stories[Int(index)].url
     #else
     fatalError("Android-only")
     #endif
@@ -254,17 +251,17 @@ public func appcoreObserveGetSearchQuery(callback: some ObservationCallback) -> 
     #endif
 }
 
-public func appcoreObserveGetLastRefreshedAt(callback: some ObservationCallback) -> String {
+public func appcoreObserveGetLastRefreshedAt(callback: some ObservationCallback) -> String? {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { observeGet({ $0.lastRefreshedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "" }, callback: callback) }
+    return JavaUIActor.assumeIsolated { observeGet({ $0.lastRefreshedAt.map { ISO8601DateFormatter().string(from: $0) } }, callback: callback) }
     #else
     fatalError("Android-only")
     #endif
 }
 
-public func appcoreObserveGetLoadError(callback: some ObservationCallback) -> String {
+public func appcoreObserveGetLoadError(callback: some ObservationCallback) -> String? {
     #if canImport(Android)
-    return JavaUIActor.assumeIsolated { observeGet({ $0.loadError ?? "" }, callback: callback) }
+    return JavaUIActor.assumeIsolated { observeGet({ $0.loadError }, callback: callback) }
     #else
     fatalError("Android-only")
     #endif
