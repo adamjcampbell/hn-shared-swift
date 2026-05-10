@@ -1,39 +1,27 @@
 import Foundation
 import Observation
+import SkipFuse
 
 /// The single source of truth for the example app.
 ///
 /// `AppState` is an `@Observable final class` so SwiftUI's fine-grained
-/// invalidation (and per-composable `withObservationTracking` scopes on
-/// Android) track property reads directly. There's no separate value-type
-/// snapshot alongside — the same instance flows from `AppModel` into the
-/// view layer; complex types like `[Story]` cross JNI as JSON on demand
-/// (via `appcoreGetStoriesJSON`), while scalars cross as direct JNI getters.
-///
-/// Properties fall into two groups, in the data-flow vocabulary of
-/// WWDC19's *Data Flow Through SwiftUI*:
-///
-/// - **Stored sources of truth** — `searchQuery`, `isLoading`,
-///   `lastRefreshedAt`, `loadError`. Written by `dispatch(_:)` or by
-///   platform-specific setters; read directly by both SwiftUI (via tracking)
-///   and Android (via JNI getters inside `appcoreObserve` scopes).
-///   `AppModel`'s `runSearchQueryWatcher` fires the debounced fetch on
-///   every `searchQuery` write, regardless of which platform wrote it.
-///
-/// - **Stored sources of truth (internal)** — `hits` and `readIds`. The
-///   working set behind `dispatch(_:)`; never exposed directly. `Story.isRead`
-///   is derived from `readIds` rather than stored separately.
-///
-/// - **Derived state** — `stories`. A computed property over
-///   `hits` × `readIds` projecting into the view-row shape both UIs render.
+/// invalidation tracks property reads directly on iOS. On Android, SkipFuse
+/// intercepts the same observation tracking and routes property
+/// reads/mutations through Compose's snapshot system — reads inside a
+/// `@Composable` are recorded, mutations trigger recomposition.
+// SKIP @bridge
 @Observable
 public final class AppState {
 
     // MARK: Stored sources of truth
 
+    // SKIP @bridge
     public var searchQuery: String = ""
+    // SKIP @bridge
     public var isLoading: Bool = false
+    // SKIP @bridge
     public var lastRefreshedAt: Date? = nil
+    // SKIP @bridge
     public var loadError: String? = nil
 
     // MARK: Stored sources of truth (internal)
@@ -43,9 +31,11 @@ public final class AppState {
 
     // MARK: Derived state
 
+    // SKIP @bridge
     public var stories: [Story] {
         hits.map { Story(hit: $0, isRead: readIds.contains($0.id)) }
     }
 
+    // SKIP @bridge
     public init() {}
 }

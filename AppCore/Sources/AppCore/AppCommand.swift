@@ -9,9 +9,9 @@ import Foundation
 ///
 /// Delivered through `AppModel.commands: AsyncStream<AppCommand>`. iOS
 /// consumes it with `for await` from a `.task` modifier on a long-lived
-/// view; Android's `Bridge.commandPump` (an `AndroidCommands`) switches
-/// on the case and calls the matching typed method on `CommandSink`
-/// (`presentURL(value:)` for `.presentURL`).
+/// view. On Android, SkipFuse bridges `AsyncStream<T>` to
+/// `kotlinx.coroutines.flow.Flow<T>` via `KotlinConverting`, so a
+/// Composable can `appModel.commands.kotlin().collect { ... }`.
 ///
 /// **Why not call this an `Effect`?** TCA-style architectures reserve
 /// "Effect" for reducer-spawned async work that produces more actions,
@@ -19,6 +19,7 @@ import Foundation
 /// lifecycle scopes. "Command" is unambiguous, follows CQRS conventions
 /// (a request to do something, with no return value), and leaves
 /// "Effect" free if we later move to a fully fledged reducer model.
+// SKIP @bridge
 public enum AppCommand: Sendable, Equatable {
     case presentURL(value: String)
 }

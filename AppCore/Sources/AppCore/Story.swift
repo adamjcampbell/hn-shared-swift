@@ -41,14 +41,23 @@ public struct HNHit: Sendable, Identifiable, Codable, Equatable {
 /// from `AppState.readIds` at read time. Constructed by `AppState.stories`
 /// and emitted to Android per-field via the `appcoreStory*` JNI accessors
 /// with `isRead` already merged in.
+// SKIP @bridge
 public struct Story: Sendable, Identifiable, Equatable {
+    // SKIP @bridge
     public let id: String
+    // SKIP @bridge
     public let title: String
+    // SKIP @bridge
     public let author: String
+    // SKIP @bridge
     public let points: Int
+    // SKIP @bridge
     public let commentCount: Int
+    // SKIP @bridge
     public let url: String?
+    // SKIP @bridge
     public let createdAt: Date
+    // SKIP @bridge
     public let isRead: Bool
 
     public init(hit: HNHit, isRead: Bool) {

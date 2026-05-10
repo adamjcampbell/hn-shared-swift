@@ -7,41 +7,29 @@ import FoundationNetworking
 /// Owns the app's `AppState` and the `dispatch(_:)` method that
 /// mutates it in response to user events.
 ///
-/// This type is deliberately platform-agnostic. It carries no isolation
-/// annotations and no `Sendable` conformance — its isolation is determined
-/// by where it is used:
-///
-/// - On iOS, SwiftUI views are `@MainActor`, so reads and mutations from a
-///   view body happen on `MainActor`.
-/// - On Android, the `@JavaUIActor`-isolated `Bridge` namespace in
-///   `AppCoreAndroid` owns an instance of this type and serialises all
-///   access through `JavaUIActor`'s `LooperExecutor`-pinned executor.
-///
 /// `AppState` is the `@Observable` reference; `AppModel` itself is not
 /// `@Observable` because its other fields (`client`, `clock`, `searchTask`,
 /// the commands continuation) aren't meant to be observed and adding
 /// `@ObservationIgnored` to each would only add noise.
 ///
-/// All user-driven mutations enter through `dispatch(_:)`; both platforms
-/// build the same `AppEvent` and call the same method (iOS directly,
-/// Android via JSON over JNI).
-///
 /// Async methods declared here run on the caller's actor by default
 /// (SE-0461 / `NonisolatedNonsendingByDefault`), so they don't introduce
-/// any cross-actor hops.
+/// any cross-actor hops. Bridged to Kotlin via SkipFuse — see the
+/// `// SKIP @bridge` markers below.
+// SKIP @bridge
 public final class AppModel {
     /// The single observable state instance. SwiftUI tracks property
-    /// reads on this directly; the Android bridge encodes it to JSON
-    /// at every `Observations` transaction.
+    /// reads on this directly; on Android, SkipFuse routes the same
+    /// observation tracking through Compose's snapshot system.
+    // SKIP @bridge
     public let state = AppState()
 
     /// One-shot commands from the model to the UI — the symmetric
-    /// counterpart to `dispatch(_:)`. `dispatch(_:)` yields onto a single
-    /// continuation; iOS subscribes from a long-lived `.task`, Android's
-    /// `Bridge`'s `AndroidCommands` pump subscribes from a Task that
-    /// forwards JSON over JNI to a `CommandSink`. There is one consumer
-    /// per platform binary, so the single-iterator constraint of
-    /// `AsyncStream` is respected.
+    /// counterpart to `dispatch(_:)`. iOS subscribes with `for await`
+    /// from a long-lived `.task`. On Android, Compose code can convert
+    /// this to a `kotlinx.coroutines.flow.Flow` (SkipFuse's `AsyncStream`
+    /// implements `KotlinConverting<Flow>`).
+    // SKIP @bridge
     public let commands: AsyncStream<AppCommand>
 
     private let commandsContinuation: AsyncStream<AppCommand>.Continuation
@@ -63,8 +51,21 @@ public final class AppModel {
     /// name the same duration when advancing their `TestClock`.
     public static let searchDebounce: Duration = .milliseconds(250)
 
+    /// Production / Kotlin-side init — bridged.
+    // SKIP @bridge
+    public init() {
+        self.client = HNClient()
+        self.clock = ContinuousClock()
+        let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
+        self.commands = stream
+        self.commandsContinuation = continuation
+    }
+
+    /// Test seam — not bridged. `client` and `clock` types don't bridge
+    /// (closure-bag struct, existential `Clock`), and tests always
+    /// pass both explicitly anyway.
     public init(
-        client: HNClient = HNClient(),
+        client: HNClient,
         clock: any Clock<Duration> = ContinuousClock()
     ) {
         self.client = client
@@ -86,6 +87,7 @@ public final class AppModel {
     /// `clock`, `query`) — never `self`. State commits happen back here
     /// in the dispatch arm, after the `Task`'s value is awaited, so
     /// they run on the caller's actor where `self` natively lives.
+    // SKIP @bridge
     public func dispatch(_ event: AppEvent) async {
         switch event {
         case .toggleRead(let id):
@@ -118,6 +120,7 @@ public final class AppModel {
     /// `runFetch` reads `state.searchQuery` on entry, so a burst of
     /// writes coalesces naturally — the inner `searchTask`
     /// cancel-and-replace handles overlapping fetches.
+    // SKIP @bridge
     public func runSearchQueryWatcher() async {
         for await _ in state.observe(\.searchQuery).dropFirst() {
             await runFetch(debounce: Self.searchDebounce)

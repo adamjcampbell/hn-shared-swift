@@ -10,20 +10,18 @@ let sharedSettings: [SwiftSetting] = [
 
 let package = Package(
     name: "AppCore",
+    defaultLocalization: "en",
     platforms: [
         .iOS(.v17),
         .macOS(.v14),
     ],
     products: [
-        .library(name: "AppCore", targets: ["AppCore"]),
-        .library(
-            name: "AppCoreAndroid",
-            type: .dynamic,
-            targets: ["AppCoreAndroid"]
-        ),
+        .library(name: "AppCore", type: .dynamic, targets: ["AppCore"]),
     ],
     dependencies: [
-        .package(path: "/Users/adam/Developer/tools/swift-java"),
+        .package(url: "https://source.skip.tools/skip.git", from: "1.8.14"),
+        .package(url: "https://source.skip.tools/skip-fuse.git", from: "1.0.0"),
+        .package(url: "https://source.skip.tools/skip-model.git", from: "1.0.0"),
         // Test-only: deterministic time control via TestClock so the
         // 250 ms debounce in AppModel doesn't translate into 250 ms of
         // real-clock waiting per test.
@@ -32,19 +30,13 @@ let package = Package(
     targets: [
         .target(
             name: "AppCore",
-            swiftSettings: sharedSettings
-        ),
-        .target(
-            name: "AppCoreAndroid",
             dependencies: [
-                "AppCore",
-                .product(name: "SwiftJava", package: "swift-java"),
+                .product(name: "SkipFuse", package: "skip-fuse"),
+                .product(name: "SkipModel", package: "skip-model"),
             ],
-            exclude: ["swift-java.config"],
+            resources: [.process("Resources")],
             swiftSettings: sharedSettings,
-            plugins: [
-                .plugin(name: "JExtractSwiftPlugin", package: "swift-java"),
-            ]
+            plugins: [.plugin(name: "skipstone", package: "skip")]
         ),
         .testTarget(
             name: "AppCoreTests",
@@ -52,11 +44,6 @@ let package = Package(
                 "AppCore",
                 .product(name: "Clocks", package: "swift-clocks"),
             ],
-            swiftSettings: sharedSettings
-        ),
-        .testTarget(
-            name: "AppCoreAndroidTests",
-            dependencies: ["AppCoreAndroid"],
             swiftSettings: sharedSettings
         ),
     ]
