@@ -30,8 +30,8 @@ public final class AppModel {
     /// the 250 ms debounce doesn't translate into real-clock waiting.
     private let clock: any Clock<Duration>
 
-    private var feedTask: Task<[HNHit], Error>?
-    private var searchTask: Task<[HNHit], Error>?
+    enum TaskID { case feed, search }
+    private var tasks = TaskRegistry<TaskID>()
 
     /// Debounce window between a `state.searchQuery` write and the
     /// resulting fetch. Static so tests can name the same duration when
@@ -105,7 +105,7 @@ public final class AppModel {
     /// Empty-query path of the watcher, factored out so tests can drive
     /// it without spinning the full watcher Task.
     public func clearSearch() {
-        searchTask?.cancel()
+        tasks[.search] = nil
         state.searchIds = []
         state.searchLoadError = nil
         state.isSearchLoading = false
@@ -131,10 +131,9 @@ public final class AppModel {
     }
 
     public func runFeedFetch(debounce: Duration? = nil) async {
-        feedTask?.cancel()
         state.isFeedLoading = true
         let task = makeFetchTask(debounce: debounce) { try await $0.frontPage() }
-        feedTask = task
+        tasks[.feed] = task
         do {
             // nil = superseded by a newer fetch. Leave isFeedLoading
             // asserted so the spinner stays visible until that fetch
@@ -151,10 +150,9 @@ public final class AppModel {
     }
 
     public func runSearchFetch(query: String, debounce: Duration? = nil) async {
-        searchTask?.cancel()
         state.isSearchLoading = true
         let task = makeFetchTask(debounce: debounce) { try await $0.search(query) }
-        searchTask = task
+        tasks[.search] = task
         do {
             // nil = superseded by a newer fetch. Leave isSearchLoading
             // asserted so the spinner stays visible across the
