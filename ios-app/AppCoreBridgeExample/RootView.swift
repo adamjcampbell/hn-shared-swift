@@ -88,20 +88,25 @@ private struct SearchResults: View {
             Section {
                 SearchHeader(
                     query: state.searchQuery,
-                    isLoading: state.isSearchLoading,
-                    error: state.searchLoadError
+                    isLoading: state.search.initialStatus.isLoading,
+                    error: state.search.initialStatus.error
                 )
             }
             Section { StoryRows(stories: state.searchResults) }
+            if state.search.loadedHits?.hasMore == true {
+                Section {
+                    LoadMoreRow(status: state.search.loadMoreStatus)
+                }
+            }
         }
         .listStyle(.insetGrouped)
         .background(.background)
         .overlay {
-            // Empty-search-results overlay. The `!isSearchLoading` guard
+            // Empty-search-results overlay. The `!isLoading` guard
             // suppresses the brief window during a debounced query
             // change where searchResults are stale-empty before the
             // new fetch lands.
-            if !state.isSearchLoading
+            if !state.search.initialStatus.isLoading
                 && state.searchResults.isEmpty
                 && !state.searchQuery.isEmpty {
                 EmptyResultsOverlay(query: state.searchQuery)
@@ -120,14 +125,57 @@ private struct StoriesList: View {
                 FeedHeaderCard(
                     storyCount: state.feedStories.count,
                     unreadCount: state.feedStories.lazy.filter { !$0.isRead }.count,
-                    lastRefreshedAt: state.lastRefreshedAt,
-                    loadError: state.feedLoadError
+                    lastRefreshedAt: state.feed.loadedHits?.loadedAt,
+                    loadError: state.feed.initialStatus.error
                 )
             }
             Section { StoryRows(stories: state.feedStories) }
+            if state.feed.loadedHits?.hasMore == true {
+                Section {
+                    LoadMoreRow(status: state.feed.loadMoreStatus)
+                }
+            }
         }
         .listStyle(.insetGrouped)
         .refreshable { await dispatch.run(.refresh) }
+    }
+}
+
+private struct LoadMoreRow: View {
+    let status: LoadStatus
+    @Environment(\.dispatch) private var dispatch
+
+    // Forces a fresh `ProgressView` instance on every row appearance.
+    // SwiftUI's `ProgressView` wraps `UIActivityIndicatorView`, which
+    // pauses when its host cell is detached during List virtualisation
+    // and isn't re-started when the cell is re-attached — bumping the
+    // id replaces the indicator, which restarts its animation.
+    @State private var spinId = 0
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(status.error ?? "")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .multilineTextAlignment(.center)
+                .opacity(status.error != nil ? 1 : 0)
+
+            ProgressView()
+                .id(spinId)
+                .opacity(status.isLoading ? 1 : 0)
+
+            Button("Try again") { dispatch(.loadMore) }
+                .buttonStyle(.bordered)
+                .opacity(status.error != nil ? 1 : 0)
+                .allowsHitTesting(status.error != nil)
+                .disabled(status.isLoading)
+        }
+        .frame(maxWidth: .infinity)
+        .animation(.default, value: status)
+        .onAppear {
+            spinId &+= 1
+            dispatch(.loadMore)
+        }
     }
 }
 
