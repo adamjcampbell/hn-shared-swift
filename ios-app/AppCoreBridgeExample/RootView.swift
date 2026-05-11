@@ -188,10 +188,14 @@ private struct SearchHeader: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text("Searching for “\(query)”").font(.headline)
-                if isLoading {
-                    ProgressView().controlSize(.small)
-                }
+                // Always present in the layout so the title doesn't
+                // shift width as the spinner appears/disappears on each
+                // debounce cycle. Opacity animates the fade in/out.
+                ProgressView()
+                    .controlSize(.small)
+                    .opacity(isLoading ? 1 : 0)
             }
+            .animation(.default, value: isLoading)
             if let error {
                 Text(error)
                     .font(.caption)

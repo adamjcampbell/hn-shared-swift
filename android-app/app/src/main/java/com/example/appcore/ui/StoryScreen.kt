@@ -1,5 +1,6 @@
 package com.example.appcore.ui
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -48,6 +49,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -302,12 +304,17 @@ private fun SearchHeader(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                    )
-                }
+                // Always present in the layout so the title doesn't
+                // shift width as the spinner appears/disappears on each
+                // debounce cycle. Alpha animates the fade in/out.
+                val spinnerAlpha by animateFloatAsState(
+                    targetValue = if (isLoading) 1f else 0f,
+                    label = "searchHeaderSpinnerAlpha",
+                )
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp).alpha(spinnerAlpha),
+                    strokeWidth = 2.dp,
+                )
             }
             if (error != null) {
                 Text(
