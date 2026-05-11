@@ -458,29 +458,35 @@ private fun LoadMoreRow(
     status: LoadStatus,
     onRetry: () -> Unit,
 ) {
-    Box(
+    val showError = status.error != null && !status.isLoading
+    Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp),
-        contentAlignment = Alignment.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        val error = status.error
-        if (error != null) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = error,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                Button(onClick = onRetry, modifier = Modifier.padding(top = 8.dp)) {
-                    Text(stringResource(R.string.load_more_retry))
-                }
-            }
-        } else {
+        Text(
+            text = status.error ?: stringResource(R.string.load_more_loading),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (showError) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Box(contentAlignment = Alignment.Center) {
             CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
+                modifier = Modifier
+                    .size(24.dp)
+                    .alpha(if (showError) 0f else 1f),
                 strokeWidth = 2.dp,
             )
+            Button(
+                onClick = onRetry,
+                enabled = showError,
+                modifier = Modifier.alpha(if (showError) 1f else 0f),
+            ) {
+                Text(stringResource(R.string.load_more_retry))
+            }
         }
     }
 }
