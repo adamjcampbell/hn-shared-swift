@@ -10,17 +10,18 @@ struct HNClientTests {
 
     init() { URLProtocolStub.reset() }
 
-    @Test("frontPage decodes Algolia envelope into Story values")
+    @Test("frontPage decodes Algolia envelope into a paginated HNPage")
     func frontPage_decodesEnvelope() async throws {
         URLProtocolStub.responder = { request in
             okResponse(Self.frontPageFixture, for: request.url!)
         }
 
         let client = HNClient(session: makeStubbedSession())
-        let stories = try await client.frontPage()
+        let result = try await client.frontPage(0)
 
-        #expect(stories.count == 2)
-        let first = try #require(stories.first)
+        #expect(result.hits.count == 2)
+        #expect(result.totalPages == 12)
+        let first = try #require(result.hits.first)
         #expect(first.id == "39184235")
         #expect(first.title == "Show HN: Tiny example")
         #expect(first.author == "alice")
@@ -29,16 +30,16 @@ struct HNClientTests {
         #expect(first.url == "https://example.com/show")
     }
 
-    @Test("frontPage hits the search_by_date front_page endpoint")
+    @Test("frontPage hits the search_by_date front_page endpoint with the requested page")
     func frontPage_hitsCorrectEndpoint() async throws {
         var capturedURL: URL?
         URLProtocolStub.requestRecorder = { capturedURL = $0.url }
         URLProtocolStub.responder = { request in
-            okResponse(#"{"hits":[]}"#, for: request.url!)
+            okResponse(#"{"hits":[],"nbPages":0}"#, for: request.url!)
         }
 
         let client = HNClient(session: makeStubbedSession())
-        _ = try await client.frontPage()
+        _ = try await client.frontPage(2)
 
         let url = try #require(capturedURL)
         #expect(url.path == "/api/v1/search_by_date")
@@ -47,18 +48,19 @@ struct HNClientTests {
             (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
         #expect(items["tags"] == "front_page")
         #expect(items["hitsPerPage"] == "50")
+        #expect(items["page"] == "2")
     }
 
-    @Test("search builds the expected query string")
+    @Test("search builds the expected query string with the requested page")
     func search_buildsCorrectQueryString() async throws {
         var capturedURL: URL?
         URLProtocolStub.requestRecorder = { capturedURL = $0.url }
         URLProtocolStub.responder = { request in
-            okResponse(#"{"hits":[]}"#, for: request.url!)
+            okResponse(#"{"hits":[],"nbPages":0}"#, for: request.url!)
         }
 
         let client = HNClient(session: makeStubbedSession())
-        _ = try await client.search("rust async")
+        _ = try await client.search("rust async", 3)
 
         let url = try #require(capturedURL)
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
@@ -69,6 +71,7 @@ struct HNClientTests {
         #expect(items["query"] == "rust async")
         #expect(items["tags"] == "story")
         #expect(items["hitsPerPage"] == "50")
+        #expect(items["page"] == "3")
     }
 
     @Test("decode skips hits missing title or author")
@@ -78,10 +81,10 @@ struct HNClientTests {
         }
 
         let client = HNClient(session: makeStubbedSession())
-        let stories = try await client.frontPage()
+        let result = try await client.frontPage(0)
 
-        #expect(stories.count == 1)
-        #expect(stories.first?.id == "1")
+        #expect(result.hits.count == 1)
+        #expect(result.hits.first?.id == "1")
     }
 }
 
@@ -107,7 +110,8 @@ extension HNClientTests {
           "url": null,
           "created_at": "2026-05-04T08:22:00.000Z"
         }
-      ]
+      ],
+      "nbPages": 12
     }
     """#
 
@@ -141,7 +145,8 @@ extension HNClientTests {
           "url": null,
           "created_at": "2026-05-04T08:02:00.000Z"
         }
-      ]
+      ],
+      "nbPages": 1
     }
     """#
 }

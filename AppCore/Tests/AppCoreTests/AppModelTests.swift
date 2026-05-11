@@ -15,24 +15,30 @@ private let storyB = HNHit(
     url: nil,
     createdAt: Date(timeIntervalSince1970: 2)
 )
+private let storyC = HNHit(
+    id: "102", title: "Page-1 story", author: "carol",
+    points: 9, commentCount: 1,
+    url: "https://example.com/c",
+    createdAt: Date(timeIntervalSince1970: 3)
+)
 
-/// Records the queries the mock client was called with. An actor so the
-/// `@Sendable` closures in the mock can mutate it from the Task's
-/// executor while the test reads it from MainActor.
+/// Records the queries (and pages) the mock client was called with. An
+/// actor so the `@Sendable` closures in the mock can mutate it from the
+/// Task's executor while the test reads it from MainActor.
 private actor CallRecorder {
-    private(set) var frontPageCalls = 0
-    private(set) var searchCalls: [String] = []
+    private(set) var frontPageCalls: [Int] = []
+    private(set) var searchCalls: [(String, Int)] = []
 
-    func recordFrontPage() { frontPageCalls += 1 }
-    func recordSearch(_ query: String) { searchCalls.append(query) }
+    func recordFrontPage(page: Int) { frontPageCalls.append(page) }
+    func recordSearch(_ query: String, page: Int) { searchCalls.append((query, page)) }
 }
 
 /// Test fixture for `AppModel` with optional `HNClient` mocks and an
 /// injected clock. Defaults give an empty front page and an empty
 /// search — override the relevant closure to express the test's intent.
 private func makeModel(
-    frontPage: @escaping @Sendable () async throws -> [HNHit] = { [] },
-    search: @escaping @Sendable (String) async throws -> [HNHit] = { _ in [] },
+    frontPage: @escaping @Sendable (Int) async throws -> HNPage = { _ in HNPage(hits: [], totalPages: 0) },
+    search: @escaping @Sendable (String, Int) async throws -> HNPage = { _, _ in HNPage(hits: [], totalPages: 0) },
     clock: any Clock<Duration> = ContinuousClock()
 ) -> AppModel {
     AppModel(
@@ -41,41 +47,46 @@ private func makeModel(
     )
 }
 
+/// Convenience: a single-page response.
+private func page(_ hits: [HNHit], totalPages: Int = 1) -> HNPage {
+    HNPage(hits: hits, totalPages: totalPages)
+}
+
 @Suite("AppModel")
 struct AppModelTests {
 
     @Test("refresh populates feed stories and timestamp")
     func refresh_populatesStoriesAndTimestamp() async {
-        let model = makeModel(frontPage: { [storyA, storyB] })
+        let model = makeModel(frontPage: { _ in page([storyA, storyB]) })
 
         #expect(model.state.feedStories.isEmpty)
-        #expect(model.state.lastRefreshedAt == nil)
+        #expect(model.state.feed.loadedHits == nil)
 
         await model.dispatch(.refresh)
 
         #expect(model.state.feedStories.count == 2)
         #expect(model.state.feedStories.first?.title == "Top story")
-        #expect(model.state.lastRefreshedAt != nil)
-        #expect(model.state.feedLoadError == nil)
+        #expect(model.state.feed.loadedHits?.loadedAt != nil)
+        #expect(model.state.feed.initialStatus.error == nil)
     }
 
-    @Test("refresh records feedLoadError on failure")
+    @Test("refresh records initialStatus.error on failure")
     func refresh_recordsErrorOnFailure() async {
         struct Boom: Error {}
         let model = makeModel(
-            frontPage: { throw Boom() },
-            search: { _ in throw Boom() }
+            frontPage: { _ in throw Boom() },
+            search: { _, _ in throw Boom() }
         )
 
         await model.dispatch(.refresh)
 
         #expect(model.state.feedStories.isEmpty)
-        #expect(model.state.feedLoadError != nil)
+        #expect(model.state.feed.initialStatus.error != nil)
     }
 
     @Test("toggleRead adds and removes")
     func toggleRead_addsAndRemoves() async {
-        let model = makeModel(frontPage: { [storyA] })
+        let model = makeModel(frontPage: { _ in page([storyA]) })
         await model.dispatch(.refresh)
         #expect(model.state.feedStories.first?.isRead == false)
 
@@ -90,7 +101,7 @@ struct AppModelTests {
 
     @Test("openStory marks read and emits presentURL command")
     func openStory_marksReadAndEmitsPresentURL() async {
-        let model = makeModel(frontPage: { [storyA, storyB] })
+        let model = makeModel(frontPage: { _ in page([storyA, storyB]) })
         await model.dispatch(.refresh)
 
         var iterator = model.commands.makeAsyncIterator()
@@ -103,7 +114,7 @@ struct AppModelTests {
 
     @Test("openStory on a story without a URL marks read but emits nothing")
     func openStory_withoutURL_marksReadOnly() async {
-        let model = makeModel(frontPage: { [storyA, storyB] })
+        let model = makeModel(frontPage: { _ in page([storyA, storyB]) })
         await model.dispatch(.refresh)
 
         // Open storyB (no URL) then storyA (has URL). The first emission
@@ -119,7 +130,7 @@ struct AppModelTests {
 
     @Test("openStory with unknown id is a no-op")
     func openStory_unknownId_isNoop() async {
-        let model = makeModel(frontPage: { [storyA] })
+        let model = makeModel(frontPage: { _ in page([storyA]) })
         await model.dispatch(.refresh)
         let readBefore = model.state.readIds
 
@@ -134,7 +145,7 @@ struct AppModelTests {
 
     @Test("read state survives a refresh")
     func toggleRead_survivesRefresh() async {
-        let model = makeModel(frontPage: { [storyA, storyB] })
+        let model = makeModel(frontPage: { _ in page([storyA, storyB]) })
         // Toggle before any stories are loaded — readIds is the canonical
         // record; the projection has nothing to map onto yet.
         await model.dispatch(.toggleRead(id: "100"))
@@ -153,9 +164,9 @@ struct AppModelTests {
         let calls = CallRecorder()
         let clock = TestClock()
         let model = makeModel(
-            search: { query in
-                await calls.recordSearch(query)
-                return [storyA]
+            search: { query, p in
+                await calls.recordSearch(query, page: p)
+                return page([storyA])
             },
             clock: clock
         )
@@ -170,16 +181,18 @@ struct AppModelTests {
 
         #expect(model.state.searchQuery == "rust")
         #expect(model.state.searchResults.map(\.id) == ["100"])
-        await #expect(calls.searchCalls == ["rust"])
+        let recorded = await calls.searchCalls
+        #expect(recorded.map(\.0) == ["rust"])
+        #expect(recorded.map(\.1) == [0])
     }
 
-    @Test("isSearchLoading activates on first keystroke, before debounce elapses")
+    @Test("initialStatus.isLoading activates on first keystroke, before debounce elapses")
     @MainActor
     func isSearchLoading_activatesOnFirstKeystroke() async {
         let clock = TestClock()
-        let model = makeModel(search: { _ in [storyA] }, clock: clock)
+        let model = makeModel(search: { _, _ in page([storyA]) }, clock: clock)
 
-        #expect(model.state.isSearchLoading == false)
+        #expect(model.state.search.initialStatus.isLoading == false)
 
         let fetch = Task { @MainActor [model] in
             await model.runSearchFetch(query: "r", debounce: AppModel.searchDebounce)
@@ -187,12 +200,12 @@ struct AppModelTests {
         await Task.megaYield()
 
         // Spinner asserted synchronously on entry, before the debounce.
-        #expect(model.state.isSearchLoading == true)
+        #expect(model.state.search.initialStatus.isLoading == true)
 
         await clock.advance(by: AppModel.searchDebounce)
         await fetch.value
 
-        #expect(model.state.isSearchLoading == false)
+        #expect(model.state.search.initialStatus.isLoading == false)
     }
 
     @Test("rapid runSearchFetch calls coalesce — only the latest fires")
@@ -201,9 +214,9 @@ struct AppModelTests {
         let calls = CallRecorder()
         let clock = TestClock()
         let model = makeModel(
-            search: { query in
-                await calls.recordSearch(query)
-                return [storyA]
+            search: { query, p in
+                await calls.recordSearch(query, page: p)
+                return page([storyA])
             },
             clock: clock
         )
@@ -231,7 +244,8 @@ struct AppModelTests {
         await t2.value
         await t3.value
 
-        await #expect(calls.searchCalls == ["rust"])
+        let recorded = await calls.searchCalls
+        #expect(recorded.map(\.0) == ["rust"])
         #expect(model.state.searchQuery == "rust")
         #expect(model.state.searchResults.map(\.id) == ["100"])
     }
@@ -242,13 +256,13 @@ struct AppModelTests {
         let calls = CallRecorder()
         let clock = TestClock()
         let model = makeModel(
-            frontPage: {
-                await calls.recordFrontPage()
-                return [storyA, storyB]
+            frontPage: { p in
+                await calls.recordFrontPage(page: p)
+                return page([storyA, storyB])
             },
-            search: { query in
-                await calls.recordSearch(query)
-                return [storyA]
+            search: { query, p in
+                await calls.recordSearch(query, page: p)
+                return page([storyA])
             },
             clock: clock
         )
@@ -265,8 +279,10 @@ struct AppModelTests {
         await clock.advance(by: AppModel.searchDebounce)
         await pending.value
 
-        await #expect(calls.frontPageCalls == 0)
-        await #expect(calls.searchCalls == ["rust"])
+        let frontPageCalls = await calls.frontPageCalls
+        let searchCalls = await calls.searchCalls
+        #expect(frontPageCalls.isEmpty)
+        #expect(searchCalls.map(\.0) == ["rust"])
         #expect(model.state.searchResults.map(\.id) == ["100"])
     }
 
@@ -284,34 +300,35 @@ struct AppModelTests {
         // URLSession surfaces task cancellation as URLError.cancelled,
         // not Swift's CancellationError. Without the in-Task
         // normalisation, the dispatch arm's generic `catch` would write
-        // `feedLoadError = "cancelled"`.
+        // `feed.initialStatus.error = "cancelled"`.
         let model = makeModel(
-            frontPage: { throw URLError(.cancelled) },
-            search:    { _ in throw URLError(.cancelled) }
+            frontPage: { _ in throw URLError(.cancelled) },
+            search:    { _, _ in throw URLError(.cancelled) }
         )
 
         await model.dispatch(.refresh)
 
-        #expect(model.state.feedLoadError == nil)
-        #expect(model.state.feedIds.isEmpty)
+        #expect(model.state.feed.initialStatus.error == nil)
+        #expect(model.state.feed.loadedHits == nil)
     }
 
     @Test("search-to-search cancel-and-replace through URLError(.cancelled) doesn't surface")
     @MainActor
     func searchCancelAndReplace_throughURLErrorCancelled_silent() async {
         // Without the URLError → CancellationError normalisation, the
-        // prior dispatch's catch arm would write `searchLoadError =
-        // "cancelled"` until the new fetch settled.
+        // prior dispatch's catch arm would write
+        // `search.initialStatus.error = "cancelled"` until the new
+        // fetch settled.
         let clock = TestClock()
         let model = makeModel(
-            search: { query in
+            search: { query, _ in
                 if query == "ru" {
                     while !Task.isCancelled {
                         try? await Task.sleep(for: .milliseconds(5))
                     }
                     throw URLError(.cancelled)
                 }
-                return [storyA]
+                return page([storyA])
             },
             clock: clock
         )
@@ -334,7 +351,7 @@ struct AppModelTests {
         await firstSearch.value
         await secondSearch.value
 
-        #expect(model.state.searchLoadError == nil)
+        #expect(model.state.search.initialStatus.error == nil)
         #expect(model.state.searchQuery == "rust")
         #expect(model.state.searchResults.map(\.id) == ["100"])
     }
@@ -345,20 +362,20 @@ struct AppModelTests {
         let calls = CallRecorder()
         let clock = TestClock()
         let model = makeModel(
-            frontPage: {
-                await calls.recordFrontPage()
-                return [storyA, storyB]
+            frontPage: { p in
+                await calls.recordFrontPage(page: p)
+                return page([storyA, storyB])
             },
-            search: { query in
-                await calls.recordSearch(query)
-                return [storyA]
+            search: { query, p in
+                await calls.recordSearch(query, page: p)
+                return page([storyA])
             },
             clock: clock
         )
 
         await model.dispatch(.refresh)
         let feedBefore = model.state.feedStories.map(\.id)
-        let frontPageBefore = await calls.frontPageCalls
+        let frontPageBefore = await calls.frontPageCalls.count
 
         model.state.searchQuery = "rust"
         let search = Task { @MainActor [model] in
@@ -373,11 +390,14 @@ struct AppModelTests {
         model.clearSearch()
 
         #expect(model.state.searchResults.isEmpty)
-        #expect(model.state.searchLoadError == nil)
-        #expect(model.state.isSearchLoading == false)
+        #expect(model.state.search.initialStatus.error == nil)
+        #expect(model.state.search.initialStatus.isLoading == false)
+        #expect(model.state.search.loadedHits == nil)
         #expect(model.state.feedStories.map(\.id) == feedBefore)
-        await #expect(calls.frontPageCalls == frontPageBefore)
-        await #expect(calls.searchCalls == ["rust"])
+        let frontPageAfter = await calls.frontPageCalls.count
+        #expect(frontPageAfter == frontPageBefore)
+        let searchCalls = await calls.searchCalls
+        #expect(searchCalls.map(\.0) == ["rust"])
     }
 
     @Test("feed survives an active search")
@@ -385,8 +405,8 @@ struct AppModelTests {
     func feedSurvivesActiveSearch() async {
         let clock = TestClock()
         let model = makeModel(
-            frontPage: { [storyA, storyB] },
-            search: { _ in [storyA] },
+            frontPage: { _ in page([storyA, storyB]) },
+            search: { _, _ in page([storyA]) },
             clock: clock
         )
 
@@ -416,9 +436,9 @@ struct AppModelTests {
         let calls = CallRecorder()
         let clock = TestClock()
         let model = makeModel(
-            search: { query in
-                await calls.recordSearch(query)
-                return [storyA]
+            search: { query, p in
+                await calls.recordSearch(query, page: p)
+                return page([storyA])
             },
             clock: clock
         )
@@ -440,9 +460,10 @@ struct AppModelTests {
         await Task.megaYield()
 
         #expect(model.state.searchResults.isEmpty)
-        #expect(model.state.searchLoadError == nil)
-        #expect(model.state.isSearchLoading == false)
-        await #expect(calls.searchCalls == ["rust"])
+        #expect(model.state.search.initialStatus.error == nil)
+        #expect(model.state.search.initialStatus.isLoading == false)
+        let recorded = await calls.searchCalls
+        #expect(recorded.map(\.0) == ["rust"])
 
         watcher.cancel()
         _ = await watcher.value
@@ -453,8 +474,8 @@ struct AppModelTests {
     func storyInBothFeedAndSearch_sharesReadState() async {
         let clock = TestClock()
         let model = makeModel(
-            frontPage: { [storyA, storyB] },
-            search: { _ in [storyA] },
+            frontPage: { _ in page([storyA, storyB]) },
+            search: { _, _ in page([storyA]) },
             clock: clock
         )
 
@@ -473,4 +494,191 @@ struct AppModelTests {
         #expect(model.state.searchResults.first?.isRead == true)
     }
 
+    // MARK: Pagination
+
+    @Test("loadMore appends page-1 ids to the snapshot and bumps the cursor")
+    @MainActor
+    func loadMore_appendsAndBumpsCursor() async {
+        let model = makeModel(
+            frontPage: { p in
+                if p == 0 { return page([storyA, storyB], totalPages: 3) }
+                if p == 1 { return page([storyC], totalPages: 3) }
+                return page([])
+            }
+        )
+
+        await model.dispatch(.refresh)
+        #expect(model.state.feed.loadedHits?.page == 0)
+        #expect(model.state.feed.loadedHits?.hasMore == true)
+        #expect(model.state.feedStories.map(\.id) == ["100", "101"])
+
+        await model.dispatch(.loadMore)
+        #expect(model.state.feed.loadedHits?.page == 1)
+        #expect(model.state.feed.loadedHits?.hasMore == true)  // page 1 of 3, page 2 still remains
+        #expect(model.state.feedStories.map(\.id) == ["100", "101", "102"])
+    }
+
+    @Test("loadMore on the last page is a no-op")
+    @MainActor
+    func loadMore_onLastPage_isNoop() async {
+        let calls = CallRecorder()
+        let model = makeModel(
+            frontPage: { p in
+                await calls.recordFrontPage(page: p)
+                return page([storyA], totalPages: 1)
+            }
+        )
+
+        await model.dispatch(.refresh)
+        #expect(model.state.feed.loadedHits?.hasMore == false)
+
+        await model.dispatch(.loadMore)
+        let pages = await calls.frontPageCalls
+        #expect(pages == [0])  // only the initial fetch
+    }
+
+    @Test("loadMore before any initial fetch is a no-op")
+    @MainActor
+    func loadMore_withoutInitial_isNoop() async {
+        let calls = CallRecorder()
+        let model = makeModel(
+            frontPage: { p in
+                await calls.recordFrontPage(page: p)
+                return page([storyA])
+            }
+        )
+
+        await model.dispatch(.loadMore)
+        let pages = await calls.frontPageCalls
+        #expect(pages.isEmpty)
+    }
+
+    @Test("refresh during an in-flight loadMore cancels the loadMore")
+    @MainActor
+    func refresh_duringLoadMore_cancelsLoadMore() async {
+        let calls = CallRecorder()
+        let clock = TestClock()
+        let model = makeModel(
+            frontPage: { p in
+                await calls.recordFrontPage(page: p)
+                if p == 1 {
+                    // Park in a cancellable sleep so the refresh has time
+                    // to cancel us before we return.
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(5))
+                    }
+                    throw CancellationError()
+                }
+                return page([storyA], totalPages: 5)
+            },
+            clock: clock
+        )
+
+        await model.dispatch(.refresh)  // page 0 lands
+        #expect(model.state.feed.loadedHits?.page == 0)
+
+        let loadMore = Task { @MainActor [model] in
+            await model.runFeedLoadMore()
+        }
+        await Task.megaYield()
+        #expect(model.state.feed.loadMoreStatus.isLoading == true)
+
+        // Refresh while page-1 is parked. Refresh's first action is
+        // `tasks[.feedMore] = nil`, which cancels the parked task.
+        await model.dispatch(.refresh)
+        await loadMore.value
+
+        // page resets to 0 after refresh; loadMore status cleared.
+        #expect(model.state.feed.loadedHits?.page == 0)
+        #expect(model.state.feed.loadMoreStatus.isLoading == false)
+        #expect(model.state.feed.loadMoreStatus.error == nil)
+    }
+
+    @Test("loadMore failure leaves the snapshot and initial status untouched")
+    @MainActor
+    func loadMore_failure_isolatedToLoadMoreStatus() async {
+        struct Boom: Error {}
+        let model = makeModel(
+            frontPage: { p in
+                if p == 0 { return page([storyA, storyB], totalPages: 5) }
+                throw Boom()
+            }
+        )
+
+        await model.dispatch(.refresh)
+        let before = model.state.feedStories.map(\.id)
+
+        await model.dispatch(.loadMore)
+
+        #expect(model.state.feedStories.map(\.id) == before)
+        #expect(model.state.feed.initialStatus.error == nil)
+        #expect(model.state.feed.loadMoreStatus.error != nil)
+    }
+
+    @Test("search paginates symmetrically with feed")
+    @MainActor
+    func search_paginates() async {
+        let model = makeModel(
+            search: { _, p in
+                if p == 0 { return page([storyA], totalPages: 2) }
+                if p == 1 { return page([storyB], totalPages: 2) }
+                return page([])
+            }
+        )
+
+        await model.runSearchFetch(query: "x")
+        #expect(model.state.searchResults.map(\.id) == ["100"])
+        #expect(model.state.search.loadedHits?.hasMore == true)
+
+        await model.runSearchLoadMore()
+        #expect(model.state.searchResults.map(\.id) == ["100", "101"])
+        #expect(model.state.search.loadedHits?.hasMore == false)
+    }
+
+    @Test("clearSearch cancels in-flight search load-more")
+    @MainActor
+    func clearSearch_cancelsLoadMore() async {
+        let model = makeModel(
+            search: { _, p in
+                if p == 0 { return page([storyA], totalPages: 5) }
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(5))
+                }
+                throw CancellationError()
+            }
+        )
+
+        await model.runSearchFetch(query: "x")
+        let loadMore = Task { @MainActor [model] in
+            await model.runSearchLoadMore()
+        }
+        await Task.megaYield()
+        #expect(model.state.search.loadMoreStatus.isLoading == true)
+
+        model.clearSearch()
+        await loadMore.value
+
+        #expect(model.state.search.loadedHits == nil)
+        #expect(model.state.search.loadMoreStatus.isLoading == false)
+        #expect(model.state.search.loadMoreStatus.error == nil)
+    }
+
+    @Test("loadMore preserves loadedAt from the initial fetch")
+    @MainActor
+    func loadMore_preservesLoadedAt() async {
+        let model = makeModel(
+            frontPage: { p in
+                if p == 0 { return page([storyA], totalPages: 2) }
+                return page([storyB], totalPages: 2)
+            }
+        )
+
+        await model.dispatch(.refresh)
+        let initialLoadedAt = model.state.feed.loadedHits?.loadedAt
+
+        try? await Task.sleep(for: .milliseconds(10))
+        await model.dispatch(.loadMore)
+
+        #expect(model.state.feed.loadedHits?.loadedAt == initialLoadedAt)
+    }
 }

@@ -24,15 +24,28 @@ import FoundationNetworking
 /// cancelled. Test closures use the project's `TestClock` to make
 /// cancellation deterministic.
 public struct HNClient: Sendable {
-    public var frontPage: @Sendable () async throws -> [HNHit]
-    public var search: @Sendable (_ query: String) async throws -> [HNHit]
+    public var frontPage: @Sendable (_ page: Int) async throws -> HNPage
+    public var search: @Sendable (_ query: String, _ page: Int) async throws -> HNPage
 
     public init(
-        frontPage: @escaping @Sendable () async throws -> [HNHit],
-        search: @escaping @Sendable (_ query: String) async throws -> [HNHit]
+        frontPage: @escaping @Sendable (_ page: Int) async throws -> HNPage,
+        search: @escaping @Sendable (_ query: String, _ page: Int) async throws -> HNPage
     ) {
         self.frontPage = frontPage
         self.search = search
+    }
+}
+
+/// The decoded result of one page fetch — the hits for the page plus
+/// the envelope's `nbPages`, which `LoadableHits.receiveInitialPage` /
+/// `receiveLoadMorePage` need to drive `hasMore`.
+public struct HNPage: Sendable, Equatable {
+    public let hits: [HNHit]
+    public let totalPages: Int
+
+    public init(hits: [HNHit], totalPages: Int) {
+        self.hits = hits
+        self.totalPages = totalPages
     }
 }
 
@@ -48,17 +61,18 @@ extension HNClient {
     /// accident.
     init(session: URLSession) {
         self.init(
-            frontPage: {
+            frontPage: { page in
                 try await HNClient.fetch(
                     session: session,
                     path: "search_by_date",
                     queryItems: [
                         URLQueryItem(name: "tags", value: "front_page"),
                         URLQueryItem(name: "hitsPerPage", value: "50"),
+                        URLQueryItem(name: "page", value: String(page)),
                     ]
                 )
             },
-            search: { query in
+            search: { query, page in
                 try await HNClient.fetch(
                     session: session,
                     path: "search",
@@ -66,6 +80,7 @@ extension HNClient {
                         URLQueryItem(name: "query", value: query),
                         URLQueryItem(name: "tags", value: "story"),
                         URLQueryItem(name: "hitsPerPage", value: "50"),
+                        URLQueryItem(name: "page", value: String(page)),
                     ]
                 )
             }
@@ -93,7 +108,7 @@ extension HNClient {
         session: URLSession,
         path: String,
         queryItems: [URLQueryItem]
-    ) async throws -> [HNHit] {
+    ) async throws -> HNPage {
         var components = URLComponents(
             url: HNClient.baseURL.appendingPathComponent(path),
             resolvingAgainstBaseURL: false
@@ -101,12 +116,16 @@ extension HNClient {
         components.queryItems = queryItems
         let (data, _) = try await session.data(from: components.url!)
         let response = try HNClient.decoder.decode(HNSearchResponse.self, from: data)
-        return response.hits.compactMap(HNHit.init(payload:))
+        return HNPage(
+            hits: response.hits.compactMap(HNHit.init(payload:)),
+            totalPages: response.nbPages
+        )
     }
 }
 
 private struct HNSearchResponse: Decodable {
     let hits: [HNStoryPayload]
+    let nbPages: Int
 }
 
 private struct HNStoryPayload: Decodable {

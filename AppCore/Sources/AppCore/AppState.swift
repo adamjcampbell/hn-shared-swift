@@ -30,16 +30,11 @@ public final class AppState {
     public var searchQuery: String = "" {
         didSet { searchQueryEvents.yield(searchQuery) }
     }
+
     // SKIP @bridge
-    public var isFeedLoading: Bool = false
+    public var feed: LoadableHits = LoadableHits()
     // SKIP @bridge
-    public var isSearchLoading: Bool = false
-    // SKIP @bridge
-    public var lastRefreshedAt: Date? = nil
-    // SKIP @bridge
-    public var feedLoadError: String? = nil
-    // SKIP @bridge
-    public var searchLoadError: String? = nil
+    public var search: LoadableHits = LoadableHits()
 
     // MARK: Stored sources of truth (internal)
 
@@ -48,18 +43,6 @@ public final class AppState {
     /// session (front page + one search), so no pruning.
     var hits: [String: HNHit] = [:]
     var readIds: Set<String> = []
-
-    /// Bridged so writes propagate through SkipFuse's `@Observable`
-    /// bridge to Compose's `MutableStateBacking`. Internal
-    /// stored-property writes don't reliably trigger Compose
-    /// recomposition through a bridged computed projection
-    /// (`feedStories` / `searchResults`) — `clearSearch()` would
-    /// otherwise reset `searchIds` to `[]` without the search overlay
-    /// re-rendering. Kotlin doesn't consume these directly.
-    // SKIP @bridge
-    public var feedIds: [String] = []
-    // SKIP @bridge
-    public var searchIds: [String] = []
 
     // MARK: searchQuery event stream
 
@@ -78,14 +61,14 @@ public final class AppState {
     /// upsert-then-assign-ids on the same actor makes that unreachable.
     // SKIP @bridge
     public var feedStories: [Story] {
-        feedIds.compactMap { id in
+        (feed.loadedHits?.ids ?? []).compactMap { id in
             hits[id].map { Story(hit: $0, isRead: readIds.contains(id)) }
         }
     }
 
     // SKIP @bridge
     public var searchResults: [Story] {
-        searchIds.compactMap { id in
+        (search.loadedHits?.ids ?? []).compactMap { id in
             hits[id].map { Story(hit: $0, isRead: readIds.contains(id)) }
         }
     }

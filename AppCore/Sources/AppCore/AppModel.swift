@@ -30,7 +30,7 @@ public final class AppModel {
     /// the 250 ms debounce doesn't translate into real-clock waiting.
     private let clock: any Clock<Duration>
 
-    enum TaskID { case feed, search }
+    enum TaskID { case feed, feedMore, search, searchMore }
     private var tasks = TaskRegistry<TaskID>()
 
     /// Debounce window between a `state.searchQuery` write and the
@@ -62,9 +62,8 @@ public final class AppModel {
 
     /// Single entry point for every user-driven mutation. `async` so
     /// callers that need completion (e.g. SwiftUI's `.refreshable`) can
-    /// `await` the call. `.refresh` re-runs whichever surface the user
-    /// is currently on — feed when `searchQuery` is empty, otherwise
-    /// the current search.
+    /// `await` the call. `.refresh` and `.loadMore` both branch on
+    /// `searchQuery` — empty → feed surface, non-empty → search.
     // SKIP @bridge
     public func dispatch(_ event: AppEvent) async {
         switch event {
@@ -77,6 +76,12 @@ public final class AppModel {
                 await runFeedFetch()
             } else {
                 await runSearchFetch(query: state.searchQuery)
+            }
+        case .loadMore:
+            if state.searchQuery.isEmpty {
+                await runFeedLoadMore()
+            } else {
+                await runSearchLoadMore()
             }
         }
     }
@@ -103,12 +108,13 @@ public final class AppModel {
     }
 
     /// Empty-query path of the watcher, factored out so tests can drive
-    /// it without spinning the full watcher Task.
+    /// it without spinning the full watcher Task. Replaces the entire
+    /// search section in one write — drops the snapshot, resets both
+    /// status axes, and cancels any in-flight search tasks.
     public func clearSearch() {
         tasks[.search] = nil
-        state.searchIds = []
-        state.searchLoadError = nil
-        state.isSearchLoading = false
+        tasks[.searchMore] = nil
+        state.search = LoadableHits()
     }
 
     private func toggleRead(_ id: String) {
@@ -131,40 +137,86 @@ public final class AppModel {
     }
 
     public func runFeedFetch(debounce: Duration? = nil) async {
-        state.isFeedLoading = true
-        let task = makeFetchTask(debounce: debounce) { try await $0.frontPage() }
-        tasks[.feed] = task
-        do {
-            // nil = superseded by a newer fetch. Leave isFeedLoading
-            // asserted so the spinner stays visible until that fetch
-            // settles.
-            guard let ids = try await awaitFetch(task) else { return }
-            state.feedIds = ids
-            state.lastRefreshedAt = .now
-            state.feedLoadError = nil
-            state.isFeedLoading = false
-        } catch {
-            state.feedLoadError = error.localizedDescription
-            state.isFeedLoading = false
-        }
+        // Refresh supersedes any in-flight load-more: cancel its task
+        // (otherwise its appended page would land on the snapshot we're
+        // about to replace) and reset its status (otherwise the stale
+        // spinner/error would outlive the refresh).
+        tasks[.feedMore] = nil
+        state.feed.loadMoreStatus = LoadStatus()
+        await runFetch(
+            id: .feed,
+            statusPath: \.feed.initialStatus,
+            debounce: debounce,
+            body: { try await $0.frontPage(0) },
+            onSuccess: { state, page in
+                state.feed.receiveInitialPage(page.hits.map(\.id), totalPages: page.totalPages)
+            }
+        )
+    }
+
+    public func runFeedLoadMore() async {
+        guard let loaded = state.feed.loadedHits, loaded.hasMore,
+              !state.feed.loadMoreStatus.isLoading else { return }
+        let next = loaded.nextPage
+        await runFetch(
+            id: .feedMore,
+            statusPath: \.feed.loadMoreStatus,
+            debounce: nil,
+            body: { try await $0.frontPage(next) },
+            onSuccess: { state, page in
+                state.feed.receiveLoadMorePage(page.hits.map(\.id), totalPages: page.totalPages)
+            }
+        )
     }
 
     public func runSearchFetch(query: String, debounce: Duration? = nil) async {
-        state.isSearchLoading = true
-        let task = makeFetchTask(debounce: debounce) { try await $0.search(query) }
-        tasks[.search] = task
+        tasks[.searchMore] = nil
+        state.search.loadMoreStatus = LoadStatus()
+        await runFetch(
+            id: .search,
+            statusPath: \.search.initialStatus,
+            debounce: debounce,
+            body: { try await $0.search(query, 0) },
+            onSuccess: { state, page in
+                state.search.receiveInitialPage(page.hits.map(\.id), totalPages: page.totalPages)
+            }
+        )
+    }
+
+    public func runSearchLoadMore() async {
+        guard let loaded = state.search.loadedHits, loaded.hasMore,
+              !state.search.loadMoreStatus.isLoading else { return }
+        let next = loaded.nextPage
+        let query = state.searchQuery
+        await runFetch(
+            id: .searchMore,
+            statusPath: \.search.loadMoreStatus,
+            debounce: nil,
+            body: { try await $0.search(query, next) },
+            onSuccess: { state, page in
+                state.search.receiveLoadMorePage(page.hits.map(\.id), totalPages: page.totalPages)
+            }
+        )
+    }
+
+    /// `awaitFetch` returning `nil` (superseded fetch) leaves the
+    /// status flag asserted so the spinner stays visible across the
+    /// cancel-and-replace.
+    private func runFetch(
+        id: TaskID,
+        statusPath: ReferenceWritableKeyPath<AppState, LoadStatus>,
+        debounce: Duration?,
+        body: @Sendable @escaping (HNClient) async throws -> HNPage,
+        onSuccess: (AppState, HNPage) -> Void
+    ) async {
+        state[keyPath: statusPath].startLoading()
+        let task = makeFetchTask(debounce: debounce, body: body)
+        tasks[id] = task
         do {
-            // nil = superseded by a newer fetch. Leave isSearchLoading
-            // asserted so the spinner stays visible across the
-            // cancel-and-replace. (`clearSearch()` is different — it
-            // turns the flag off itself before cancelling the task.)
-            guard let ids = try await awaitFetch(task) else { return }
-            state.searchIds = ids
-            state.searchLoadError = nil
-            state.isSearchLoading = false
+            guard let page = try await awaitFetch(task) else { return }
+            onSuccess(state, page)
         } catch {
-            state.searchLoadError = error.localizedDescription
-            state.isSearchLoading = false
+            state[keyPath: statusPath].finishFailure(error.localizedDescription)
         }
     }
 
@@ -184,8 +236,8 @@ public final class AppModel {
     /// write a transient `*LoadError = "cancelled"`.
     private func makeFetchTask(
         debounce: Duration?,
-        body: @Sendable @escaping (HNClient) async throws -> [HNHit]
-    ) -> Task<[HNHit], Error> {
+        body: @Sendable @escaping (HNClient) async throws -> HNPage
+    ) -> Task<HNPage, Error> {
         Task { [client, clock] in
             if let debounce {
                 try await clock.sleep(for: debounce)
@@ -199,14 +251,14 @@ public final class AppModel {
     }
 
     /// Await `task`, upsert its hits into the entity store, and return
-    /// the id list. Returns `nil` if the task was cancelled — the
-    /// caller short-circuits without touching its surface's state.
-    /// Other errors propagate so the caller can record them.
-    private func awaitFetch(_ task: Task<[HNHit], Error>) async throws -> [String]? {
+    /// the page. Returns `nil` if the task was cancelled — the caller
+    /// short-circuits without touching its surface's state. Other
+    /// errors propagate so the caller can record them.
+    private func awaitFetch(_ task: Task<HNPage, Error>) async throws -> HNPage? {
         do {
-            let hits = try await task.value
-            for hit in hits { state.hits[hit.id] = hit }
-            return hits.map(\.id)
+            let page = try await task.value
+            for hit in page.hits { state.hits[hit.id] = hit }
+            return page
         } catch is CancellationError {
             return nil
         }

@@ -18,4 +18,5 @@ public enum AppEvent: Sendable, Equatable {
     case toggleRead(id: String)
     case openStory(id: String)
     case refresh
+    case loadMore
 }
