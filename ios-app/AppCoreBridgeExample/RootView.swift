@@ -153,24 +153,27 @@ private struct LoadMoreRow: View {
     @State private var spinId = 0
 
     var body: some View {
-        VStack(spacing: 8) {
-            Text(status.error ?? "")
-                .font(.caption)
-                .foregroundStyle(.red)
-                .multilineTextAlignment(.center)
-                .opacity(status.error != nil ? 1 : 0)
+        HStack {
+            Text(status.error ?? "Loading more…")
+                .foregroundStyle(
+                    status.error == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red)
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            ProgressView()
-                .id(spinId)
-                .opacity(status.isLoading ? 1 : 0)
+            ZStack {
+                let showError = status.error != nil && !status.isLoading
 
-            Button("Try again") { dispatch(.loadMore) }
-                .buttonStyle(.bordered)
-                .opacity(status.error != nil ? 1 : 0)
-                .allowsHitTesting(status.error != nil)
-                .disabled(status.isLoading)
+                ProgressView()
+                    .id(spinId)
+                    .opacity(showError ? 0 : 1)
+
+                Button("Try again") { dispatch(.loadMore) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .opacity(showError ? 1 : 0)
+                    .allowsHitTesting(showError)
+            }
         }
-        .frame(maxWidth: .infinity)
         .animation(.default, value: status)
         .onAppear {
             spinId &+= 1
