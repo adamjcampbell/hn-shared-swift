@@ -27,17 +27,26 @@ private actor CallRecorder {
     func recordSearch(_ query: String) { searchCalls.append(query) }
 }
 
+/// Test fixture for `AppModel` with optional `HNClient` mocks and an
+/// injected clock. Defaults give an empty front page and an empty
+/// search — override the relevant closure to express the test's intent.
+private func makeModel(
+    frontPage: @escaping @Sendable () async throws -> [HNHit] = { [] },
+    search: @escaping @Sendable (String) async throws -> [HNHit] = { _ in [] },
+    clock: any Clock<Duration> = ContinuousClock()
+) -> AppModel {
+    AppModel(
+        client: HNClient(frontPage: frontPage, search: search),
+        clock: clock
+    )
+}
+
 @Suite("AppModel")
 struct AppModelTests {
 
     @Test("refresh populates feed stories and timestamp")
     func refresh_populatesStoriesAndTimestamp() async {
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { [storyA, storyB] },
-                search: { _ in [] }
-            )
-        )
+        let model = makeModel(frontPage: { [storyA, storyB] })
 
         #expect(model.state.feedStories.isEmpty)
         #expect(model.state.lastRefreshedAt == nil)
@@ -53,11 +62,9 @@ struct AppModelTests {
     @Test("refresh records feedLoadError on failure")
     func refresh_recordsErrorOnFailure() async {
         struct Boom: Error {}
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { throw Boom() },
-                search: { _ in throw Boom() }
-            )
+        let model = makeModel(
+            frontPage: { throw Boom() },
+            search: { _ in throw Boom() }
         )
 
         await model.dispatch(.refresh)
@@ -68,9 +75,7 @@ struct AppModelTests {
 
     @Test("toggleRead adds and removes")
     func toggleRead_addsAndRemoves() async {
-        let model = AppModel(
-            client: HNClient(frontPage: { [storyA] }, search: { _ in [] })
-        )
+        let model = makeModel(frontPage: { [storyA] })
         await model.dispatch(.refresh)
         #expect(model.state.feedStories.first?.isRead == false)
 
@@ -85,12 +90,7 @@ struct AppModelTests {
 
     @Test("openStory marks read and emits presentURL command")
     func openStory_marksReadAndEmitsPresentURL() async {
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { [storyA, storyB] },
-                search: { _ in [] }
-            )
-        )
+        let model = makeModel(frontPage: { [storyA, storyB] })
         await model.dispatch(.refresh)
 
         var iterator = model.commands.makeAsyncIterator()
@@ -103,12 +103,7 @@ struct AppModelTests {
 
     @Test("openStory on a story without a URL marks read but emits nothing")
     func openStory_withoutURL_marksReadOnly() async {
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { [storyA, storyB] },
-                search: { _ in [] }
-            )
-        )
+        let model = makeModel(frontPage: { [storyA, storyB] })
         await model.dispatch(.refresh)
 
         // Open storyB (no URL) then storyA (has URL). The first emission
@@ -124,12 +119,7 @@ struct AppModelTests {
 
     @Test("openStory with unknown id is a no-op")
     func openStory_unknownId_isNoop() async {
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { [storyA] },
-                search: { _ in [] }
-            )
-        )
+        let model = makeModel(frontPage: { [storyA] })
         await model.dispatch(.refresh)
         let readBefore = model.state.readIds
 
@@ -144,12 +134,7 @@ struct AppModelTests {
 
     @Test("read state survives a refresh")
     func toggleRead_survivesRefresh() async {
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { [storyA, storyB] },
-                search: { _ in [] }
-            )
-        )
+        let model = makeModel(frontPage: { [storyA, storyB] })
         // Toggle before any stories are loaded — readIds is the canonical
         // record; the projection has nothing to map onto yet.
         await model.dispatch(.toggleRead(id: "100"))
@@ -167,14 +152,11 @@ struct AppModelTests {
     func runSearchFetch_debouncesAndFires() async {
         let calls = CallRecorder()
         let clock = TestClock()
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { [] },
-                search: { query in
-                    await calls.recordSearch(query)
-                    return [storyA]
-                }
-            ),
+        let model = makeModel(
+            search: { query in
+                await calls.recordSearch(query)
+                return [storyA]
+            },
             clock: clock
         )
 
@@ -195,10 +177,7 @@ struct AppModelTests {
     @MainActor
     func isSearchLoading_activatesOnFirstKeystroke() async {
         let clock = TestClock()
-        let model = AppModel(
-            client: HNClient(frontPage: { [] }, search: { _ in [storyA] }),
-            clock: clock
-        )
+        let model = makeModel(search: { _ in [storyA] }, clock: clock)
 
         #expect(model.state.isSearchLoading == false)
 
@@ -221,14 +200,11 @@ struct AppModelTests {
     func runSearchFetch_coalescesRapidKeystrokes() async {
         let calls = CallRecorder()
         let clock = TestClock()
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { [] },
-                search: { query in
-                    await calls.recordSearch(query)
-                    return [storyA]
-                }
-            ),
+        let model = makeModel(
+            search: { query in
+                await calls.recordSearch(query)
+                return [storyA]
+            },
             clock: clock
         )
 
@@ -265,17 +241,15 @@ struct AppModelTests {
     func refresh_whileSearching_reRunsSearch() async {
         let calls = CallRecorder()
         let clock = TestClock()
-        let model = AppModel(
-            client: HNClient(
-                frontPage: {
-                    await calls.recordFrontPage()
-                    return [storyA, storyB]
-                },
-                search: { query in
-                    await calls.recordSearch(query)
-                    return [storyA]
-                }
-            ),
+        let model = makeModel(
+            frontPage: {
+                await calls.recordFrontPage()
+                return [storyA, storyB]
+            },
+            search: { query in
+                await calls.recordSearch(query)
+                return [storyA]
+            },
             clock: clock
         )
 
@@ -299,9 +273,7 @@ struct AppModelTests {
     @Test("dispatch resumes on caller's actor (SE-0461)")
     @MainActor
     func dispatch_runsOnCallersActor() async {
-        let model = AppModel(
-            client: HNClient(frontPage: { [] }, search: { _ in [] })
-        )
+        let model = makeModel()
         await model.dispatch(.refresh)
         MainActor.assertIsolated()
     }
@@ -313,11 +285,9 @@ struct AppModelTests {
         // not Swift's CancellationError. Without the in-Task
         // normalisation, the dispatch arm's generic `catch` would write
         // `feedLoadError = "cancelled"`.
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { throw URLError(.cancelled) },
-                search:    { _ in throw URLError(.cancelled) }
-            )
+        let model = makeModel(
+            frontPage: { throw URLError(.cancelled) },
+            search:    { _ in throw URLError(.cancelled) }
         )
 
         await model.dispatch(.refresh)
@@ -333,19 +303,16 @@ struct AppModelTests {
         // prior dispatch's catch arm would write `searchLoadError =
         // "cancelled"` until the new fetch settled.
         let clock = TestClock()
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { [] },
-                search: { query in
-                    if query == "ru" {
-                        while !Task.isCancelled {
-                            try? await Task.sleep(for: .milliseconds(5))
-                        }
-                        throw URLError(.cancelled)
+        let model = makeModel(
+            search: { query in
+                if query == "ru" {
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(5))
                     }
-                    return [storyA]
+                    throw URLError(.cancelled)
                 }
-            ),
+                return [storyA]
+            },
             clock: clock
         )
 
@@ -377,17 +344,15 @@ struct AppModelTests {
     func clearingSearchQuery_cancelsAndClearsResults() async {
         let calls = CallRecorder()
         let clock = TestClock()
-        let model = AppModel(
-            client: HNClient(
-                frontPage: {
-                    await calls.recordFrontPage()
-                    return [storyA, storyB]
-                },
-                search: { query in
-                    await calls.recordSearch(query)
-                    return [storyA]
-                }
-            ),
+        let model = makeModel(
+            frontPage: {
+                await calls.recordFrontPage()
+                return [storyA, storyB]
+            },
+            search: { query in
+                await calls.recordSearch(query)
+                return [storyA]
+            },
             clock: clock
         )
 
@@ -419,11 +384,9 @@ struct AppModelTests {
     @MainActor
     func feedSurvivesActiveSearch() async {
         let clock = TestClock()
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { [storyA, storyB] },
-                search: { _ in [storyA] }
-            ),
+        let model = makeModel(
+            frontPage: { [storyA, storyB] },
+            search: { _ in [storyA] },
             clock: clock
         )
 
@@ -452,14 +415,11 @@ struct AppModelTests {
         // burst is what the next watcher iteration consumes.
         let calls = CallRecorder()
         let clock = TestClock()
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { [] },
-                search: { query in
-                    await calls.recordSearch(query)
-                    return [storyA]
-                }
-            ),
+        let model = makeModel(
+            search: { query in
+                await calls.recordSearch(query)
+                return [storyA]
+            },
             clock: clock
         )
 
@@ -492,11 +452,9 @@ struct AppModelTests {
     @MainActor
     func storyInBothFeedAndSearch_sharesReadState() async {
         let clock = TestClock()
-        let model = AppModel(
-            client: HNClient(
-                frontPage: { [storyA, storyB] },
-                search: { _ in [storyA] }
-            ),
+        let model = makeModel(
+            frontPage: { [storyA, storyB] },
+            search: { _ in [storyA] },
             clock: clock
         )
 
