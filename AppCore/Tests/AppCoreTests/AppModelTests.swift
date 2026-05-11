@@ -27,19 +27,10 @@ private actor CallRecorder {
     func recordSearch(_ query: String) { searchCalls.append(query) }
 }
 
-/// Mirrors the producer/consumer watcher pattern that `RootView` and
-/// `Bridge` install in production. The body runs concurrently
-/// with the watcher; on body exit, the watcher's TaskGroup is cancelled.
-///
-/// `[model]` capture is load-bearing on each `addTask`: without it,
-/// strict concurrency rejects sending a non-Sendable `AppModel` into the
-/// sending closure. Explicit capture lets region isolation prove the
-/// reference stays in the surrounding MainActor region.
-
 @Suite("AppModel")
 struct AppModelTests {
 
-    @Test("refresh populates stories and timestamp")
+    @Test("refresh populates feed stories and timestamp")
     func refresh_populatesStoriesAndTimestamp() async {
         let model = AppModel(
             client: HNClient(
@@ -48,18 +39,18 @@ struct AppModelTests {
             )
         )
 
-        #expect(model.state.stories.isEmpty)
+        #expect(model.state.feedStories.isEmpty)
         #expect(model.state.lastRefreshedAt == nil)
 
         await model.dispatch(.refresh)
 
-        #expect(model.state.stories.count == 2)
-        #expect(model.state.stories.first?.title == "Top story")
+        #expect(model.state.feedStories.count == 2)
+        #expect(model.state.feedStories.first?.title == "Top story")
         #expect(model.state.lastRefreshedAt != nil)
-        #expect(model.state.loadError == nil)
+        #expect(model.state.feedLoadError == nil)
     }
 
-    @Test("refresh records loadError on failure")
+    @Test("refresh records feedLoadError on failure")
     func refresh_recordsErrorOnFailure() async {
         struct Boom: Error {}
         let model = AppModel(
@@ -71,8 +62,8 @@ struct AppModelTests {
 
         await model.dispatch(.refresh)
 
-        #expect(model.state.stories.isEmpty)
-        #expect(model.state.loadError != nil)
+        #expect(model.state.feedStories.isEmpty)
+        #expect(model.state.feedLoadError != nil)
     }
 
     @Test("toggleRead adds and removes")
@@ -81,14 +72,14 @@ struct AppModelTests {
             client: HNClient(frontPage: { [storyA] }, search: { _ in [] })
         )
         await model.dispatch(.refresh)
-        #expect(model.state.stories.first?.isRead == false)
+        #expect(model.state.feedStories.first?.isRead == false)
 
         await model.dispatch(.toggleRead(id: storyA.id))
-        #expect(model.state.stories.first?.isRead == true)
+        #expect(model.state.feedStories.first?.isRead == true)
         #expect(model.state.readIds.contains(storyA.id))
 
         await model.dispatch(.toggleRead(id: storyA.id))
-        #expect(model.state.stories.first?.isRead == false)
+        #expect(model.state.feedStories.first?.isRead == false)
         #expect(model.state.readIds.contains(storyA.id) == false)
     }
 
@@ -105,7 +96,7 @@ struct AppModelTests {
         var iterator = model.commands.makeAsyncIterator()
         await model.dispatch(.openStory(id: storyA.id))
 
-        #expect(model.state.stories.first(where: { $0.id == storyA.id })?.isRead == true)
+        #expect(model.state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
         let command = await iterator.next()
         #expect(command == .presentURL(value: storyA.url!))
     }
@@ -120,14 +111,13 @@ struct AppModelTests {
         )
         await model.dispatch(.refresh)
 
-        // Open storyA first so we have a known emission to wait on, then
-        // open storyB (no URL). The next iteration should yield storyA's
-        // command — proving storyB emitted nothing in between.
+        // Open storyB (no URL) then storyA (has URL). The first emission
+        // we observe is storyA's — proving storyB emitted nothing.
         var iterator = model.commands.makeAsyncIterator()
         await model.dispatch(.openStory(id: storyB.id))
         await model.dispatch(.openStory(id: storyA.id))
 
-        #expect(model.state.stories.first(where: { $0.id == storyB.id })?.isRead == true)
+        #expect(model.state.feedStories.first(where: { $0.id == storyB.id })?.isRead == true)
         let command = await iterator.next()
         #expect(command == .presentURL(value: storyA.url!))
     }
@@ -145,7 +135,6 @@ struct AppModelTests {
 
         var iterator = model.commands.makeAsyncIterator()
         await model.dispatch(.openStory(id: "does-not-exist"))
-        // Follow with a known-good open so we have something to await.
         await model.dispatch(.openStory(id: storyA.id))
 
         #expect(model.state.readIds == readBefore.union([storyA.id]))
@@ -161,76 +150,21 @@ struct AppModelTests {
                 search: { _ in [] }
             )
         )
-        // Toggle before any stories are loaded — the kernel still records
-        // it; the projection has nothing to map onto yet.
+        // Toggle before any stories are loaded — readIds is the canonical
+        // record; the projection has nothing to map onto yet.
         await model.dispatch(.toggleRead(id: "100"))
         #expect(model.state.readIds.contains("100"))
-        #expect(model.state.stories.isEmpty)
+        #expect(model.state.feedStories.isEmpty)
 
         await model.dispatch(.refresh)
-        let projected = model.state.stories.first(where: { $0.id == "100" })
+        let projected = model.state.feedStories.first(where: { $0.id == "100" })
         #expect(projected != nil)
         #expect(projected?.isRead == true)
     }
 
-    @Test("ObservedKeyPath emits initial value then yields on each willSet")
+    @Test("runSearchFetch debounces and fires search with current query")
     @MainActor
-    func observedKeyPath_emitsInitialAndChanges() async {
-        let model = AppModel(
-            client: HNClient(frontPage: { [] }, search: { _ in [] })
-        )
-
-        // Iterate state.observe(\.searchQuery) — first element is the
-        // current value (matching `Observations`' initial emission);
-        // subsequent elements arrive on each willSet.
-        let observer = Task { @MainActor [state = model.state] in
-            var captured: [String] = []
-            for await q in state.observe(\.searchQuery).prefix(3) {
-                captured.append(q)
-            }
-            return captured
-        }
-        await Task.megaYield()
-
-        model.state.searchQuery = "ru"
-        await Task.megaYield()
-        model.state.searchQuery = "rust"
-
-        let captured = await observer.value
-        #expect(captured == ["", "ru", "rust"])
-    }
-
-    @Test("ObservedKeyPath terminates when surrounding Task is cancelled — even without a subsequent write")
-    @MainActor
-    func observedKeyPath_terminatesOnCancellationWithoutWrite() async {
-        let model = AppModel(
-            client: HNClient(frontPage: { [] }, search: { _ in [] })
-        )
-
-        // Start an observer that consumes the initial emission then
-        // parks awaiting the next willSet.
-        let observer = Task { @MainActor [state = model.state] in
-            var captured: [String] = []
-            for await q in state.observe(\.searchQuery) {
-                captured.append(q)
-            }
-            return captured
-        }
-        await Task.megaYield()
-
-        // Cancel without writing. The iterator's wait sits on
-        // `AsyncStream`'s for-await, which propagates cancellation
-        // even when no `willSet` ever fires — so the loop must exit
-        // cleanly instead of hanging.
-        observer.cancel()
-
-        let captured = await observer.value
-        #expect(captured == [""])  // initial-emission only; iterator exited on cancel
-    }
-
-    @Test("runFetch debounces and fires search with current query")
-    @MainActor
-    func runFetch_debouncesAndFires() async {
+    func runSearchFetch_debouncesAndFires() async {
         let calls = CallRecorder()
         let clock = TestClock()
         let model = AppModel(
@@ -244,24 +178,47 @@ struct AppModelTests {
             clock: clock
         )
 
-        // Direct property write (the path @Bindable / per-property JNI
-        // setter take); host's watcher would respond by calling runFetch.
         model.state.searchQuery = "rust"
         let fetch = Task { @MainActor [model] in
-            await model.runFetch(debounce: AppModel.searchDebounce)
+            await model.runSearchFetch(query: "rust", debounce: AppModel.searchDebounce)
         }
         await Task.megaYield()
         await clock.advance(by: AppModel.searchDebounce)
         await fetch.value
 
         #expect(model.state.searchQuery == "rust")
-        #expect(model.state.stories.map(\.id) == ["100"])
+        #expect(model.state.searchResults.map(\.id) == ["100"])
         await #expect(calls.searchCalls == ["rust"])
     }
 
-    @Test("rapid runFetch calls coalesce — only the latest fires")
+    @Test("isSearchLoading activates on first keystroke, before debounce elapses")
     @MainActor
-    func runFetch_coalescesRapidKeystrokes() async {
+    func isSearchLoading_activatesOnFirstKeystroke() async {
+        let clock = TestClock()
+        let model = AppModel(
+            client: HNClient(frontPage: { [] }, search: { _ in [storyA] }),
+            clock: clock
+        )
+
+        #expect(model.state.isSearchLoading == false)
+
+        let fetch = Task { @MainActor [model] in
+            await model.runSearchFetch(query: "r", debounce: AppModel.searchDebounce)
+        }
+        await Task.megaYield()
+
+        // Spinner asserted synchronously on entry, before the debounce.
+        #expect(model.state.isSearchLoading == true)
+
+        await clock.advance(by: AppModel.searchDebounce)
+        await fetch.value
+
+        #expect(model.state.isSearchLoading == false)
+    }
+
+    @Test("rapid runSearchFetch calls coalesce — only the latest fires")
+    @MainActor
+    func runSearchFetch_coalescesRapidKeystrokes() async {
         let calls = CallRecorder()
         let clock = TestClock()
         let model = AppModel(
@@ -275,22 +232,21 @@ struct AppModelTests {
             clock: clock
         )
 
-        // Simulate three back-to-back keystrokes the way the production
-        // watcher would: write the property, then call runFetch (each
-        // call cancels the prior in-flight searchTask).
+        // Three back-to-back keystrokes; each runSearchFetch cancels the
+        // prior in-flight searchTask, so only the latest query fires.
         model.state.searchQuery = "ru"
         let t1 = Task { @MainActor [model] in
-            await model.runFetch(debounce: AppModel.searchDebounce)
+            await model.runSearchFetch(query: "ru", debounce: AppModel.searchDebounce)
         }
         await Task.megaYield()
         model.state.searchQuery = "rus"
         let t2 = Task { @MainActor [model] in
-            await model.runFetch(debounce: AppModel.searchDebounce)
+            await model.runSearchFetch(query: "rus", debounce: AppModel.searchDebounce)
         }
         await Task.megaYield()
         model.state.searchQuery = "rust"
         let t3 = Task { @MainActor [model] in
-            await model.runFetch(debounce: AppModel.searchDebounce)
+            await model.runSearchFetch(query: "rust", debounce: AppModel.searchDebounce)
         }
         await Task.megaYield()
 
@@ -301,12 +257,12 @@ struct AppModelTests {
 
         await #expect(calls.searchCalls == ["rust"])
         #expect(model.state.searchQuery == "rust")
-        #expect(model.state.stories.map(\.id) == ["100"])
+        #expect(model.state.searchResults.map(\.id) == ["100"])
     }
 
-    @Test("refresh during pending debounce cancels the pending search")
+    @Test("refresh while a search is in flight re-runs the current search, not the feed")
     @MainActor
-    func refresh_cancelsPendingDebounce() async {
+    func refresh_whileSearching_reRunsSearch() async {
         let calls = CallRecorder()
         let clock = TestClock()
         let model = AppModel(
@@ -323,25 +279,21 @@ struct AppModelTests {
             clock: clock
         )
 
-        // Pending watcher-style fetch with searchQuery="rust", parked
-        // in clock.sleep.
         model.state.searchQuery = "rust"
         let pending = Task { @MainActor [model] in
-            await model.runFetch(debounce: AppModel.searchDebounce)
+            await model.runSearchFetch(query: "rust", debounce: AppModel.searchDebounce)
         }
         await Task.megaYield()
 
-        // Refresh's own runFetch cancels the pending task before the
-        // debounce elapses.
+        // .refresh with non-empty searchQuery re-runs the search; the
+        // pending fetch is cancelled before it issues its own request.
         await model.dispatch(.refresh)
         await clock.advance(by: AppModel.searchDebounce)
         await pending.value
 
-        // Refresh ran with searchQuery already set to "rust", so it hit
-        // the search endpoint. The pending fetch got cancelled before
-        // it could fire its own request.
         await #expect(calls.frontPageCalls == 0)
         await #expect(calls.searchCalls == ["rust"])
+        #expect(model.state.searchResults.map(\.id) == ["100"])
     }
 
     @Test("dispatch resumes on caller's actor (SE-0461)")
@@ -354,13 +306,13 @@ struct AppModelTests {
         MainActor.assertIsolated()
     }
 
-    @Test("URLError(.cancelled) from a cancelled fetch is treated as cancellation")
+    @Test("URLError(.cancelled) from a cancelled feed fetch is treated as cancellation")
     @MainActor
-    func cancelledURLError_doesNotSurfaceAsLoadError() async {
+    func cancelledURLError_doesNotSurfaceAsFeedLoadError() async {
         // URLSession surfaces task cancellation as URLError.cancelled,
         // not Swift's CancellationError. Without the in-Task
         // normalisation, the dispatch arm's generic `catch` would write
-        // `loadError = "cancelled"`. Direct contract test.
+        // `feedLoadError = "cancelled"`.
         let model = AppModel(
             client: HNClient(
                 frontPage: { throw URLError(.cancelled) },
@@ -370,55 +322,197 @@ struct AppModelTests {
 
         await model.dispatch(.refresh)
 
-        #expect(model.state.loadError == nil)
-        #expect(model.state.hits.isEmpty)
+        #expect(model.state.feedLoadError == nil)
+        #expect(model.state.feedIds.isEmpty)
     }
 
-    @Test("cancel-and-replace through URLError(.cancelled) doesn't surface")
+    @Test("search-to-search cancel-and-replace through URLError(.cancelled) doesn't surface")
     @MainActor
-    func cancelAndReplace_throughURLErrorCancelled_silent() async {
-        // Reproduces the cold-start race that motivated the URLError
-        // normalisation: a slow `.refresh` fetch is in flight when a
-        // searchQuery write arrives, the watcher's runFetch
-        // cancel-and-replaces the task, and the URLSession-style mock
-        // surfaces URLError.cancelled as the task throws. Without the
-        // normalisation the prior dispatch's catch arm would have
-        // written `loadError = "cancelled"` until the search-query
-        // fetch settled.
+    func searchCancelAndReplace_throughURLErrorCancelled_silent() async {
+        // Without the URLError → CancellationError normalisation, the
+        // prior dispatch's catch arm would write `searchLoadError =
+        // "cancelled"` until the new fetch settled.
+        let clock = TestClock()
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { [] },
+                search: { query in
+                    if query == "ru" {
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .milliseconds(5))
+                        }
+                        throw URLError(.cancelled)
+                    }
+                    return [storyA]
+                }
+            ),
+            clock: clock
+        )
+
+        model.state.searchQuery = "ru"
+        let firstSearch = Task { @MainActor [model] in
+            await model.runSearchFetch(query: "ru", debounce: AppModel.searchDebounce)
+        }
+        await Task.megaYield()
+        await clock.advance(by: AppModel.searchDebounce)
+        await Task.megaYield()
+
+        model.state.searchQuery = "rust"
+        let secondSearch = Task { @MainActor [model] in
+            await model.runSearchFetch(query: "rust", debounce: AppModel.searchDebounce)
+        }
+        await Task.megaYield()
+        await clock.advance(by: AppModel.searchDebounce)
+
+        await firstSearch.value
+        await secondSearch.value
+
+        #expect(model.state.searchLoadError == nil)
+        #expect(model.state.searchQuery == "rust")
+        #expect(model.state.searchResults.map(\.id) == ["100"])
+    }
+
+    @Test("clearing the search query cancels the search, clears results, and does not refetch the feed")
+    @MainActor
+    func clearingSearchQuery_cancelsAndClearsResults() async {
+        let calls = CallRecorder()
         let clock = TestClock()
         let model = AppModel(
             client: HNClient(
                 frontPage: {
-                    // Park until the calling Task is cancelled, then
-                    // throw URLError(.cancelled) like URLSession does.
-                    while !Task.isCancelled {
-                        try? await Task.sleep(for: .milliseconds(5))
-                    }
-                    throw URLError(.cancelled)
+                    await calls.recordFrontPage()
+                    return [storyA, storyB]
                 },
+                search: { query in
+                    await calls.recordSearch(query)
+                    return [storyA]
+                }
+            ),
+            clock: clock
+        )
+
+        await model.dispatch(.refresh)
+        let feedBefore = model.state.feedStories.map(\.id)
+        let frontPageBefore = await calls.frontPageCalls
+
+        model.state.searchQuery = "rust"
+        let search = Task { @MainActor [model] in
+            await model.runSearchFetch(query: "rust", debounce: AppModel.searchDebounce)
+        }
+        await Task.megaYield()
+        await clock.advance(by: AppModel.searchDebounce)
+        await search.value
+        #expect(model.state.searchResults.map(\.id) == ["100"])
+
+        model.state.searchQuery = ""
+        model.clearSearch()
+
+        #expect(model.state.searchResults.isEmpty)
+        #expect(model.state.searchLoadError == nil)
+        #expect(model.state.isSearchLoading == false)
+        #expect(model.state.feedStories.map(\.id) == feedBefore)
+        await #expect(calls.frontPageCalls == frontPageBefore)
+        await #expect(calls.searchCalls == ["rust"])
+    }
+
+    @Test("feed survives an active search")
+    @MainActor
+    func feedSurvivesActiveSearch() async {
+        let clock = TestClock()
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { [storyA, storyB] },
                 search: { _ in [storyA] }
             ),
             clock: clock
         )
 
-        // Start a slow refresh that parks at frontPage (waiting to be
-        // cancelled), then simulate a watcher-driven setSearchQuery by
-        // writing the property and calling runFetch.
-        let refreshTask = Task { @MainActor [model] in await model.dispatch(.refresh) }
-        await Task.megaYield()
+        await model.dispatch(.refresh)
+        let feedSnapshot = model.state.feedStories.map(\.id)
+        #expect(feedSnapshot == ["100", "101"])
 
-        model.state.searchQuery = "rust"
-        let queryTask = Task { @MainActor [model] in
-            await model.runFetch(debounce: AppModel.searchDebounce)
+        model.state.searchQuery = "x"
+        let search = Task { @MainActor [model] in
+            await model.runSearchFetch(query: "x", debounce: AppModel.searchDebounce)
         }
         await Task.megaYield()
         await clock.advance(by: AppModel.searchDebounce)
+        await search.value
 
-        await refreshTask.value
-        await queryTask.value
-
-        #expect(model.state.loadError == nil)
-        #expect(model.state.searchQuery == "rust")
-        #expect(model.state.stories.map(\.id) == ["100"])
+        #expect(model.state.searchResults.map(\.id) == ["100"])
+        #expect(model.state.feedStories.map(\.id) == feedSnapshot)
     }
+
+    @Test("backspacing all the way to empty during an in-flight fetch still clears results")
+    @MainActor
+    func runSearchQueryWatcher_burstWriteDuringFetchClearsResults() async {
+        // Regression: burst writes during an in-flight fetch must still
+        // clear results when the final value is empty. `searchQueryChanges`
+        // is `.bufferingNewest(1)`, so the empty write at the end of the
+        // burst is what the next watcher iteration consumes.
+        let calls = CallRecorder()
+        let clock = TestClock()
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { [] },
+                search: { query in
+                    await calls.recordSearch(query)
+                    return [storyA]
+                }
+            ),
+            clock: clock
+        )
+
+        let watcher = Task { @MainActor [model] in
+            await model.runSearchQueryWatcher()
+        }
+        await Task.megaYield()
+
+        // Watcher reads "rust" and parks in `runSearchFetch`'s debounce.
+        model.state.searchQuery = "rust"
+        await Task.megaYield()
+
+        // Backspace to empty during the in-flight fetch.
+        model.state.searchQuery = ""
+        await Task.megaYield()
+
+        await clock.advance(by: AppModel.searchDebounce)
+        await Task.megaYield()
+
+        #expect(model.state.searchResults.isEmpty)
+        #expect(model.state.searchLoadError == nil)
+        #expect(model.state.isSearchLoading == false)
+        await #expect(calls.searchCalls == ["rust"])
+
+        watcher.cancel()
+        _ = await watcher.value
+    }
+
+    @Test("a story present in both feed and search shares its read state across projections")
+    @MainActor
+    func storyInBothFeedAndSearch_sharesReadState() async {
+        let clock = TestClock()
+        let model = AppModel(
+            client: HNClient(
+                frontPage: { [storyA, storyB] },
+                search: { _ in [storyA] }
+            ),
+            clock: clock
+        )
+
+        await model.dispatch(.refresh)
+        await model.dispatch(.toggleRead(id: storyA.id))
+        #expect(model.state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
+
+        model.state.searchQuery = "x"
+        let search = Task { @MainActor [model] in
+            await model.runSearchFetch(query: "x", debounce: AppModel.searchDebounce)
+        }
+        await Task.megaYield()
+        await clock.advance(by: AppModel.searchDebounce)
+        await search.value
+
+        #expect(model.state.searchResults.first?.isRead == true)
+    }
+
 }

@@ -4,7 +4,7 @@
     <string name="app_title">Hacker News</string>
     <string name="search_placeholder">Search Hacker News</string>
     <string name="front_page_title">Front page</string>
-    <string name="search_title">Search: \"%1$s\"</string>
+    <string name="searching_for_title">Searching for \"%1$s\"</string>
     <string name="last_refreshed_label">Last refreshed: %1$s</string>
     <string name="last_refreshed_never">never</string>
     <string name="unread_meta_label">%1$d unread of %2$d · last refreshed %3$s</string>

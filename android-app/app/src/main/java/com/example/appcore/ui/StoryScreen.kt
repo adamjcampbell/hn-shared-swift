@@ -5,10 +5,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -19,6 +21,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExpandedFullScreenSearchBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -125,10 +128,14 @@ private fun StoriesContent(
     // for tracking and mutations from any thread trigger recomposition.
     val authoritativeSearchQuery = state.searchQuery
     @Suppress("UNCHECKED_CAST")
-    val stories = state.stories.kotlin() as List<Story>
-    val isRefreshing = state.isLoading
+    val feedStories = state.feedStories.kotlin() as List<Story>
+    @Suppress("UNCHECKED_CAST")
+    val searchResults = state.searchResults.kotlin() as List<Story>
+    val isFeedRefreshing = state.isFeedLoading
+    val isSearchLoading = state.isSearchLoading
     val lastRefreshedAt = state.lastRefreshedAt
-    val loadError = state.loadError
+    val feedLoadError = state.feedLoadError
+    val searchLoadError = state.searchLoadError
 
     val searchBarState = rememberSearchBarState()
     val textFieldState = rememberTextFieldState(initialText = authoritativeSearchQuery)
@@ -178,32 +185,41 @@ private fun StoriesContent(
                 .weight(1f),
         ) {
             PullToRefreshBox(
-                isRefreshing = isRefreshing,
+                isRefreshing = isFeedRefreshing,
                 onRefresh = pullToRefresh,
                 modifier = Modifier.fillMaxSize(),
             ) {
                 LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)) {
                     item(key = "header") {
-                        HeaderCard(
-                            searchQuery = searchQuery,
-                            storyCount = stories.size,
-                            unreadCount = stories.count { !it.isRead },
+                        FeedHeaderCard(
+                            storyCount = feedStories.size,
+                            unreadCount = feedStories.count { !it.isRead },
                             lastRefreshedAt = lastRefreshedAt,
-                            loadError = loadError,
+                            loadError = feedLoadError,
                         )
                     }
-                    storyRows(stories, onToggleRead, onOpenStory)
+                    storyRows(feedStories, onToggleRead, onOpenStory)
                 }
-            }
-
-            if (!isRefreshing && stories.isEmpty() && searchQuery.isNotEmpty()) {
-                EmptyResultsOverlay(query = searchQuery)
             }
         }
     }
 
     ExpandedFullScreenSearchBar(state = searchBarState, inputField = inputField) {
-        LazyColumn { storyRows(stories, onToggleRead, onOpenStory) }
+        Box(Modifier.fillMaxSize()) {
+            LazyColumn {
+                item(key = "search-header") {
+                    SearchHeader(
+                        query = searchQuery,
+                        isLoading = isSearchLoading,
+                        error = searchLoadError,
+                    )
+                }
+                storyRows(searchResults, onToggleRead, onOpenStory)
+            }
+            if (!isSearchLoading && searchResults.isEmpty() && searchQuery.isNotEmpty()) {
+                EmptyResultsOverlay(query = searchQuery)
+            }
+        }
     }
 }
 
@@ -222,19 +238,13 @@ private fun LazyListScope.storyRows(
 }
 
 @Composable
-private fun HeaderCard(
-    searchQuery: String,
+private fun FeedHeaderCard(
     storyCount: Int,
     unreadCount: Int,
     lastRefreshedAt: skip.foundation.Date?,
     loadError: String?,
 ) {
     val never = stringResource(R.string.last_refreshed_never)
-    val title = if (searchQuery.isEmpty()) {
-        stringResource(R.string.front_page_title)
-    } else {
-        stringResource(R.string.search_title, searchQuery)
-    }
     val refreshLabel = lastRefreshedAt?.let(::formatTimestamp) ?: never
     val meta = if (storyCount == 0) {
         stringResource(R.string.last_refreshed_label, refreshLabel)
@@ -251,7 +261,10 @@ private fun HeaderCard(
             .padding(horizontal = 16.dp, vertical = 16.dp),
     ) {
         Column(Modifier.padding(16.dp)) {
-            Text(text = title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = stringResource(R.string.front_page_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
             Text(
                 text = meta,
                 style = MaterialTheme.typography.bodySmall,
@@ -260,6 +273,45 @@ private fun HeaderCard(
             if (loadError != null) {
                 Text(
                     text = loadError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchHeader(
+    query: String,
+    isLoading: Boolean,
+    error: String?,
+) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.searching_for_title, query),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                    )
+                }
+            }
+            if (error != null) {
+                Text(
+                    text = error,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )

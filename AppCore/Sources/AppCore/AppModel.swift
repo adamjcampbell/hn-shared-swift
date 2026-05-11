@@ -8,9 +8,9 @@ import FoundationNetworking
 /// mutates it in response to user events.
 ///
 /// `AppState` is the `@Observable` reference; `AppModel` itself is not
-/// `@Observable` because its other fields (`client`, `clock`, `searchTask`,
-/// the commands continuation) aren't meant to be observed and adding
-/// `@ObservationIgnored` to each would only add noise.
+/// `@Observable` because its other fields (`client`, `clock`, in-flight
+/// tasks, the commands continuation) aren't meant to be observed and
+/// adding `@ObservationIgnored` to each would only add noise.
 ///
 /// Async methods declared here run on the caller's actor by default
 /// (SE-0461 / `NonisolatedNonsendingByDefault`), so they don't introduce
@@ -41,9 +41,14 @@ public final class AppModel {
     /// into 250 ms of real-clock waiting per test.
     private let clock: any Clock<Duration>
 
-    /// In-flight network task. Replaced (and the predecessor cancelled)
-    /// on every `.refresh` and on each `state.searchQuery` write — only
-    /// one fetch runs at a time, and the latest dispatch always wins.
+    /// In-flight feed fetch. Cancelled and replaced on each
+    /// `runFeedFetch`. Independent of `searchTask` — a feed refresh
+    /// never cancels a search and vice versa.
+    private var feedTask: Task<[HNHit], Error>?
+
+    /// In-flight search fetch. Cancelled and replaced on each
+    /// `runSearchFetch`, and explicitly cancelled when the query
+    /// becomes empty.
     private var searchTask: Task<[HNHit], Error>?
 
     /// Debounce window applied between a `state.searchQuery` write and
@@ -75,18 +80,9 @@ public final class AppModel {
         self.commandsContinuation = continuation
     }
 
-    /// Single entry point for every user-driven mutation.
-    ///
-    /// `async` so callers that need completion (e.g. SwiftUI's
-    /// `.refreshable` to dismiss the pull-to-refresh spinner) can `await`
-    /// the call. Cross-platform: `dispatch` is statically nonisolated
-    /// under SE-0461 and runs on the caller's actor at runtime.
-    ///
-    /// **Why this works under Swift 6 strict concurrency.** The fetch
-    /// `Task` deliberately captures only Sendable values (`client`,
-    /// `clock`, `query`) — never `self`. State commits happen back here
-    /// in the dispatch arm, after the `Task`'s value is awaited, so
-    /// they run on the caller's actor where `self` natively lives.
+    /// Single entry point for every user-driven mutation. `.refresh`
+    /// re-runs whichever surface the user is currently on — feed when
+    /// `searchQuery` is empty, otherwise the current search.
     // SKIP @bridge
     public func dispatch(_ event: AppEvent) async {
         switch event {
@@ -95,37 +91,42 @@ public final class AppModel {
         case .openStory(let id):
             openStory(id)
         case .refresh:
-            await runFetch()
+            if state.searchQuery.isEmpty {
+                await runFeedFetch()
+            } else {
+                await runSearchFetch(query: state.searchQuery)
+            }
         }
     }
 
-    /// Long-lived loop that drives a debounced fetch on every write to
-    /// `state.searchQuery`. The host `await`s this from inside its own
-    /// Task — `RootView`'s `.task` on iOS,
-    /// `LaunchedEffect(appModel) { appModel.runSearchQueryWatcher() }`
-    /// on Android. Cancellation propagates from the host's surrounding
-    /// Task.
+    /// Long-lived debounced-fetch loop on every `state.searchQuery`
+    /// write. The host `await`s this from `RootView`'s `.task` on iOS
+    /// or `LaunchedEffect` on Android. Cancellation propagates from
+    /// the host's surrounding Task.
     ///
-    /// Why this works as a plain async method (where `start()` spawning
-    /// a `Task { [self] in ... }` doesn't): there's no unstructured
-    /// `Task` creation here. Under SE-0461 the body runs on the
-    /// caller's actor; the `for await` iterator is non-Sendable but
-    /// stays in that actor's region; `runFetch` is called on the same
-    /// actor. The `[#SendingClosureRisksDataRace]` hole only fires when
-    /// you put `self` inside a `sending` closure (Task.init,
-    /// async-let, TaskGroup.addTask). A plain async method body has
-    /// no such hop.
-    ///
-    /// `dropFirst()` skips `ObservedKeyPath`'s iteration-start emission
-    /// so the host's first-appear `.refresh` isn't duplicated.
-    /// `runFetch` reads `state.searchQuery` on entry, so a burst of
-    /// writes coalesces naturally — the inner `searchTask`
-    /// cancel-and-replace handles overlapping fetches.
+    /// Events come from `state.searchQueryChanges` — see that property
+    /// for the `.bufferingNewest(1)` rationale (handles burst writes
+    /// during a slow consumer). Empty query → `clearSearch()`; the
+    /// feed stays cached so dismissing the search overlay restores it
+    /// without a network call.
     // SKIP @bridge
     public func runSearchQueryWatcher() async {
-        for await _ in state.observe(\.searchQuery).dropFirst() {
-            await runFetch(debounce: Self.searchDebounce)
+        for await query in state.searchQueryChanges {
+            if query.isEmpty {
+                clearSearch()
+            } else {
+                await runSearchFetch(query: query, debounce: Self.searchDebounce)
+            }
         }
+    }
+
+    /// Empty-query path of the watcher, factored out so tests can drive
+    /// it without spinning the full watcher Task.
+    public func clearSearch() {
+        searchTask?.cancel()
+        state.searchIds = []
+        state.searchLoadError = nil
+        state.isSearchLoading = false
     }
 
     private func toggleRead(_ id: String) {
@@ -137,57 +138,85 @@ public final class AppModel {
     }
 
     /// Mark a known story as read and, if it has a URL, ask the UI to
-    /// present it. Unknown ids are a no-op — guarding here keeps
-    /// `readIds` from accumulating ids that never corresponded to a hit.
+    /// present it. Single dictionary lookup against the entity store —
+    /// no per-projection scan.
     private func openStory(_ id: String) {
-        guard let hit = state.hits.first(where: { $0.id == id }) else { return }
+        guard let hit = state.hits[id] else { return }
         state.readIds.insert(id)
         if let url = hit.url {
             commandsContinuation.yield(.presentURL(value: url))
         }
     }
 
-    /// Cancel-and-replace a single in-flight fetch task.
+    /// Cancel-and-replace the in-flight feed fetch.
     ///
     /// The Task body captures only Sendable values (`client`, `clock`)
-    /// plus the local `query` and `debounce` — never `self`. When a new
-    /// dispatch arrives, it cancels the prior task; that task's
-    /// `clock.sleep` throws `CancellationError`, the throw propagates
-    /// through the Task body without ever reaching the fetch call, and
-    /// the prior dispatch's `try await task.value` re-throws into the
-    /// `catch is CancellationError` arm — which returns without
-    /// committing anything to `state`. `debounce: nil` runs the fetch
-    /// immediately.
+    /// plus the local `debounce` — never `self`. State commits happen
+    /// here on the caller's actor after `try await task.value`.
     ///
-    /// **`try` (not `try?`) on the sleep is load-bearing.** Swallowing
-    /// the throw with `try?` would let cancelled tasks fall through to
-    /// the fetch call, and a test-mock closure that doesn't honor
-    /// cancellation (most don't) would then succeed for the cancelled
-    /// query and commit stale data. Letting the throw propagate is what
-    /// makes the cancel-and-replace property robust against any client
-    /// implementation, mock or live.
+    /// **`try` (not `try?`) on the sleep is load-bearing.** A test-mock
+    /// closure that doesn't honor cancellation would otherwise fall
+    /// through to the network call and commit stale data; the throw
+    /// propagating is what makes cancel-and-replace robust.
     ///
-    /// **`URLError(.cancelled)` is normalised to `CancellationError`
-    /// inside the Task body** — `URLSession` surfaces task cancellation
-    /// as `URLError.cancelled` rather than `CancellationError`, so a
-    /// fetch already in flight when a newer dispatch arrives would
-    /// otherwise fall through to the generic `catch` arm and surface as
-    /// a transient `loadError = "cancelled"` until the newer fetch
-    /// settles. Re-throwing as `CancellationError` keeps the dispatch
-    /// arm a single uniform "this run was superseded" path.
-    public func runFetch(debounce: Duration? = nil) async {
-        searchTask?.cancel()
-        state.isLoading = true
+    /// **`URLError(.cancelled)` is normalised to `CancellationError`.**
+    /// `URLSession` surfaces task cancellation as `URLError.cancelled`,
+    /// which would otherwise hit the dispatch arm's generic `catch` and
+    /// write a transient `feedLoadError = "cancelled"`.
+    ///
+    /// **The `CancellationError` arm intentionally does not flip
+    /// `isFeedLoading` back to false.** A newer dispatch is responsible
+    /// for committing its own result; leaving the flag asserted keeps
+    /// the spinner visible until the newer fetch settles.
+    public func runFeedFetch(debounce: Duration? = nil) async {
+        feedTask?.cancel()
+        state.isFeedLoading = true
 
-        let query = state.searchQuery
         let task = Task<[HNHit], Error> { [client, clock] in
             if let debounce {
                 try await clock.sleep(for: debounce)
             }
             do {
-                return query.isEmpty
-                    ? try await client.frontPage()
-                    : try await client.search(query)
+                return try await client.frontPage()
+            } catch let urlError as URLError where urlError.code == .cancelled {
+                throw CancellationError()
+            }
+        }
+        feedTask = task
+
+        do {
+            let hits = try await task.value
+            for hit in hits { state.hits[hit.id] = hit }
+            state.feedIds = hits.map(\.id)
+            state.lastRefreshedAt = .now
+            state.feedLoadError = nil
+            state.isFeedLoading = false
+        } catch is CancellationError {
+            return
+        } catch {
+            state.feedLoadError = error.localizedDescription
+            state.isFeedLoading = false
+        }
+    }
+
+    /// Cancel-and-replace the in-flight search fetch.
+    ///
+    /// `state.isSearchLoading` flips synchronously on entry so the UI
+    /// spinner activates from the first keystroke and stays on across
+    /// cancel-and-replace until results land. The `CancellationError`
+    /// arm leaves the flag asserted (a newer search in flight will
+    /// turn it off); `clearSearch()` is different — it turns the flag
+    /// off itself before cancelling the task.
+    public func runSearchFetch(query: String, debounce: Duration? = nil) async {
+        searchTask?.cancel()
+        state.isSearchLoading = true
+
+        let task = Task<[HNHit], Error> { [client, clock] in
+            if let debounce {
+                try await clock.sleep(for: debounce)
+            }
+            do {
+                return try await client.search(query)
             } catch let urlError as URLError where urlError.code == .cancelled {
                 throw CancellationError()
             }
@@ -196,19 +225,15 @@ public final class AppModel {
 
         do {
             let hits = try await task.value
-            state.hits = hits
-            state.lastRefreshedAt = .now
-            state.loadError = nil
-            state.isLoading = false
+            for hit in hits { state.hits[hit.id] = hit }
+            state.searchIds = hits.map(\.id)
+            state.searchLoadError = nil
+            state.isSearchLoading = false
         } catch is CancellationError {
-            // A newer dispatch superseded us. The newer one is responsible
-            // for committing its own result; leave isLoading=true so the
-            // spinner / empty-overlay guard stays asserted until that
-            // fetch settles.
             return
         } catch {
-            state.loadError = error.localizedDescription
-            state.isLoading = false
+            state.searchLoadError = error.localizedDescription
+            state.isSearchLoading = false
         }
     }
 }

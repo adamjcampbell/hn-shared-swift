@@ -25,10 +25,11 @@ struct RootView: View {
             }
             .task {
                 // searchQuery watcher: AppModel iterates
-                // `state.observe(\.searchQuery)` and calls
-                // `runFetch(debounce:)` on every willSet. Cancellation
-                // propagates when this `.task` is torn down on view
-                // disappear.
+                // `state.searchQueryChanges` (an AsyncStream fed by
+                // searchQuery's didSet) and either fires a debounced
+                // search or clears search state when the query becomes
+                // empty. Cancellation propagates when this `.task` is
+                // torn down on view disappear.
                 await appModel.runSearchQueryWatcher()
             }
     }
@@ -66,12 +67,11 @@ private struct StoriesContent: View {
         StoriesList(state: state)
             .overlay {
                 // While the search field is active, occlude the front-page
-                // surface (HeaderCard + full list) with a stories-only
-                // SearchResults view. Mirrors Android's
-                // ExpandedFullScreenSearchBar, which renders just the
-                // matching stories with no HeaderCard. Overlay (not
-                // if/else swap) keeps StoriesList mounted so scroll
-                // position survives a search-cancel cycle.
+                // surface (HeaderCard + full list) with the search
+                // surface. Overlay (not if/else swap) keeps StoriesList
+                // mounted so scroll position survives a search-cancel
+                // cycle — and `state.feedStories` survives untouched
+                // because the search fetch writes to its own searchIds.
                 if isSearching {
                     SearchResults(state: state)
                 }
@@ -85,20 +85,24 @@ private struct SearchResults: View {
 
     var body: some View {
         List {
-            Section { StoryRows(stories: state.stories) }
+            Section {
+                SearchHeader(
+                    query: state.searchQuery,
+                    isLoading: state.isSearchLoading,
+                    error: state.searchLoadError
+                )
+            }
+            Section { StoryRows(stories: state.searchResults) }
         }
         .listStyle(.insetGrouped)
         .background(.background)
         .overlay {
-            // Empty-search-results overlay. Only fires when the user
-            // has typed a query but nothing matches — an empty front
-            // page would be a network failure surfaced via loadError
-            // on the underlying StoriesList instead. The `!isLoading`
-            // guard suppresses the brief window during a debounced
-            // query change where stories are stale-empty before the
+            // Empty-search-results overlay. The `!isSearchLoading` guard
+            // suppresses the brief window during a debounced query
+            // change where searchResults are stale-empty before the
             // new fetch lands.
-            if !state.isLoading
-                && state.stories.isEmpty
+            if !state.isSearchLoading
+                && state.searchResults.isEmpty
                 && !state.searchQuery.isEmpty {
                 EmptyResultsOverlay(query: state.searchQuery)
             }
@@ -113,15 +117,14 @@ private struct StoriesList: View {
     var body: some View {
         List {
             Section {
-                HeaderCard(
-                    searchQuery: state.searchQuery,
-                    storyCount: state.stories.count,
-                    unreadCount: state.stories.lazy.filter { !$0.isRead }.count,
+                FeedHeaderCard(
+                    storyCount: state.feedStories.count,
+                    unreadCount: state.feedStories.lazy.filter { !$0.isRead }.count,
                     lastRefreshedAt: state.lastRefreshedAt,
-                    loadError: state.loadError
+                    loadError: state.feedLoadError
                 )
             }
-            Section { StoryRows(stories: state.stories) }
+            Section { StoryRows(stories: state.feedStories) }
         }
         .listStyle(.insetGrouped)
         .refreshable { await dispatch.run(.refresh) }
@@ -147,16 +150,11 @@ private struct EmptyResultsOverlay: View {
     }
 }
 
-private struct HeaderCard: View {
-    let searchQuery: String
+private struct FeedHeaderCard: View {
     let storyCount: Int
     let unreadCount: Int
     let lastRefreshedAt: Date?
     let loadError: String?
-
-    private var titleText: String {
-        searchQuery.isEmpty ? "Front page" : "Search: \(searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : "“\(searchQuery)”")"
-    }
 
     private var metaText: String {
         let stamp = lastRefreshedAt?.formatted(date: .omitted, time: .standard) ?? "never"
@@ -168,12 +166,34 @@ private struct HeaderCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(titleText).font(.headline)
+            Text("Front page").font(.headline)
             Text(metaText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let loadError {
                 Text(loadError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+}
+
+private struct SearchHeader: View {
+    let query: String
+    let isLoading: Bool
+    let error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("Searching for “\(query)”").font(.headline)
+                if isLoading {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            if let error {
+                Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
             }
