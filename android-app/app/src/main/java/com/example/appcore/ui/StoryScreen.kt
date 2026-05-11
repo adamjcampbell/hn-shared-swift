@@ -14,7 +14,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.Button
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -42,6 +45,7 @@ import androidx.compose.material3.rememberSearchBarState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -58,6 +62,7 @@ import app.core.AppCommand
 import app.core.AppEvent
 import app.core.AppModel
 import app.core.AppState
+import app.core.LoadStatus
 import app.core.Story
 import com.example.appcore.R
 import com.example.appcore.state.rememberAppModel
@@ -106,6 +111,7 @@ fun StoryScreen() {
         StoriesContent(
             state = appModel.state,
             onRefresh = { appModel.dispatch(AppEvent.refresh) },
+            onLoadMore = { appModel.dispatch(AppEvent.loadMore) },
             onToggleRead = { id -> scope.launch { appModel.dispatch(AppEvent.toggleRead(id)) } },
             onOpenStory = { id -> scope.launch { appModel.dispatch(AppEvent.openStory(id)) } },
             modifier = Modifier
@@ -121,6 +127,7 @@ fun StoryScreen() {
 private fun StoriesContent(
     state: AppState,
     onRefresh: suspend () -> Unit,
+    onLoadMore: suspend () -> Unit,
     onToggleRead: (String) -> Unit,
     onOpenStory: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -133,11 +140,17 @@ private fun StoriesContent(
     val feedStories = state.feedStories.kotlin() as List<Story>
     @Suppress("UNCHECKED_CAST")
     val searchResults = state.searchResults.kotlin() as List<Story>
-    val isFeedRefreshing = state.isFeedLoading
-    val isSearchLoading = state.isSearchLoading
-    val lastRefreshedAt = state.lastRefreshedAt
-    val feedLoadError = state.feedLoadError
-    val searchLoadError = state.searchLoadError
+    val feed = state.feed
+    val search = state.search
+    val isFeedRefreshing = feed.initialStatus.isLoading
+    val isSearchLoading = search.initialStatus.isLoading
+    val lastRefreshedAt = feed.loadedHits?.loadedAt
+    val feedLoadError = feed.initialStatus.error
+    val searchLoadError = search.initialStatus.error
+    val feedHasMore = feed.loadedHits?.hasMore == true
+    val searchHasMore = search.loadedHits?.hasMore == true
+    val feedLoadMoreStatus = feed.loadMoreStatus
+    val searchLoadMoreStatus = search.loadMoreStatus
 
     val searchBarState = rememberSearchBarState()
     val textFieldState = rememberTextFieldState(initialText = authoritativeSearchQuery)
@@ -161,7 +174,29 @@ private fun StoriesContent(
 
     val searchQuery = textFieldState.text.toString()
 
+    val feedListState = rememberLazyListState()
+    val searchListState = rememberLazyListState()
+
     val pullToRefresh: () -> Unit = { scope.launch { onRefresh() } }
+    val triggerLoadMore: () -> Unit = { scope.launch { onLoadMore() } }
+
+    val shouldLoadMoreFeed by remember(feedListState) {
+        derivedStateOf { feedListState.isNearEnd(threshold = 3) }
+    }
+    LaunchedEffect(shouldLoadMoreFeed, feedHasMore) {
+        if (shouldLoadMoreFeed && feedHasMore) {
+            onLoadMore()
+        }
+    }
+
+    val shouldLoadMoreSearch by remember(searchListState) {
+        derivedStateOf { searchListState.isNearEnd(threshold = 3) }
+    }
+    LaunchedEffect(shouldLoadMoreSearch, searchHasMore) {
+        if (shouldLoadMoreSearch && searchHasMore) {
+            onLoadMore()
+        }
+    }
 
     val inputField: @Composable () -> Unit = remember(textFieldState, searchBarState, scope) {
         {
@@ -191,7 +226,10 @@ private fun StoriesContent(
                 onRefresh = pullToRefresh,
                 modifier = Modifier.fillMaxSize(),
             ) {
-                LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)) {
+                LazyColumn(
+                    state = feedListState,
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp),
+                ) {
                     item(key = "header") {
                         FeedHeaderCard(
                             storyCount = feedStories.size,
@@ -201,6 +239,14 @@ private fun StoriesContent(
                         )
                     }
                     storyRows(feedStories, onToggleRead, onOpenStory)
+                    if (feedHasMore) {
+                        item(key = "load-more") {
+                            LoadMoreRow(
+                                status = feedLoadMoreStatus,
+                                onRetry = triggerLoadMore,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -208,7 +254,7 @@ private fun StoriesContent(
 
     ExpandedFullScreenSearchBar(state = searchBarState, inputField = inputField) {
         Box(Modifier.fillMaxSize()) {
-            LazyColumn {
+            LazyColumn(state = searchListState) {
                 item(key = "search-header") {
                     SearchHeader(
                         query = searchQuery,
@@ -217,6 +263,14 @@ private fun StoriesContent(
                     )
                 }
                 storyRows(searchResults, onToggleRead, onOpenStory)
+                if (searchHasMore) {
+                    item(key = "search-load-more") {
+                        LoadMoreRow(
+                            status = searchLoadMoreStatus,
+                            onRetry = triggerLoadMore,
+                        )
+                    }
+                }
             }
             if (!isSearchLoading && searchResults.isEmpty() && searchQuery.isNotEmpty()) {
                 EmptyResultsOverlay(query = searchQuery)
@@ -397,6 +451,49 @@ private fun StoryRow(
             ),
         )
     }
+}
+
+@Composable
+private fun LoadMoreRow(
+    status: LoadStatus,
+    onRetry: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        val error = status.error
+        if (error != null) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Button(onClick = onRetry, modifier = Modifier.padding(top = 8.dp)) {
+                    Text(stringResource(R.string.load_more_retry))
+                }
+            }
+        } else {
+            CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                strokeWidth = 2.dp,
+            )
+        }
+    }
+}
+
+/// True when the last visible row is within `threshold` of the list's
+/// tail. Returns `false` while the list is empty so we don't fire on
+/// the cold-launch frame before the initial fetch lands.
+private fun LazyListState.isNearEnd(threshold: Int): Boolean {
+    val info = layoutInfo
+    val total = info.totalItemsCount
+    if (total == 0) return false
+    val last = info.visibleItemsInfo.lastOrNull()?.index ?: return false
+    return last >= total - threshold
 }
 
 @Composable

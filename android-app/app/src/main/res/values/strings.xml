@@ -11,4 +11,5 @@
     <string name="mark_read_action">Mark read</string>
     <string name="mark_unread_action">Mark unread</string>
     <string name="no_results">No matching stories for \"%1$s\"</string>
+    <string name="load_more_retry">Try again</string>
 </resources>
