@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -43,8 +45,67 @@ android {
     }
 }
 
+// Re-export AppCore's Swift package as Android AARs into ../skip-libs
+// before each Gradle build, so editing Swift in AppCore/Sources and
+// running from Android Studio Just Works without a manual
+// `skip export` step. Gradle's up-to-date check (inputs = Swift
+// sources + Package.swift, output = AppCore-debug.aar) skips the
+// re-export when nothing changed, so incremental builds stay fast.
+//
+// This isn't a documented Skip workflow — the canonical loop is to
+// drive builds from Xcode, which orchestrates Gradle for the Android
+// side. We use a split iOS/Android repo layout, so we wire the
+// missing piece in ourselves.
+// Resolve `skip` at configuration time: Android Studio's Gradle daemon
+// doesn't inherit shell PATH, so `commandLine("skip", ...)` fails to
+// locate the Homebrew install. Probe in order: explicit override
+// (SKIP_BIN), the user's login-shell PATH (picks up MacPorts / Nix /
+// asdf / fnm-style installs), known Homebrew locations, then bare
+// "skip" as a last resort.
+val skipBinary: String = run {
+    fun viaLoginShell(): String? = try {
+        val proc = ProcessBuilder("bash", "-lc", "command -v skip").start()
+        val output = proc.inputStream.bufferedReader().readText().trim()
+        if (proc.waitFor() == 0 && output.isNotEmpty()) output else null
+    } catch (_: Exception) { null }
+
+    val candidates = listOfNotNull(
+        System.getenv("SKIP_BIN"),
+        viaLoginShell(),
+        "/opt/homebrew/bin/skip",    // Apple Silicon Homebrew
+        "/usr/local/bin/skip",        // Intel Homebrew
+        "${System.getProperty("user.home")}/.local/bin/skip",
+    )
+    candidates.firstOrNull { File(it).canExecute() } ?: "skip"
+}
+
+val skipExport = tasks.register<Exec>("skipExport") {
+    description = "Re-export AppCore as an Android AAR via the skip CLI."
+    group = "build"
+    val appCoreDir = rootProject.layout.projectDirectory.dir("../AppCore")
+    val skipLibsDir = rootProject.layout.projectDirectory.dir("skip-libs")
+    workingDir = appCoreDir.asFile
+    commandLine(
+        skipBinary, "export",
+        "--debug", "--no-ios",
+        "--module", "AppCore",
+        "-d", "../android-app/skip-libs",
+    )
+    inputs.files(fileTree(appCoreDir.dir("Sources")) { include("**/*.swift") })
+        .withPropertyName("appCoreSources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(appCoreDir.file("Package.swift"))
+        .withPropertyName("packageManifest")
+    outputs.file(skipLibsDir.file("AppCore-debug.aar"))
+        .withPropertyName("appCoreAar")
+}
+
+tasks.named("preBuild") { dependsOn(skipExport) }
+
 dependencies {
-    // SkipFuse-bridged AppCore + Skip runtime libraries. Built by
+    // SkipFuse-bridged AppCore + Skip runtime libraries. Re-exported
+    // by the `skipExport` task above on each build; the canonical
+    // manual command is
     // `cd ../AppCore && skip export --debug --no-ios --module AppCore -d ../android-app/skip-libs`.
     debugImplementation(fileTree(mapOf(
         "dir" to "../skip-libs",
