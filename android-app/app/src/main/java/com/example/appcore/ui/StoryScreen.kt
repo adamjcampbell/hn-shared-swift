@@ -26,8 +26,9 @@ import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExpandedFullScreenSearchBar
+import androidx.compose.material3.ExpandedFullScreenContainedSearchBar
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -122,7 +123,7 @@ fun StoryScreen() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun StoriesContent(
     state: AppState,
@@ -198,6 +199,9 @@ private fun StoriesContent(
         }
     }
 
+    val containedSearchBarColors = SearchBarDefaults.containedColors(state = searchBarState)
+        .copy(containerColor = MaterialTheme.colorScheme.surface)
+
     val inputField: @Composable () -> Unit = remember(textFieldState, searchBarState, scope) {
         {
             SearchBarDefaults.InputField(
@@ -206,74 +210,81 @@ private fun StoriesContent(
                 onSearch = { scope.launch { searchBarState.animateToCollapsed() } },
                 placeholder = { Text(stringResource(R.string.search_placeholder)) },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                colors = containedSearchBarColors.inputFieldColors,
             )
         }
     }
 
-    Column(modifier = modifier) {
-        SearchBar(
-            state = searchBarState,
-            inputField = inputField,
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-        ) {
-            PullToRefreshBox(
-                isRefreshing = isFeedRefreshing,
-                onRefresh = pullToRefresh,
-                modifier = Modifier.fillMaxSize(),
+    Box(modifier = modifier) {
+        Column(Modifier.fillMaxSize()) {
+            SearchBar(
+                state = searchBarState,
+                inputField = inputField,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
             ) {
-                LazyColumn(
-                    state = feedListState,
-                    contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp),
+                PullToRefreshBox(
+                    isRefreshing = isFeedRefreshing,
+                    onRefresh = pullToRefresh,
+                    modifier = Modifier.fillMaxSize(),
                 ) {
-                    item(key = "header") {
-                        FeedHeaderCard(
-                            storyCount = feedStories.size,
-                            unreadCount = feedStories.count { !it.isRead },
-                            lastRefreshedAt = lastRefreshedAt,
-                            loadError = feedLoadError,
-                        )
-                    }
-                    storyRows(feedStories, onToggleRead, onOpenStory)
-                    if (feedHasMore) {
-                        item(key = "load-more") {
-                            LoadMoreRow(
-                                status = feedLoadMoreStatus,
-                                onRetry = triggerLoadMore,
+                    LazyColumn(
+                        state = feedListState,
+                        contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp),
+                    ) {
+                        item(key = "header") {
+                            FeedHeaderCard(
+                                storyCount = feedStories.size,
+                                unreadCount = feedStories.count { !it.isRead },
+                                lastRefreshedAt = lastRefreshedAt,
+                                loadError = feedLoadError,
                             )
+                        }
+                        storyRows(feedStories, onToggleRead, onOpenStory)
+                        if (feedHasMore) {
+                            item(key = "load-more") {
+                                LoadMoreRow(
+                                    status = feedLoadMoreStatus,
+                                    onRetry = triggerLoadMore,
+                                )
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    ExpandedFullScreenSearchBar(state = searchBarState, inputField = inputField) {
-        Box(Modifier.fillMaxSize()) {
-            LazyColumn(state = searchListState) {
-                item(key = "search-header") {
-                    SearchHeader(
-                        query = searchQuery,
-                        isLoading = isSearchLoading,
-                        error = searchLoadError,
-                    )
-                }
-                storyRows(searchResults, onToggleRead, onOpenStory)
-                if (searchHasMore) {
-                    item(key = "search-load-more") {
-                        LoadMoreRow(
-                            status = searchLoadMoreStatus,
-                            onRetry = triggerLoadMore,
+        ExpandedFullScreenContainedSearchBar(
+            state = searchBarState,
+            inputField = inputField,
+            colors = containedSearchBarColors,
+        ) {
+            Box(Modifier.fillMaxSize()) {
+                LazyColumn(state = searchListState) {
+                    item(key = "search-header") {
+                        SearchHeader(
+                            query = searchQuery,
+                            isLoading = isSearchLoading,
+                            error = searchLoadError,
                         )
                     }
+                    storyRows(searchResults, onToggleRead, onOpenStory)
+                    if (searchHasMore) {
+                        item(key = "search-load-more") {
+                            LoadMoreRow(
+                                status = searchLoadMoreStatus,
+                                onRetry = triggerLoadMore,
+                            )
+                        }
+                    }
                 }
-            }
-            if (!isSearchLoading && searchResults.isEmpty() && searchQuery.isNotEmpty()) {
-                EmptyResultsOverlay(query = searchQuery)
+                if (!isSearchLoading && searchResults.isEmpty() && searchQuery.isNotEmpty()) {
+                    EmptyResultsOverlay(query = searchQuery)
+                }
             }
         }
     }
