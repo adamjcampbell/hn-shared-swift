@@ -46,7 +46,6 @@ public final class AppState {
 
     // MARK: searchQuery event stream
 
-    /// Consumed by `AppEventHandler.run()`.
     /// `.bufferingNewest(1)` collapses bursts during a slow consumer
     /// (e.g. a fetch parked in debounce + network) to a single emission
     /// of the final value — matches the debounce/settle semantics.
@@ -71,6 +70,18 @@ public final class AppState {
         (search.loadedHits?.ids ?? []).compactMap { id in
             hits[id].map { Story(hit: $0, isRead: readIds.contains(id)) }
         }
+    }
+
+    // MARK: Mutators
+
+    /// Upsert a page's hits into the entity store and return the ids in
+    /// page order. Every fetch-success commit needs both halves — having
+    /// them in one place keeps the projection ids in sync with the
+    /// entity store automatically.
+    @discardableResult
+    func upsert(_ page: HNPage) -> [String] {
+        for hit in page.hits { hits[hit.id] = hit }
+        return page.hits.map(\.id)
     }
 
     // SKIP @bridge

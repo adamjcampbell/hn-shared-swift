@@ -5,13 +5,12 @@ import Observation
 import FoundationNetworking
 #endif
 
-/// Orchestration body for `AppModel`. Owns the in-flight task registry,
-/// the `commands` stream, the search results channel, and every method
-/// that mutates `AppState` in response to events. `AppModel` is a thin
-/// bridge shell around this type — it holds `state` + re-exposes
-/// `commands`, and forwards `dispatch(_:)` / `run()` calls here.
+/// Orchestration body for `AppModel` — owns the in-flight task
+/// registry, the `commands` stream, the search results channel, and
+/// every method that mutates `AppState`.
 ///
-/// Not bridged to Kotlin. SkipFuse sees only `AppModel`'s public surface.
+/// Not bridged to Kotlin. SkipFuse sees only `AppModel`'s public
+/// surface.
 final class AppEventHandler {
     let state: AppState
     private let client: HNClient
@@ -69,8 +68,7 @@ final class AppEventHandler {
 
     /// Single entry point for every user-driven mutation. `async` so
     /// callers that need completion (e.g. SwiftUI's `.refreshable`) can
-    /// `await` the call. `.refresh` and `.loadMore` both branch on
-    /// `searchQuery` — empty → feed surface, non-empty → search.
+    /// `await` the call.
     func handle(_ event: AppEvent) async {
         switch event {
         case .toggleRead(let id):
@@ -92,21 +90,16 @@ final class AppEventHandler {
         }
     }
 
-    /// Long-lived pipeline that drives the app's background reactivity:
-    /// merges `state.searchQueryChanges` (writes-to-fetch) and the
-    /// `searchResults` channel (fetched-to-apply) into a single
-    /// `for await` loop. The host `await`s this from `RootView`'s
-    /// `.task` on iOS or `LaunchedEffect` on Android. Cancellation
-    /// propagates from the host's surrounding Task.
+    /// Long-lived pipeline merging `state.searchQueryChanges` and the
+    /// `searchResults` channel into a single `for await` loop. The host
+    /// `await`s this from `RootView`'s `.task` on iOS or
+    /// `LaunchedEffect` on Android.
     ///
     /// **Non-blocking schedule on the query side** — `scheduleSearchFetch`
     /// returns immediately so each new query cancel-and-replaces the
     /// prior in-flight fetch via the registry. The fetch's result lands
-    /// here via the merged stream and is applied on the host's actor.
-    ///
-    /// `merge` consumes the two upstreams on internal child tasks; the
-    /// outer `for await` runs on the caller's actor (SE-0461) so writes
-    /// to `state` happen on the same actor as the host's reads.
+    /// here via the merged stream and is applied on the caller's actor
+    /// (SE-0461) — same actor as the host's reads, no cross-region hop.
     func run() async {
         enum PipelineEvent: Sendable { case query(String), outcome(SearchFetchOutcome) }
 
@@ -120,8 +113,7 @@ final class AppEventHandler {
             case .query(let q):
                 scheduleSearchFetch(query: q, debounce: Self.searchDebounce)
             case .outcome(.success(let page)):
-                for hit in page.hits { state.hits[hit.id] = hit }
-                state.search.receiveInitialPage(page.hits.map(\.id), totalPages: page.totalPages)
+                state.search.receiveInitialPage(state.upsert(page), totalPages: page.totalPages)
             case .outcome(.failure(let message)):
                 state.search.initialStatus.finishFailure(message)
             case .outcome(.cancelled):
@@ -131,10 +123,9 @@ final class AppEventHandler {
         }
     }
 
-    /// Empty-query path of the pipeline, factored out so tests can drive
-    /// it without spinning the full `run()` task. Replaces the entire
-    /// search section in one write — drops the snapshot, resets both
-    /// status axes, and cancels any in-flight search tasks.
+    /// Replace the entire search section atomically: cancel any
+    /// in-flight search tasks and drop the snapshot in one write so
+    /// the projection never observes a partially-cleared state.
     func clearSearch() {
         tasks[.search] = nil
         tasks[.searchMore] = nil
@@ -160,7 +151,7 @@ final class AppEventHandler {
         }
     }
 
-    func runFeedFetch(debounce: Duration? = nil) async {
+    func runFeedFetch() async {
         // Refresh supersedes any in-flight load-more: cancel its task
         // (otherwise its appended page would land on the snapshot we're
         // about to replace) and reset its status (otherwise the stale
@@ -170,10 +161,10 @@ final class AppEventHandler {
         await runFetch(
             id: .feed,
             statusPath: \.feed.initialStatus,
-            debounce: debounce,
+            debounce: nil,
             body: { try await $0.frontPage(0) },
-            onSuccess: { state, page in
-                state.feed.receiveInitialPage(page.hits.map(\.id), totalPages: page.totalPages)
+            onSuccess: { state, ids, page in
+                state.feed.receiveInitialPage(ids, totalPages: page.totalPages)
             }
         )
     }
@@ -187,8 +178,8 @@ final class AppEventHandler {
             statusPath: \.feed.loadMoreStatus,
             debounce: nil,
             body: { try await $0.frontPage(next) },
-            onSuccess: { state, page in
-                state.feed.receiveLoadMorePage(page.hits.map(\.id), totalPages: page.totalPages)
+            onSuccess: { state, ids, page in
+                state.feed.receiveLoadMorePage(ids, totalPages: page.totalPages)
             }
         )
     }
@@ -201,8 +192,8 @@ final class AppEventHandler {
             statusPath: \.search.initialStatus,
             debounce: debounce,
             body: { try await $0.search(query, 0) },
-            onSuccess: { state, page in
-                state.search.receiveInitialPage(page.hits.map(\.id), totalPages: page.totalPages)
+            onSuccess: { state, ids, page in
+                state.search.receiveInitialPage(ids, totalPages: page.totalPages)
             }
         )
     }
@@ -217,29 +208,27 @@ final class AppEventHandler {
             statusPath: \.search.loadMoreStatus,
             debounce: nil,
             body: { try await $0.search(query, next) },
-            onSuccess: { state, page in
-                state.search.receiveLoadMorePage(page.hits.map(\.id), totalPages: page.totalPages)
+            onSuccess: { state, ids, page in
+                state.search.receiveLoadMorePage(ids, totalPages: page.totalPages)
             }
         )
     }
 
     /// Schedules a debounced search fetch without blocking the caller.
-    /// Used by the query-side of `run()` — its `for await` loop must
-    /// keep reading new queries while the prior one is debouncing.
     ///
     /// **Fire-and-forget cancellation**: the inner network Task is
     /// stored in `tasks[.search]`; assigning a new one cancels the
     /// prior, which the trailing forwarding `Task` sees as
-    /// `CancellationError` and reports as `.cancelled` for the consumer
-    /// to no-op.
+    /// `CancellationError` and reports as `.cancelled` for the outcome
+    /// arm of `run()` to no-op on.
     ///
     /// **Why the forwarding Task**: we can't `await task.value` and
     /// commit inline from the pipeline (would re-introduce the blocking
     /// bug) and we can't capture `state`/`self` in the network Task
     /// (non-Sendable). The forwarding Task captures only the network
     /// `Task` and the result continuation (both Sendable) and forwards
-    /// the outcome through `searchResults` to the consumer, which
-    /// commits on the caller's actor.
+    /// the outcome through `searchResults` to the outcome arm of
+    /// `run()`, which commits on the caller's actor.
     private func scheduleSearchFetch(query: String, debounce: Duration) {
         tasks[.searchMore] = nil
         state.search.loadMoreStatus = LoadStatus()
@@ -295,10 +284,6 @@ final class AppEventHandler {
         }
     }
 
-    /// Starts a fetch, awaits its result on the caller's actor, and
-    /// commits inline. Used by `handle(.refresh)` / `.loadMore` and the
-    /// four `run*Fetch` async methods.
-    ///
     /// **Cancellation leaves `statusPath` asserted** — a newer fetch is
     /// responsible for clearing it when it commits. The
     /// `CancellationError` arm doesn't write `finishFailure`, so the
@@ -308,15 +293,14 @@ final class AppEventHandler {
         statusPath: ReferenceWritableKeyPath<AppState, LoadStatus>,
         debounce: Duration?,
         body: @Sendable @escaping (HNClient) async throws -> HNPage,
-        onSuccess: (AppState, HNPage) -> Void
+        onSuccess: (AppState, [String], HNPage) -> Void
     ) async {
         state[keyPath: statusPath].startLoading()
         let task = makeFetchTask(debounce: debounce, body: body)
         tasks[id] = task
         do {
             let page = try await task.value
-            for hit in page.hits { state.hits[hit.id] = hit }
-            onSuccess(state, page)
+            onSuccess(state, state.upsert(page), page)
         } catch is CancellationError {
             // Newer fetch will clear loading when it commits.
         } catch {
