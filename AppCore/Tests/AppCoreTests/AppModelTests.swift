@@ -173,10 +173,10 @@ struct AppModelTests {
 
         model.state.searchQuery = "rust"
         let fetch = Task { @MainActor [model] in
-            await model.runSearchFetch(query: "rust", debounce: AppModel.searchDebounce)
+            await model.handler.runSearchFetch(query: "rust", debounce: AppEventHandler.searchDebounce)
         }
         await Task.megaYield()
-        await clock.advance(by: AppModel.searchDebounce)
+        await clock.advance(by: AppEventHandler.searchDebounce)
         await fetch.value
 
         #expect(model.state.searchQuery == "rust")
@@ -195,14 +195,14 @@ struct AppModelTests {
         #expect(model.state.search.initialStatus.isLoading == false)
 
         let fetch = Task { @MainActor [model] in
-            await model.runSearchFetch(query: "r", debounce: AppModel.searchDebounce)
+            await model.handler.runSearchFetch(query: "r", debounce: AppEventHandler.searchDebounce)
         }
         await Task.megaYield()
 
         // Spinner asserted synchronously on entry, before the debounce.
         #expect(model.state.search.initialStatus.isLoading == true)
 
-        await clock.advance(by: AppModel.searchDebounce)
+        await clock.advance(by: AppEventHandler.searchDebounce)
         await fetch.value
 
         #expect(model.state.search.initialStatus.isLoading == false)
@@ -225,21 +225,21 @@ struct AppModelTests {
         // prior in-flight searchTask, so only the latest query fires.
         model.state.searchQuery = "ru"
         let t1 = Task { @MainActor [model] in
-            await model.runSearchFetch(query: "ru", debounce: AppModel.searchDebounce)
+            await model.handler.runSearchFetch(query: "ru", debounce: AppEventHandler.searchDebounce)
         }
         await Task.megaYield()
         model.state.searchQuery = "rus"
         let t2 = Task { @MainActor [model] in
-            await model.runSearchFetch(query: "rus", debounce: AppModel.searchDebounce)
+            await model.handler.runSearchFetch(query: "rus", debounce: AppEventHandler.searchDebounce)
         }
         await Task.megaYield()
         model.state.searchQuery = "rust"
         let t3 = Task { @MainActor [model] in
-            await model.runSearchFetch(query: "rust", debounce: AppModel.searchDebounce)
+            await model.handler.runSearchFetch(query: "rust", debounce: AppEventHandler.searchDebounce)
         }
         await Task.megaYield()
 
-        await clock.advance(by: AppModel.searchDebounce)
+        await clock.advance(by: AppEventHandler.searchDebounce)
         await t1.value
         await t2.value
         await t3.value
@@ -269,14 +269,14 @@ struct AppModelTests {
 
         model.state.searchQuery = "rust"
         let pending = Task { @MainActor [model] in
-            await model.runSearchFetch(query: "rust", debounce: AppModel.searchDebounce)
+            await model.handler.runSearchFetch(query: "rust", debounce: AppEventHandler.searchDebounce)
         }
         await Task.megaYield()
 
         // .refresh with non-empty searchQuery re-runs the search; the
         // pending fetch is cancelled before it issues its own request.
         await model.dispatch(.refresh)
-        await clock.advance(by: AppModel.searchDebounce)
+        await clock.advance(by: AppEventHandler.searchDebounce)
         await pending.value
 
         let frontPageCalls = await calls.frontPageCalls
@@ -335,18 +335,18 @@ struct AppModelTests {
 
         model.state.searchQuery = "ru"
         let firstSearch = Task { @MainActor [model] in
-            await model.runSearchFetch(query: "ru", debounce: AppModel.searchDebounce)
+            await model.handler.runSearchFetch(query: "ru", debounce: AppEventHandler.searchDebounce)
         }
         await Task.megaYield()
-        await clock.advance(by: AppModel.searchDebounce)
+        await clock.advance(by: AppEventHandler.searchDebounce)
         await Task.megaYield()
 
         model.state.searchQuery = "rust"
         let secondSearch = Task { @MainActor [model] in
-            await model.runSearchFetch(query: "rust", debounce: AppModel.searchDebounce)
+            await model.handler.runSearchFetch(query: "rust", debounce: AppEventHandler.searchDebounce)
         }
         await Task.megaYield()
-        await clock.advance(by: AppModel.searchDebounce)
+        await clock.advance(by: AppEventHandler.searchDebounce)
 
         await firstSearch.value
         await secondSearch.value
@@ -379,15 +379,15 @@ struct AppModelTests {
 
         model.state.searchQuery = "rust"
         let search = Task { @MainActor [model] in
-            await model.runSearchFetch(query: "rust", debounce: AppModel.searchDebounce)
+            await model.handler.runSearchFetch(query: "rust", debounce: AppEventHandler.searchDebounce)
         }
         await Task.megaYield()
-        await clock.advance(by: AppModel.searchDebounce)
+        await clock.advance(by: AppEventHandler.searchDebounce)
         await search.value
         #expect(model.state.searchResults.map(\.id) == ["100"])
 
         model.state.searchQuery = ""
-        model.clearSearch()
+        model.handler.clearSearch()
 
         #expect(model.state.searchResults.isEmpty)
         #expect(model.state.search.initialStatus.error == nil)
@@ -416,10 +416,10 @@ struct AppModelTests {
 
         model.state.searchQuery = "x"
         let search = Task { @MainActor [model] in
-            await model.runSearchFetch(query: "x", debounce: AppModel.searchDebounce)
+            await model.handler.runSearchFetch(query: "x", debounce: AppEventHandler.searchDebounce)
         }
         await Task.megaYield()
-        await clock.advance(by: AppModel.searchDebounce)
+        await clock.advance(by: AppEventHandler.searchDebounce)
         await search.value
 
         #expect(model.state.searchResults.map(\.id) == ["100"])
@@ -428,10 +428,10 @@ struct AppModelTests {
 
     @Test("backspacing all the way to empty during an in-flight fetch still clears results")
     @MainActor
-    func runSearchQueryWatcher_burstWriteDuringFetchClearsResults() async {
+    func run_burstWriteDuringFetchClearsResults() async {
         // Regression: burst writes during an in-flight fetch must still
         // clear results when the final value is empty. The non-blocking
-        // watcher schedules "rust" (parked in the debounce sleep), then
+        // pipeline schedules "rust" (parked in the debounce sleep), then
         // immediately consumes the empty write, which calls
         // `clearSearch()` and cancels the parked task before its network
         // call fires — so zero recorded calls.
@@ -445,26 +445,23 @@ struct AppModelTests {
             clock: clock
         )
 
-        let watcher = Task { @MainActor [model] in
-            await model.runSearchQueryWatcher()
-        }
-        let consumer = Task { @MainActor [model] in
-            await model.runSearchResultsConsumer()
+        let pipeline = Task { @MainActor [model] in
+            await model.run()
         }
         await Task.megaYield()
 
-        // Watcher reads "rust" and schedules a search task that parks
+        // Pipeline reads "rust" and schedules a search task that parks
         // in the debounce sleep.
         model.state.searchQuery = "rust"
         await Task.megaYield()
 
-        // Backspace to empty. The non-blocking watcher consumes this
+        // Backspace to empty. The non-blocking pipeline consumes this
         // immediately and calls `clearSearch()`, cancelling the parked
         // task before it reaches the network.
         model.state.searchQuery = ""
         await Task.megaYield()
 
-        await clock.advance(by: AppModel.searchDebounce)
+        await clock.advance(by: AppEventHandler.searchDebounce)
         await Task.megaYield()
 
         #expect(model.state.searchResults.isEmpty)
@@ -473,19 +470,17 @@ struct AppModelTests {
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == [])
 
-        watcher.cancel()
-        consumer.cancel()
-        _ = await watcher.value
-        _ = await consumer.value
+        pipeline.cancel()
+        _ = await pipeline.value
     }
 
     @Test("rapid keystrokes within the debounce window collapse to one search")
     @MainActor
-    func runSearchQueryWatcher_rapidKeystrokes_onlyFinalQueryFires() async {
+    func run_rapidKeystrokes_onlyFinalQueryFires() async {
         // Regression: typing "rust" quickly used to produce two result
-        // sets — the watcher's `for await` blocked on the first fetch's
-        // debounce, so "r" fired before the rest collapsed via
-        // `.bufferingNewest(1)`. With the non-blocking watcher, each
+        // sets — the pre-fix watcher's `for await` blocked on the first
+        // fetch's debounce, so "r" fired before the rest collapsed via
+        // `.bufferingNewest(1)`. With the non-blocking pipeline, each
         // keystroke schedules a new task that cancels the prior in its
         // debounce sleep — only "rust" reaches the network.
         let calls = CallRecorder()
@@ -498,11 +493,8 @@ struct AppModelTests {
             clock: clock
         )
 
-        let watcher = Task { @MainActor [model] in
-            await model.runSearchQueryWatcher()
-        }
-        let consumer = Task { @MainActor [model] in
-            await model.runSearchResultsConsumer()
+        let pipeline = Task { @MainActor [model] in
+            await model.run()
         }
         await Task.megaYield()
 
@@ -513,17 +505,15 @@ struct AppModelTests {
         model.state.searchQuery = "rust"
         await Task.megaYield()
 
-        await clock.advance(by: AppModel.searchDebounce)
+        await clock.advance(by: AppEventHandler.searchDebounce)
         await Task.megaYield()
 
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == ["rust"])
         #expect(model.state.searchResults.map(\.id) == ["100"])
 
-        watcher.cancel()
-        consumer.cancel()
-        _ = await watcher.value
-        _ = await consumer.value
+        pipeline.cancel()
+        _ = await pipeline.value
     }
 
     @Test("a story present in both feed and search shares its read state across projections")
@@ -542,10 +532,10 @@ struct AppModelTests {
 
         model.state.searchQuery = "x"
         let search = Task { @MainActor [model] in
-            await model.runSearchFetch(query: "x", debounce: AppModel.searchDebounce)
+            await model.handler.runSearchFetch(query: "x", debounce: AppEventHandler.searchDebounce)
         }
         await Task.megaYield()
-        await clock.advance(by: AppModel.searchDebounce)
+        await clock.advance(by: AppEventHandler.searchDebounce)
         await search.value
 
         #expect(model.state.searchResults.first?.isRead == true)
@@ -635,7 +625,7 @@ struct AppModelTests {
         #expect(model.state.feed.loadedHits?.page == 0)
 
         let loadMore = Task { @MainActor [model] in
-            await model.runFeedLoadMore()
+            await model.handler.runFeedLoadMore()
         }
         await Task.megaYield()
         #expect(model.state.feed.loadMoreStatus.isLoading == true)
@@ -683,11 +673,11 @@ struct AppModelTests {
             }
         )
 
-        await model.runSearchFetch(query: "x")
+        await model.handler.runSearchFetch(query: "x")
         #expect(model.state.searchResults.map(\.id) == ["100"])
         #expect(model.state.search.loadedHits?.hasMore == true)
 
-        await model.runSearchLoadMore()
+        await model.handler.runSearchLoadMore()
         #expect(model.state.searchResults.map(\.id) == ["100", "101"])
         #expect(model.state.search.loadedHits?.hasMore == false)
     }
@@ -705,14 +695,14 @@ struct AppModelTests {
             }
         )
 
-        await model.runSearchFetch(query: "x")
+        await model.handler.runSearchFetch(query: "x")
         let loadMore = Task { @MainActor [model] in
-            await model.runSearchLoadMore()
+            await model.handler.runSearchLoadMore()
         }
         await Task.megaYield()
         #expect(model.state.search.loadMoreStatus.isLoading == true)
 
-        model.clearSearch()
+        model.handler.clearSearch()
         await loadMore.value
 
         #expect(model.state.search.loadedHits == nil)

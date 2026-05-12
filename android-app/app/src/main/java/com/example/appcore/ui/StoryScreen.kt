@@ -83,17 +83,12 @@ fun StoryScreen() {
         appModel.dispatch(AppEvent.refresh)
     }
 
-    // Long-lived loops in AppModel:
-    //   • runSearchQueryWatcher — schedules debounced search fetches as
-    //     the user types (non-blocking; bursts collapse to one network
-    //     call).
-    //   • runSearchResultsConsumer — commits the results of those
-    //     scheduled fetches on this coroutine's actor.
+    // Long-lived background pipeline: merges searchQuery writes
+    // (debounced-schedule) and fetch outcomes (commit) into a single
+    // consumer on this coroutine's actor. Cancellation propagates when
+    // this composable leaves the composition.
     LaunchedEffect(appModel) {
-        appModel.runSearchQueryWatcher()
-    }
-    LaunchedEffect(appModel) {
-        appModel.runSearchResultsConsumer()
+        appModel.run()
     }
 
     // One-shot commands from the core.

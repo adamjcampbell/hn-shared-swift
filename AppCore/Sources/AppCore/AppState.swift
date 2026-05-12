@@ -46,11 +46,11 @@ public final class AppState {
 
     // MARK: searchQuery event stream
 
-    /// Consumed by `AppModel.runSearchQueryWatcher`.
+    /// Consumed by `AppEventHandler.run()`.
     /// `.bufferingNewest(1)` collapses bursts during a slow consumer
-    /// (e.g. `runSearchFetch` parked in debounce + network) to a single
-    /// emission of the final value — matches the debounce/settle
-    /// semantics. `yield` is synchronous and non-blocking.
+    /// (e.g. a fetch parked in debounce + network) to a single emission
+    /// of the final value — matches the debounce/settle semantics.
+    /// `yield` is synchronous and non-blocking.
     let searchQueryChanges: AsyncStream<String>
     private let searchQueryEvents: AsyncStream<String>.Continuation
 
