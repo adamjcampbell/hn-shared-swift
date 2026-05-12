@@ -23,15 +23,15 @@ struct RootView: View {
                     }
                 }
             }
-            .task {
-                // searchQuery watcher: AppModel iterates
-                // `state.searchQueryChanges` (an AsyncStream fed by
-                // searchQuery's didSet) and either fires a debounced
-                // search or clears search state when the query becomes
-                // empty. Cancellation propagates when this `.task` is
-                // torn down on view disappear.
-                await appModel.runSearchQueryWatcher()
-            }
+            // searchQuery watcher: iterates `state.searchQueryChanges`
+            // and *schedules* a debounced search (sync, non-blocking)
+            // for each non-empty query, or clears search state on empty.
+            .task { await appModel.runSearchQueryWatcher() }
+            // Search results consumer: commits the results of
+            // watcher-scheduled fetches on this actor. The watcher
+            // can't `await` and commit inline without re-introducing
+            // the bursts-collapse bug, so the commit runs here.
+            .task { await appModel.runSearchResultsConsumer() }
     }
 }
 

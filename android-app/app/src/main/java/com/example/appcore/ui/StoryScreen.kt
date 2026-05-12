@@ -83,9 +83,17 @@ fun StoryScreen() {
         appModel.dispatch(AppEvent.refresh)
     }
 
-    // Long-lived debounced-fetch loop on every searchQuery write.
+    // Long-lived loops in AppModel:
+    //   • runSearchQueryWatcher — schedules debounced search fetches as
+    //     the user types (non-blocking; bursts collapse to one network
+    //     call).
+    //   • runSearchResultsConsumer — commits the results of those
+    //     scheduled fetches on this coroutine's actor.
     LaunchedEffect(appModel) {
         appModel.runSearchQueryWatcher()
+    }
+    LaunchedEffect(appModel) {
+        appModel.runSearchResultsConsumer()
     }
 
     // One-shot commands from the core.
