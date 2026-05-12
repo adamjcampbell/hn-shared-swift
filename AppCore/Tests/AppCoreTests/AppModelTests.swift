@@ -430,9 +430,11 @@ struct AppModelTests {
     @MainActor
     func runSearchQueryWatcher_burstWriteDuringFetchClearsResults() async {
         // Regression: burst writes during an in-flight fetch must still
-        // clear results when the final value is empty. `searchQueryChanges`
-        // is `.bufferingNewest(1)`, so the empty write at the end of the
-        // burst is what the next watcher iteration consumes.
+        // clear results when the final value is empty. The non-blocking
+        // watcher schedules "rust" (parked in the debounce sleep), then
+        // immediately consumes the empty write, which calls
+        // `clearSearch()` and cancels the parked task before its network
+        // call fires — so zero recorded calls.
         let calls = CallRecorder()
         let clock = TestClock()
         let model = makeModel(
@@ -446,13 +448,19 @@ struct AppModelTests {
         let watcher = Task { @MainActor [model] in
             await model.runSearchQueryWatcher()
         }
+        let consumer = Task { @MainActor [model] in
+            await model.runSearchResultsConsumer()
+        }
         await Task.megaYield()
 
-        // Watcher reads "rust" and parks in `runSearchFetch`'s debounce.
+        // Watcher reads "rust" and schedules a search task that parks
+        // in the debounce sleep.
         model.state.searchQuery = "rust"
         await Task.megaYield()
 
-        // Backspace to empty during the in-flight fetch.
+        // Backspace to empty. The non-blocking watcher consumes this
+        // immediately and calls `clearSearch()`, cancelling the parked
+        // task before it reaches the network.
         model.state.searchQuery = ""
         await Task.megaYield()
 
@@ -463,10 +471,59 @@ struct AppModelTests {
         #expect(model.state.search.initialStatus.error == nil)
         #expect(model.state.search.initialStatus.isLoading == false)
         let recorded = await calls.searchCalls
-        #expect(recorded.map(\.0) == ["rust"])
+        #expect(recorded.map(\.0) == [])
 
         watcher.cancel()
+        consumer.cancel()
         _ = await watcher.value
+        _ = await consumer.value
+    }
+
+    @Test("rapid keystrokes within the debounce window collapse to one search")
+    @MainActor
+    func runSearchQueryWatcher_rapidKeystrokes_onlyFinalQueryFires() async {
+        // Regression: typing "rust" quickly used to produce two result
+        // sets — the watcher's `for await` blocked on the first fetch's
+        // debounce, so "r" fired before the rest collapsed via
+        // `.bufferingNewest(1)`. With the non-blocking watcher, each
+        // keystroke schedules a new task that cancels the prior in its
+        // debounce sleep — only "rust" reaches the network.
+        let calls = CallRecorder()
+        let clock = TestClock()
+        let model = makeModel(
+            search: { query, p in
+                await calls.recordSearch(query, page: p)
+                return page([storyA])
+            },
+            clock: clock
+        )
+
+        let watcher = Task { @MainActor [model] in
+            await model.runSearchQueryWatcher()
+        }
+        let consumer = Task { @MainActor [model] in
+            await model.runSearchResultsConsumer()
+        }
+        await Task.megaYield()
+
+        model.state.searchQuery = "r"
+        await Task.megaYield()
+        model.state.searchQuery = "ru"
+        await Task.megaYield()
+        model.state.searchQuery = "rust"
+        await Task.megaYield()
+
+        await clock.advance(by: AppModel.searchDebounce)
+        await Task.megaYield()
+
+        let recorded = await calls.searchCalls
+        #expect(recorded.map(\.0) == ["rust"])
+        #expect(model.state.searchResults.map(\.id) == ["100"])
+
+        watcher.cancel()
+        consumer.cancel()
+        _ = await watcher.value
+        _ = await consumer.value
     }
 
     @Test("a story present in both feed and search shares its read state across projections")

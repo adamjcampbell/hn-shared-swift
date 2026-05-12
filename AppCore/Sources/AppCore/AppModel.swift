@@ -33,10 +33,26 @@ public final class AppModel {
     enum TaskID { case feed, feedMore, search, searchMore }
     private var tasks = TaskRegistry<TaskID>()
 
+    /// Sendable channel from `scheduleSearchFetch`'s forwarding Task to
+    /// `runSearchResultsConsumer`, which applies the result on the
+    /// caller's actor. The watcher's loop must stay non-blocking —
+    /// committing inline would require either an `await` (which
+    /// sequentialises the watcher) or a Task that captures non-Sendable
+    /// `state`.
+    private let searchResults: AsyncStream<SearchFetchOutcome>
+    private let searchResultsContinuation: AsyncStream<SearchFetchOutcome>.Continuation
+
     /// Debounce window between a `state.searchQuery` write and the
     /// resulting fetch. Static so tests can name the same duration when
     /// advancing their `TestClock`.
     public static let searchDebounce: Duration = .milliseconds(250)
+
+    /// Outcome of a scheduled search fetch.
+    enum SearchFetchOutcome: Sendable {
+        case success(HNPage)
+        case failure(String)
+        case cancelled
+    }
 
     // SKIP @bridge
     public init() {
@@ -45,6 +61,9 @@ public final class AppModel {
         let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
         self.commands = stream
         self.commandsContinuation = continuation
+        let (results, resultsCont) = AsyncStream<SearchFetchOutcome>.makeStream()
+        self.searchResults = results
+        self.searchResultsContinuation = resultsCont
     }
 
     /// Test seam — not bridged. `client` and `clock` types don't bridge
@@ -58,6 +77,9 @@ public final class AppModel {
         let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
         self.commands = stream
         self.commandsContinuation = continuation
+        let (results, resultsCont) = AsyncStream<SearchFetchOutcome>.makeStream()
+        self.searchResults = results
+        self.searchResultsContinuation = resultsCont
     }
 
     /// Single entry point for every user-driven mutation. `async` so
@@ -91,18 +113,47 @@ public final class AppModel {
     /// or `LaunchedEffect` on Android. Cancellation propagates from
     /// the host's surrounding Task.
     ///
+    /// **Non-blocking** — calls `scheduleSearchFetch` synchronously so
+    /// each new query immediately cancel-and-replaces the prior
+    /// in-flight fetch via the registry. Pre-fix this awaited
+    /// `runSearchFetch`, which blocked the loop for the full debounce
+    /// + RTT; bursts then leaked through as two result sets.
+    ///
     /// Events come from `state.searchQueryChanges` — see that property
-    /// for the `.bufferingNewest(1)` rationale (handles burst writes
-    /// during a slow consumer). Empty query → `clearSearch()`; the
-    /// feed stays cached so dismissing the search overlay restores it
-    /// without a network call.
+    /// for the `.bufferingNewest(1)` rationale. Empty query →
+    /// `clearSearch()`; the feed stays cached so dismissing the search
+    /// overlay restores it without a network call.
     // SKIP @bridge
     public func runSearchQueryWatcher() async {
         for await query in state.searchQueryChanges {
             if query.isEmpty {
                 clearSearch()
             } else {
-                await runSearchFetch(query: query, debounce: Self.searchDebounce)
+                scheduleSearchFetch(query: query, debounce: Self.searchDebounce)
+            }
+        }
+    }
+
+    /// Long-lived apply loop for fetches scheduled via
+    /// `scheduleSearchFetch`. Runs on the host's actor (SE-0461), so
+    /// the writes to `state` happen on the same actor as the host's
+    /// reads — no cross-region hop, no need to make `state` Sendable.
+    ///
+    /// The watcher schedules; the scheduled Task does the network and
+    /// posts here; this consumer commits. Three-step pipeline keeps
+    /// fetch Tasks Sendable-only.
+    // SKIP @bridge
+    public func runSearchResultsConsumer() async {
+        for await outcome in searchResults {
+            switch outcome {
+            case .success(let page):
+                for hit in page.hits { state.hits[hit.id] = hit }
+                state.search.receiveInitialPage(page.hits.map(\.id), totalPages: page.totalPages)
+            case .failure(let message):
+                state.search.initialStatus.finishFailure(message)
+            case .cancelled:
+                // Newer fetch will clear loading when it commits.
+                break
             }
         }
     }
@@ -199,30 +250,51 @@ public final class AppModel {
         )
     }
 
-    /// `awaitFetch` returning `nil` (superseded fetch) leaves the
-    /// status flag asserted so the spinner stays visible across the
-    /// cancel-and-replace.
-    private func runFetch(
-        id: TaskID,
-        statusPath: ReferenceWritableKeyPath<AppState, LoadStatus>,
-        debounce: Duration?,
-        body: @Sendable @escaping (HNClient) async throws -> HNPage,
-        onSuccess: (AppState, HNPage) -> Void
-    ) async {
-        state[keyPath: statusPath].startLoading()
-        let task = makeFetchTask(debounce: debounce, body: body)
-        tasks[id] = task
-        do {
-            guard let page = try await awaitFetch(task) else { return }
-            onSuccess(state, page)
-        } catch {
-            state[keyPath: statusPath].finishFailure(error.localizedDescription)
+    /// Schedules a debounced search fetch without blocking the caller.
+    /// Used by `runSearchQueryWatcher` — its `for await` loop must keep
+    /// reading new queries while the prior one is debouncing.
+    ///
+    /// **Fire-and-forget cancellation**: the inner network Task is
+    /// stored in `tasks[.search]`; assigning a new one cancels the
+    /// prior, which the trailing forwarding `Task` sees as
+    /// `CancellationError` and reports as `.cancelled` for the consumer
+    /// to no-op.
+    ///
+    /// **Why the forwarding Task**: we can't `await task.value` and
+    /// commit inline from the watcher (would re-introduce the blocking
+    /// bug) and we can't capture `state`/`self` in the network Task
+    /// (non-Sendable). The forwarding Task captures only the network
+    /// `Task` and the result continuation (both Sendable) and forwards
+    /// the outcome to `runSearchResultsConsumer`, which commits on the
+    /// caller's actor.
+    private func scheduleSearchFetch(query: String, debounce: Duration) {
+        tasks[.searchMore] = nil
+        state.search.loadMoreStatus = LoadStatus()
+        state.search.initialStatus.startLoading()
+
+        let task = makeFetchTask(debounce: debounce) { try await $0.search(query, 0) }
+        tasks[.search] = task
+
+        let resultsCont = searchResultsContinuation
+        // Forwarding Task: awaits the network task and forwards the
+        // outcome. Captures only `task` (Sendable; HNPage is Sendable)
+        // and `resultsCont` (Sendable). No self, no state.
+        Task {
+            do {
+                let page = try await task.value
+                resultsCont.yield(.success(page))
+            } catch is CancellationError {
+                resultsCont.yield(.cancelled)
+            } catch {
+                resultsCont.yield(.failure(error.localizedDescription))
+            }
         }
     }
 
     /// Build a fetch task that sleeps for `debounce` (if set), then runs
     /// `body`. The Task body captures only Sendable values (`client`,
-    /// `clock`) — never `self`.
+    /// `clock`) — never `self`, never `state`. Caller `await`s
+    /// `task.value` on its own actor and commits the result there.
     ///
     /// **`try` (not `try?`) on the sleep is load-bearing.** A test-mock
     /// closure that doesn't honor cancellation would otherwise fall
@@ -232,8 +304,8 @@ public final class AppModel {
     ///
     /// **`URLError(.cancelled)` is normalised to `CancellationError`.**
     /// `URLSession` surfaces task cancellation as `URLError.cancelled`,
-    /// which would otherwise hit the dispatch arm's generic `catch` and
-    /// write a transient `*LoadError = "cancelled"`.
+    /// which would otherwise be reported as a transient error in the
+    /// caller's catch arm rather than a silent supersede.
     private func makeFetchTask(
         debounce: Duration?,
         body: @Sendable @escaping (HNClient) async throws -> HNPage
@@ -250,17 +322,33 @@ public final class AppModel {
         }
     }
 
-    /// Await `task`, upsert its hits into the entity store, and return
-    /// the page. Returns `nil` if the task was cancelled — the caller
-    /// short-circuits without touching its surface's state. Other
-    /// errors propagate so the caller can record them.
-    private func awaitFetch(_ task: Task<HNPage, Error>) async throws -> HNPage? {
+    /// Starts a fetch, awaits its result on the caller's actor, and
+    /// commits inline. Used by `dispatch(.refresh)` / `.loadMore` and
+    /// the four `run*Fetch` async public APIs.
+    ///
+    /// **Cancellation leaves `statusPath` asserted** — a newer fetch is
+    /// responsible for clearing it when it commits. The
+    /// `CancellationError` arm doesn't write `finishFailure`, so the
+    /// spinner stays visible across cancel-and-replace.
+    private func runFetch(
+        id: TaskID,
+        statusPath: ReferenceWritableKeyPath<AppState, LoadStatus>,
+        debounce: Duration?,
+        body: @Sendable @escaping (HNClient) async throws -> HNPage,
+        onSuccess: (AppState, HNPage) -> Void
+    ) async {
+        state[keyPath: statusPath].startLoading()
+        let task = makeFetchTask(debounce: debounce, body: body)
+        tasks[id] = task
         do {
             let page = try await task.value
             for hit in page.hits { state.hits[hit.id] = hit }
-            return page
+            onSuccess(state, page)
         } catch is CancellationError {
-            return nil
+            // Newer fetch will clear loading when it commits.
+        } catch {
+            state[keyPath: statusPath].finishFailure(error.localizedDescription)
         }
     }
+
 }
