@@ -209,8 +209,6 @@ struct AppCoreTests {
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == ["rust"])
         #expect(recorded.map(\.1) == [0])
-
-        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("initialStatus.isLoading activates on first keystroke, before debounce elapses")
@@ -231,8 +229,6 @@ struct AppCoreTests {
         await Task.megaYield()
 
         await core.run { #expect($0.state.search.initialStatus.isLoading == false) }
-
-        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("refresh while a search is in flight re-runs the current search, not the feed")
@@ -267,8 +263,6 @@ struct AppCoreTests {
         #expect(frontPageCalls.isEmpty)
         #expect(searchCalls.map(\.0) == ["rust"])
         await core.run { #expect($0.state.searchResults.map(\.id) == ["100"]) }
-
-        await core.run { $0.appCore.shutdown() }
     }
 
 
@@ -328,8 +322,6 @@ struct AppCoreTests {
             #expect(core.state.searchQuery == "rust")
             #expect(core.state.searchResults.map(\.id) == ["100"])
         }
-
-        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("clearing the search query cancels the search, clears results, and does not refetch the feed")
@@ -369,8 +361,6 @@ struct AppCoreTests {
         #expect(frontPageAfter == frontPageBefore)
         let searchCalls = await calls.searchCalls
         #expect(searchCalls.map(\.0) == ["rust"])
-
-        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("feed survives an active search")
@@ -392,8 +382,6 @@ struct AppCoreTests {
             #expect(core.state.searchResults.map(\.id) == ["100"])
             #expect(core.state.feedStories.map(\.id) == feedSnapshot)
         }
-
-        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("backspacing all the way to empty during an in-flight fetch still clears results")
@@ -439,8 +427,6 @@ struct AppCoreTests {
         }
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == [])
-
-        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("rapid keystrokes within the debounce window collapse to one search")
@@ -478,8 +464,6 @@ struct AppCoreTests {
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == ["rust"])
         await core.run { #expect($0.state.searchResults.map(\.id) == ["100"]) }
-
-        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("a story present in both feed and search shares its read state across projections")
@@ -498,8 +482,6 @@ struct AppCoreTests {
         await core.commitSearch("x", clock: clock)
 
         await core.run { #expect($0.state.searchResults.first?.isRead == true) }
-
-        await core.run { $0.appCore.shutdown() }
     }
 
     // MARK: Pagination
@@ -649,8 +631,6 @@ struct AppCoreTests {
             #expect(core.state.searchResults.map(\.id) == ["100", "101"])
             #expect(core.state.search.loadedHits?.hasMore == false)
         }
-
-        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("clearing search cancels in-flight search load-more")
@@ -686,8 +666,6 @@ struct AppCoreTests {
             #expect(core.state.search.loadMoreStatus.isLoading == false)
             #expect(core.state.search.loadMoreStatus.error == nil)
         }
-
-        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("loadMore preserves loadedAt from the initial fetch")

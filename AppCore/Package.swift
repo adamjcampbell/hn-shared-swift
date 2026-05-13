@@ -13,7 +13,11 @@ let package = Package(
     defaultLocalization: "en",
     platforms: [
         .iOS(.v17),
-        .macOS(.v14),
+        // 15.4 floor lets `TestCore` use SE-0371 `isolated deinit` to
+        // break the listener-task retain cycle on test-scope exit.
+        // The iOS minimum stays at 17 because production deinit is
+        // never reached (UICore is app-lifetime).
+        .macOS("15.4"),
     ],
     products: [
         .library(name: "AppCore", type: .dynamic, targets: ["AppCore"]),

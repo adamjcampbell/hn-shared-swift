@@ -28,6 +28,14 @@ public actor TestCore {
     }
 
     public static let searchDebounce: Duration = AppCore.searchDebounce
+
+    /// Break the `TaskRegistry → listener-Task → AppCore` cycle when
+    /// the test scope exits. Production `UICore` is app-lifetime so it
+    /// doesn't need this; tests churn TestCores and would leak the
+    /// listener task without it. Requires SE-0371 (Swift 6.2).
+    isolated deinit {
+        appCore.shutdown()
+    }
 }
 
 /// Point-Free `Actor.run` pattern (Video #362). Tests batch multiple
