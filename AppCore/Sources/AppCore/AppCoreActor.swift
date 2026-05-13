@@ -151,32 +151,49 @@ final class AppCoreActor {
         return try await task.value
     }
 
-    /// PROTOTYPE OPEN QUESTION — long-lived listener Task that captures
-    /// `self` (non-Sendable). Two candidate shapes:
-    ///
-    ///   (a) `Task { [self, isolation] in
-    ///           guard let iso = isolation else { return }
-    ///           for await query in state.searchQueryChanges {
-    ///               iso.assumeIsolated { _ in self.handle(query) }
-    ///           }
-    ///       }`
-    ///       — one runtime `assumeIsolated` check per event; iso captured
-    ///       as `(any Actor)?` which is Sendable.
-    ///
-    ///   (b) `Task { @MainActor [self] in … }` — only works because
-    ///       production isolation *is* MainActor. Tests pin to a per-test
-    ///       actor instead, so (b) doesn't generalise.
-    ///
-    /// Either way the Task can't capture non-Sendable `self` without
-    /// some isolation pin. In the current `actor` design, `self` is
-    /// Sendable so the capture is free — this is the one ergonomic
-    /// cost of dropping the shim.
+    /// Spawn the long-lived search-query listener pinned to the caller's
+    /// isolation. The `pinnedTask` helper (SE-0431 `@isolated(any)`)
+    /// records the caller's dynamic isolation into the closure value, so
+    /// the inner `Task` hops to that isolation before running `body` —
+    /// inside the closure, captured non-Sendable `self` and `state` are
+    /// reached on the right actor with no `assumeIsolated` check.
     func bootstrap(isolation: isolated (any Actor)? = #isolation) {
-        // shape (a) — left commented; see runFeedFetch above for the
-        // direct-state-access shape that's the win we care about.
+        tasks[.searchListener] = pinnedTask { [self] in
+            for await query in state.searchQueryChanges {
+                if query.isEmpty {
+                    clearSearch()
+                } else {
+                    await scheduleSearchFetch(query: query, debounce: Self.searchDebounce)
+                }
+            }
+        }
+    }
+
+    private func scheduleSearchFetch(
+        query: String,
+        debounce: Duration,
+        isolation: isolated (any Actor)? = #isolation
+    ) async {
+        // omitted in prototype — would mirror the runSearchFetch shape.
+        _ = query; _ = debounce
     }
 
     func shutdown(isolation: isolated (any Actor)? = #isolation) {
         tasks.cancelAll()
     }
+}
+
+/// Spawn an unstructured `Task` whose body runs on the caller's
+/// isolation. `@isolated(any)` (SE-0431) stores the caller's dynamic
+/// isolation in the closure value; the inner `Task { await body() }`
+/// hops to that isolation when invoking it. This lets the closure
+/// body capture non-Sendable values (e.g. `self` on a non-Sendable
+/// orchestrator class) and reach them safely — exactly the affordance
+/// a real `actor` would give for free, but available to an
+/// isolation-inheriting class.
+func pinnedTask(
+    isolation: isolated (any Actor)? = #isolation,
+    _ body: sending @escaping @isolated(any) () async -> Void
+) -> Task<Void, Never> {
+    Task { await body() }
 }
