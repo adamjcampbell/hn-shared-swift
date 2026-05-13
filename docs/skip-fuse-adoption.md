@@ -171,8 +171,46 @@ upstream.
 
 ### Verified empirically
 
-`AppCore` and `AppCoreActor` are pinned to `@MainActor`. This
-produces:
+`AppCore` is a `@MainActor` `final class` bridged via
+`// SKIP @bridgeMembers`. It owns `AppState` directly so the
+Kotlin/Compose side reads `appCore.state.foo` through SkipFuse's
+`@Observable` interception without indirection.
+
+`AppCoreActor` is a real `actor` whose `unownedExecutor` is
+borrowed from an `isolation: any Actor` init parameter (SE-0392).
+Production passes `MainActor.shared`, so `AppCoreActor`'s executor
+IS MainActor's at runtime — `await core.dispatch(...)` is a virtual
+hop with no real thread switch.
+
+`AppCoreActor` does **all** orchestration (dispatch, run, fetch
+coordination, task registry). It mutates `AppState` through an
+`acquireState: (@Sendable (@Sendable (AppState) -> Void) -> Void)?`
+closure that `AppCore.init` installs via:
+
+```swift
+handler.assumeIsolated { handler in
+    handler.acquireState = { mutation in
+        MainActor.assumeIsolated {
+            mutation(self.state)
+        }
+    }
+}
+```
+
+The closure captures `self` (`AppCore`, Sendable since `@MainActor`)
+and wraps mutations in `MainActor.assumeIsolated` — a runtime no-op
+because the borrowed executor matches. The non-`Sendable` `AppState`
+never crosses the actor boundary; only the `@Sendable` closure does,
+and its parameter type `(AppState) -> Void` doesn't need to be
+`Sendable` (only captures do).
+
+Tests can use `TestCore` (`AppCore/Tests/AppCoreTests/TestCore.swift`),
+a per-test `actor` shell with the same closure pattern. Each
+`TestCore` instance is its own actor with its own executor, so
+state mutations across tests run in parallel — measured ~4×
+speedup on the `AppCore` suite after the migration.
+
+The empirical run:
 
 - A clean `swift build` (the `// SKIP @bridge` markers stay the same).
 - A clean `skip export` — `skipstone` regenerates the bridge thunks
@@ -181,14 +219,9 @@ produces:
 - An app that boots, fetches HN stories, and handles search end-to-end
   with no behaviour change.
 
-The `@MainActor` pin also lets the search fetch capture `self`
-directly in its unstructured Task — see § Forwarding-Task collapse
-below for the SE-0461 region-isolation context.
-
-`AppState` is intentionally **not** pinned. It stays nonisolated
-`@Observable` so a future per-test actor wrapper (mirroring
-Point-Free's CA 2.0 `TestStoreActor`) can hold the same type on a
-custom executor for parallel-test parallelism.
+`AppState` is intentionally not annotated — it stays a plain
+`@Observable final class`, owned by whichever shell creates it
+(`AppCore` in production, `TestCore` in tests).
 
 ## Gotchas worth knowing
 

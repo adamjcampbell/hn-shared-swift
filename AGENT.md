@@ -143,18 +143,26 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `suspendCancellableCoroutine`. Kotlin coroutine cancellation
   doesn't propagate to the underlying Swift Task.
 - `AsyncStream<T>` requires `.kotlin()` to convert to `Flow<T>`.
-- **`@MainActor`-pinned bridged classes.** Skip's `swift-android-
-  native` calls `AndroidLooper.setupMainLooper()` at startup, which
-  drains libdispatch's main queue from Android's `ALooper`, so
-  Apple's `MainActor` executes on the main thread on Android too.
-  `skipstone` wraps cdecl thunks for `@MainActor`-isolated members
-  in `SkipBridge.assumeMainActorUnchecked { ... }` (which is
-  `MainActor.assumeIsolated`). `AppCore` and `AppCoreActor` are
-  pinned to `@MainActor` — see `docs/skip-fuse-adoption.md` §
-  Actor isolation. The pinning lets unstructured `Task { [self] in … }`
-  inside the handler capture `self` directly; the SE-0461 region-
-  isolation hole that previously required the forwarding-Task/
-  `SearchFetchOutcome` workaround no longer applies.
+- **`@MainActor`-pinned bridged class + nested actor.** Skip's
+  `swift-android-native` calls `AndroidLooper.setupMainLooper()` at
+  startup, which drains libdispatch's main queue from Android's
+  `ALooper`, so Apple's `MainActor` executes on the main thread on
+  Android too. `skipstone` wraps cdecl thunks for `@MainActor`-
+  isolated members in `SkipBridge.assumeMainActorUnchecked { ... }`
+  (which is `MainActor.assumeIsolated`).
+- **Architecture: `AppCore` shell + `AppCoreActor` workhorse.**
+  `AppCore` (production, `@MainActor` final class) owns `AppState`
+  and is the bridged public surface. `AppCoreActor` is a real
+  `actor` whose `unownedExecutor` is borrowed from an `isolation:
+  any Actor` init parameter (SE-0392). Production passes
+  `MainActor.shared`, so `AppCoreActor`'s executor IS MainActor's.
+  All orchestration lives on `AppCoreActor`; it reaches the
+  non-`Sendable` `AppState` via an `acquireState` closure the shell
+  installs post-init via `handler.assumeIsolated { ... }`. The
+  closure wraps mutations in `MainActor.assumeIsolated`, which is a
+  runtime no-op given the borrowed executor. Same `AppCoreActor`
+  type also serves `TestCore` (in Tests/), a per-instance actor
+  that gives tests parallel state-mutation isolation.
 
 ## Build & test
 

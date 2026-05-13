@@ -3,18 +3,26 @@ import Observation
 
 /// Production bridge wrapper. `@MainActor`-pinned, Skip-bridged via
 /// `// SKIP @bridgeMembers`. Owns `AppState` and the commands stream;
-/// delegates orchestration to an internal `AppCoreActor`.
+/// delegates all orchestration to an internal `AppCoreActor`.
 ///
-/// Naming mirrors Point-Free's CA 2.0 `Store` / `StoreActor` split,
-/// although in this codebase `AppCoreActor` is currently a `@MainActor`
-/// class rather than a true `actor` — see the doc on `AppCoreActor`
-/// for the region-isolation reason. The split keeps the bridged
-/// surface (`AppCore`) thin and stable for Skip while orchestration
-/// lives in the internal type.
+/// Naming mirrors Point-Free's CA 2.0 `Store` / `StoreActor` split.
+/// `AppCoreActor` is a real `actor` whose executor is borrowed from
+/// `MainActor.shared` via `unownedExecutor` (SE-0392) — so the actor
+/// and this `@MainActor` class share one physical executor at runtime.
+///
+/// State mutations flow back from `AppCoreActor` into `AppState`
+/// through the `acquireState` closure that this init installs via
+/// `handler.assumeIsolated { ... }`. The closure body captures
+/// `self` (this `AppCore`) and uses `MainActor.assumeIsolated` to
+/// reach `self.state` on MainActor when `AppCoreActor` invokes it.
+/// The shared executor makes the assumeIsolated check a runtime
+/// no-op; the closure encodes the proof of "same isolation region"
+/// that the type system needs to mutate the non-`Sendable`
+/// `@Observable` `AppState`.
 // SKIP @bridgeMembers
 @MainActor
 public final class AppCore {
-    public let state: AppState
+    public let state = AppState()
 
     /// Read end of the commands stream. iOS subscribes with `for await`
     /// from a long-lived `.task`. On Android, Compose converts to
@@ -24,10 +32,22 @@ public final class AppCore {
     let handler: AppCoreActor
 
     public init() {
-        let handler = AppCoreActor()
+        let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
+        self.commands = stream
+        let handler = AppCoreActor(
+            isolation: MainActor.shared,
+            commands: stream,
+            commandsContinuation: continuation
+        )
         self.handler = handler
-        self.state = handler.state
-        self.commands = handler.commands
+
+        handler.assumeIsolated { handler in
+            handler.acquireState = { mutation in
+                MainActor.assumeIsolated {
+                    mutation(self.state)
+                }
+            }
+        }
     }
 
     /// Test seam — not bridged. `client` and `clock` types don't bridge
@@ -36,10 +56,24 @@ public final class AppCore {
         client: HNClient,
         clock: any Clock<Duration> = ContinuousClock()
     ) {
-        let handler = AppCoreActor(client: client, clock: clock)
+        let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
+        self.commands = stream
+        let handler = AppCoreActor(
+            isolation: MainActor.shared,
+            commands: stream,
+            commandsContinuation: continuation,
+            client: client,
+            clock: clock
+        )
         self.handler = handler
-        self.state = handler.state
-        self.commands = handler.commands
+
+        handler.assumeIsolated { handler in
+            handler.acquireState = { mutation in
+                MainActor.assumeIsolated {
+                    mutation(self.state)
+                }
+            }
+        }
     }
 
     /// Single entry point for every user-driven mutation.
