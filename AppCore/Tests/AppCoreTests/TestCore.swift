@@ -42,9 +42,10 @@ public actor TestCore {
     public static let searchDebounce: Duration = AppCore.searchDebounce
 }
 
-/// Point-Free `Actor.run` pattern (Video #362 *Isolation: Actor
-/// Enqueuing*). Lets tests batch multiple state reads + workhorse
-/// calls into one isolation hop AND a single consistent snapshot:
+/// Point-Free `Actor.run` pattern (Video #362). Tests batch multiple
+/// reads + workhorse calls into one isolation hop with a consistent
+/// snapshot — no state changes can interleave between assertions inside
+/// the block.
 ///
 /// ```swift
 /// await core.run { await $0.appCore.dispatch(.refresh) }
@@ -53,20 +54,9 @@ public actor TestCore {
 ///     #expect(core.state.feed.loadedHits?.loadedAt != nil)
 /// }
 /// ```
-///
-/// Without this, tests using per-property forwarders pay one
-/// isolation hop per read; intermediate state changes between hops
-/// can produce inconsistent assertions. Grouping reads under one
-/// `run` block keeps the actor suspended for the whole assertion
-/// transaction.
-///
-/// The closure is `sending @escaping @Sendable` so it can be
-/// transferred into the actor's region while accepting `isolated
-/// Self` synchronously inside the body. Return type must be
-/// `Sendable` because the result crosses back out of the actor hop.
-extension Actor {
-    public func run<R: Sendable, Failure: Error>(
-        _ body: sending @escaping @Sendable (isolated Self) async throws(Failure) -> R
+extension TestCore {
+    func run<R, Failure: Error>(
+        _ body: sending @Sendable (isolated TestCore) async throws(Failure) -> R
     ) async throws(Failure) -> R {
         try await body(self)
     }
