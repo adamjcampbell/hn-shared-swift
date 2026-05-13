@@ -36,6 +36,7 @@ private actor CallRecorder {
 /// Test fixture for `AppModel` with optional `HNClient` mocks and an
 /// injected clock. Defaults give an empty front page and an empty
 /// search — override the relevant closure to express the test's intent.
+@MainActor
 private func makeModel(
     frontPage: @escaping @Sendable (Int) async throws -> HNPage = { _ in HNPage(hits: [], totalPages: 0) },
     search: @escaping @Sendable (String, Int) async throws -> HNPage = { _, _ in HNPage(hits: [], totalPages: 0) },
@@ -53,6 +54,7 @@ private func page(_ hits: [HNHit], totalPages: Int = 1) -> HNPage {
 }
 
 @Suite("AppModel")
+@MainActor
 struct AppModelTests {
 
     @Test("refresh populates feed stories and timestamp")

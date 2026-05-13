@@ -22,10 +22,6 @@ let package = Package(
         .package(url: "https://source.skip.tools/skip.git", from: "1.8.14"),
         .package(url: "https://source.skip.tools/skip-fuse.git", from: "1.0.0"),
         .package(url: "https://source.skip.tools/skip-model.git", from: "1.0.0"),
-        // `merge` (and friends) for the AppEventHandler run() pipeline.
-        // Used only inside the non-bridged handler — Skip's native mode
-        // compiles it as plain Swift for both targets.
-        .package(url: "https://github.com/apple/swift-async-algorithms", from: "1.0.0"),
         // Test-only: deterministic time control via TestClock so the
         // 250 ms debounce in AppModel doesn't translate into 250 ms of
         // real-clock waiting per test.
@@ -37,7 +33,6 @@ let package = Package(
             dependencies: [
                 .product(name: "SkipFuse", package: "skip-fuse"),
                 .product(name: "SkipModel", package: "skip-model"),
-                .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
             ],
             resources: [.process("Resources")],
             swiftSettings: sharedSettings,

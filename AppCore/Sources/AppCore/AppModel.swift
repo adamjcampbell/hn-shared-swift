@@ -5,27 +5,24 @@ import Observation
 /// the handler's `commands` stream so iOS and Android see one type for
 /// state + dispatch + commands. All orchestration lives on the handler.
 ///
-/// Bridged to Kotlin via SkipFuse — see the `// SKIP @bridge` markers
-/// below. The handler itself is not bridged; Kotlin only sees the
-/// shrunken public surface here.
-// SKIP @bridge
+/// Bridged to Kotlin via SkipFuse — `// SKIP @bridgeMembers` on the
+/// type bridges every public member. The handler itself is internal,
+/// so Kotlin only sees the shrunken public surface here.
+// SKIP @bridgeMembers
+@MainActor
 public final class AppModel {
-    // SKIP @bridge
     public let state = AppState()
 
     /// Read end of the handler's commands stream. iOS subscribes with
     /// `for await` from a long-lived `.task`. On Android, Compose
     /// converts to `Flow` via SkipFuse's `KotlinConverting`.
-    // SKIP @bridge
     public let commands: AsyncStream<AppCommand>
 
     let handler: AppEventHandler
 
-    // SKIP @bridge
     public init() {
-        let h = AppEventHandler(state: state, client: HNClient(), clock: ContinuousClock())
-        self.handler = h
-        self.commands = h.commands
+        self.handler = AppEventHandler(state: state, client: HNClient(), clock: ContinuousClock())
+        self.commands = handler.commands
     }
 
     /// Test seam — not bridged. `client` and `clock` types don't bridge
@@ -34,14 +31,12 @@ public final class AppModel {
         client: HNClient,
         clock: any Clock<Duration> = ContinuousClock()
     ) {
-        let h = AppEventHandler(state: state, client: client, clock: clock)
-        self.handler = h
-        self.commands = h.commands
+        self.handler = AppEventHandler(state: state, client: client, clock: clock)
+        self.commands = handler.commands
     }
 
     /// Single entry point for every user-driven mutation. Forwards to
     /// `AppEventHandler.handle(_:)`.
-    // SKIP @bridge
     public func dispatch(_ event: AppEvent) async {
         await handler.handle(event)
     }
@@ -50,7 +45,6 @@ public final class AppModel {
     /// The host `await`s this from `RootView`'s `.task` on iOS or
     /// `LaunchedEffect` on Android. Cancellation propagates from the
     /// host's surrounding Task. Forwards to `AppEventHandler.run()`.
-    // SKIP @bridge
     public func run() async {
         await handler.run()
     }

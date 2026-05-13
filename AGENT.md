@@ -55,17 +55,23 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 
 ### Bridge
 
-- **Adding a new `@Observable` property: add the field on `AppState`
-  with `// SKIP @bridge` on the line above it.** No thunk, no Kotlin
-  holder, no `*OnChange` SAM. After Swift changes, regenerate the
-  Android AAR with
+- **Adding a new `@Observable` property: add the field on `AppState`.**
+  The class already carries `// SKIP @bridgeMembers`, so every new
+  public member bridges automatically — no per-field marker, no thunk,
+  no Kotlin holder, no `*OnChange` SAM. After Swift changes,
+  regenerate the Android AAR with
   `cd AppCore && skip export --debug --no-ios --module AppCore -d
   ../android-app/skip-libs`.
-- **Per-field markers are required on bridged structs.** Marking
-  `Story` with `// SKIP @bridge` at the type level alone produces a
-  Kotlin class with no field accessors — only `Identifiable.id`
-  (typed as `ObjectIdentifier`) shows up. Each `let id: String`,
-  `let title: String`, etc. needs its own `// SKIP @bridge` marker.
+- **`// SKIP @bridgeMembers` (type-level) vs `// SKIP @bridge`
+  (per-member).** Bridged structs/classes here use `@bridgeMembers`,
+  which bridges every public member of the type with one annotation.
+  Reach for per-member `// SKIP @bridge` only when bridging a strict
+  subset. Use `// SKIP @nobridge` on a single member to opt it out
+  (e.g. `Story.init(hit:isRead:)`, which takes the unbridged `HNHit`).
+  **`// SKIP @bridge` at the type level alone is not the same** —
+  that produces a Kotlin class with no field accessors (only
+  `Identifiable.id` as `ObjectIdentifier`). Always use `@bridgeMembers`
+  for whole-type bridging.
 - **`AppModel.init()` is the bridged init.** The `init(client:clock:)`
   is a test seam — its parameter types (`HNClient` closure-bag,
   `any Clock<Duration>` existential) don't bridge, and it's
@@ -137,16 +143,18 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `suspendCancellableCoroutine`. Kotlin coroutine cancellation
   doesn't propagate to the underlying Swift Task.
 - `AsyncStream<T>` requires `.kotlin()` to convert to `Flow<T>`.
-- **`@MainActor`-pinned bridged classes work.** Skip's `swift-android-
+- **`@MainActor`-pinned bridged classes.** Skip's `swift-android-
   native` calls `AndroidLooper.setupMainLooper()` at startup, which
   drains libdispatch's main queue from Android's `ALooper`, so
   Apple's `MainActor` executes on the main thread on Android too.
   `skipstone` wraps cdecl thunks for `@MainActor`-isolated members
   in `SkipBridge.assumeMainActorUnchecked { ... }` (which is
-  `MainActor.assumeIsolated`). AppCore is currently nonisolated;
-  pinning to `@MainActor` is a two-line change that would recover
-  the compile-time isolation safety the old `JavaUIActor` design
-  was after — see `docs/skip-fuse-adoption.md` § Actor isolation.
+  `MainActor.assumeIsolated`). `AppModel` and `AppEventHandler` are
+  pinned to `@MainActor` — see `docs/skip-fuse-adoption.md` §
+  Actor isolation. The pinning lets unstructured `Task { [self] in … }`
+  inside the handler capture `self` directly; the SE-0461 region-
+  isolation hole that previously required the forwarding-Task/
+  `SearchFetchOutcome` workaround no longer applies.
 
 ## Build & test
 

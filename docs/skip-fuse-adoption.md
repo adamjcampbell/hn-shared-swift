@@ -171,8 +171,8 @@ upstream.
 
 ### Verified empirically
 
-Adding `@MainActor` to both `AppState` and `AppModel` in this
-codebase produces:
+`AppModel` and `AppEventHandler` are pinned to `@MainActor`. This
+produces:
 
 - A clean `swift build` (the `// SKIP @bridge` markers stay the same).
 - A clean `skip export` — `skipstone` regenerates the bridge thunks
@@ -181,16 +181,25 @@ codebase produces:
 - An app that boots, fetches HN stories, and handles search end-to-end
   with no behaviour change.
 
-If you ever decide compile-time isolation safety is worth the
-migration cost, the diff is two lines: `@MainActor` on the class
-declarations.
+The `@MainActor` pin also lets the search fetch capture `self`
+directly in its unstructured Task — see § Forwarding-Task collapse
+below for the SE-0461 region-isolation context.
+
+`AppState` is intentionally **not** pinned. It stays nonisolated
+`@Observable` so a future per-test actor wrapper (mirroring
+Point-Free's CA 2.0 `TestStoreActor`) can hold the same type on a
+custom executor for parallel-test parallelism.
 
 ## Gotchas worth knowing
 
-1. **Per-field `// SKIP @bridge` markers are required** on a struct's
-   `let` fields — marking just the type generates a class with no
-   field accessors. Without the field markers, only `Identifiable.id`
-   (as `ObjectIdentifier`) shows up.
+1. **Per-type `// SKIP @bridgeMembers` is the low-noise default** —
+   one annotation on the type declaration bridges every public member
+   (stored vars, computed vars, mutating funcs, init). Reach for
+   per-member `// SKIP @bridge` only when you want a strict subset, and
+   `// SKIP @nobridge` to opt a single member out (e.g. an init that
+   takes an unbridged type). **`// SKIP @bridge` at the type level
+   alone is not equivalent** — it generates a class with no field
+   accessors (only `Identifiable.id` as `ObjectIdentifier`).
 2. **Kotlin toolchain must match SkipFuse's exported AAR metadata
    version.** SkipFuse 1.8.x emits Kotlin 2.3.0 metadata. Your Android
    project must use Kotlin 2.3+ or you get
