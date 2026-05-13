@@ -65,8 +65,8 @@ actor AppCoreActor {
         isolation: any Actor,
         commands: AsyncStream<AppCommand>,
         commandsContinuation: AsyncStream<AppCommand>.Continuation,
-        client: HNClient = HNClient(),
-        clock: any Clock<Duration> = ContinuousClock()
+        client: HNClient,
+        clock: any Clock<Duration>
     ) {
         self.isolation = isolation
         self.commands = commands

@@ -171,10 +171,15 @@ upstream.
 
 ### Verified empirically
 
-`AppCore` is a `@MainActor` `final class` bridged via
-`// SKIP @bridgeMembers`. It owns `AppState` directly so the
-Kotlin/Compose side reads `appCore.state.foo` through SkipFuse's
-`@Observable` interception without indirection.
+`AppCore` is a `@MainActor` `struct` bridged via
+`// SKIP @bridgeMembers`. Its `let` fields hold the `AppState`
+class, the `AppCoreActor`, and the commands stream, so copying
+the struct shares those references — the bridge facade flipped
+from class to struct without changing the underlying topology.
+The Kotlin/Compose side still reads `appCore.state.foo` through
+SkipFuse's `@Observable` interception without indirection;
+`@State private var appCore = AppCore()` in `RootView` remains
+the single owning location on iOS.
 
 `AppCoreActor` is a real `actor` whose `unownedExecutor` is
 borrowed from an `isolation: any Actor` init parameter (SE-0392).
@@ -183,32 +188,47 @@ IS MainActor's at runtime — `await core.dispatch(...)` is a virtual
 hop with no real thread switch.
 
 `AppCoreActor` does **all** orchestration (dispatch, run, fetch
-coordination, task registry). It mutates `AppState` through an
-`acquireState: (@Sendable (@Sendable (AppState) -> Void) -> Void)?`
-closure that `AppCore.init` installs via:
+coordination, task registry). It doesn't own `AppState`; instead it
+holds a `state: StateAccess` shim
+(`AppCore/Sources/AppCore/StateAccess.swift`) that the shell installs
+post-init. `StateAccess` is a `Sendable` `@dynamicMemberLookup`
+struct wrapping `any StateMutator`:
+
+- Reads via dynamic-member subscript — `state.searchQuery`.
+- Writes via `callAsFunction` — `state { $0.foo = bar }`. (Writable
+  subscripts would need `sending` on the keypath, which conflicts
+  with Swift's `_modify` synthesis.)
+- Compound reads via `state.read { $0.foo }`.
+
+`StateMutator` is a `Sendable & AnyObject` protocol whose methods
+take **`sending`** (not `@Sendable`) closures — that's the key
+escape from the `@unchecked Sendable` workarounds the older
+closure-based design needed. The implementation:
 
 ```swift
+let mutator = MainActorMutator(self.state)
 handler.assumeIsolated { handler in
-    handler.acquireState = { mutation in
-        MainActor.assumeIsolated {
-            mutation(self.state)
-        }
-    }
+    handler.state = StateAccess(mutator)
 }
 ```
 
-The closure captures `self` (`AppCore`, Sendable since `@MainActor`)
-and wraps mutations in `MainActor.assumeIsolated` — a runtime no-op
-because the borrowed executor matches. The non-`Sendable` `AppState`
-never crosses the actor boundary; only the `@Sendable` closure does,
-and its parameter type `(AppState) -> Void` doesn't need to be
-`Sendable` (only captures do).
+`MainActorMutator` is a `@MainActor final class` whose `apply` /
+`read` are `nonisolated` and use `MainActor.assumeIsolated` to
+reach `appState` — a runtime no-op because `AppCoreActor`'s
+executor is borrowed from MainActor. The non-`Sendable` `AppState`
+never crosses an actor boundary; only the `Sendable` shim does.
+Before the shell installs the real mutator, `AppCoreActor.state`
+defaults to a `NoopMutator` so the brief pre-install window is
+safe (`AppCore.init` installs synchronously in production;
+`TestCore`'s async init awaits past the install).
 
 Tests can use `TestCore` (`AppCore/Tests/AppCoreTests/TestCore.swift`),
-a per-test `actor` shell with the same closure pattern. Each
+a per-test `actor` shell with the same `StateAccess` plumbing. Each
 `TestCore` instance is its own actor with its own executor, so
 state mutations across tests run in parallel — measured ~4×
-speedup on the `AppCore` suite after the migration.
+speedup on the `AppCore` suite after the migration. The whole
+design contains **zero** `@unchecked Sendable` and zero
+`nonisolated(unsafe)` in `Sources/`.
 
 The empirical run:
 

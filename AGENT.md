@@ -91,10 +91,14 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `AppCore` itself.
 - Events flow back via `@Environment(\.dispatch)`, an
   `AppEventDispatch` callable struct. The struct is **`Equatable`**
-  (`===` on the held `AppCore`); without that conformance, SwiftUI's
-  reflection-based environment diff cannot compare a closure-holding
-  value, marks the env entry as changed on every parent body re-eval,
-  and invalidates every descendant reading the key.
+  via nil-parity on the held optional `AppCore`, leaning on the
+  invariant that `RootView` constructs exactly one `AppCore` for the
+  app's lifetime — "both non-nil" uniquely identifies the installed
+  dispatcher and "both nil" is the default env value. Without that
+  conformance, SwiftUI's reflection-based environment diff cannot
+  compare a closure-holding value, marks the env entry as changed on
+  every parent body re-eval, and invalidates every descendant reading
+  the key.
 - Don't write `private var foo: some View` on a View. SwiftUI can't
   diff computed properties — they inline into the parent body and
   lose per-section skip behaviour. Extract into a private
@@ -151,18 +155,27 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   isolated members in `SkipBridge.assumeMainActorUnchecked { ... }`
   (which is `MainActor.assumeIsolated`).
 - **Architecture: `AppCore` shell + `AppCoreActor` workhorse.**
-  `AppCore` (production, `@MainActor` final class) owns `AppState`
-  and is the bridged public surface. `AppCoreActor` is a real
-  `actor` whose `unownedExecutor` is borrowed from an `isolation:
-  any Actor` init parameter (SE-0392). Production passes
-  `MainActor.shared`, so `AppCoreActor`'s executor IS MainActor's.
-  All orchestration lives on `AppCoreActor`; it reaches the
-  non-`Sendable` `AppState` via an `acquireState` closure the shell
-  installs post-init via `handler.assumeIsolated { ... }`. The
-  closure wraps mutations in `MainActor.assumeIsolated`, which is a
-  runtime no-op given the borrowed executor. Same `AppCoreActor`
-  type also serves `TestCore` (in Tests/), a per-instance actor
-  that gives tests parallel state-mutation isolation.
+  `AppCore` (production, `@MainActor` struct) owns `AppState` and
+  is the bridged public surface; copying the struct shares the
+  underlying `AppState` and `AppCoreActor` references, so `@State`
+  in `RootView` is still the single owning location. `AppCoreActor`
+  is a real `actor` whose `unownedExecutor` is borrowed from an
+  `isolation: any Actor` init parameter (SE-0392). Production
+  passes `MainActor.shared`, so `AppCoreActor`'s executor IS
+  MainActor's. All orchestration lives on `AppCoreActor`; it
+  reaches the non-`Sendable` `AppState` via a `StateAccess` shim
+  (`@dynamicMemberLookup` struct wrapping `any StateMutator`) that
+  the shell installs post-init via
+  `handler.assumeIsolated { handler.state = StateAccess(mutator) }`.
+  Production uses `MainActorMutator`, which routes reads and writes
+  through `MainActor.assumeIsolated` — a runtime no-op given the
+  borrowed executor. The `sending` (not `@Sendable`) closure
+  parameters on `StateMutator` keep keypath captures Sendable-free
+  and remove the `@unchecked Sendable` workarounds the older
+  closure-based design needed. Same `AppCoreActor` type also serves
+  `TestCore` (in Tests/), a per-instance actor that gives tests
+  parallel state-mutation isolation (~4× speedup on the AppCore
+  suite).
 
 ## Build & test
 

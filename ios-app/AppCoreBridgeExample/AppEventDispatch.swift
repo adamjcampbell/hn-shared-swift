@@ -6,11 +6,15 @@ import AppCore
 /// `dispatch(.someEvent)` without ever holding a reference to `AppCore`.
 ///
 /// The wrapper holds the `AppCore` directly rather than an arbitrary
-/// closure so it can implement `Equatable` via `===`. Without that,
-/// SwiftUI's reflection-based environment diffing would treat the value
-/// as changed on every parent body re-evaluation (closures are neither
-/// equatable nor reference-comparable in Swift) and invalidate every
-/// descendant reading the key.
+/// closure so it can implement `Equatable`. The conformance leans on
+/// the app-lifetime invariant that `RootView` constructs exactly one
+/// `AppCore`, so nil-parity on the held optional uniquely identifies
+/// "installed dispatcher" vs "default env value". Without an
+/// `Equatable` conformance, SwiftUI's reflection-based environment
+/// diffing would treat the value as changed on every parent body
+/// re-evaluation (closures are neither equatable nor reference-
+/// comparable in Swift) and invalidate every descendant reading the
+/// key.
 ///
 /// The core is optional so the default environment value is a real
 /// no-op (no throwaway `AppCore` allocation) for views rendered outside
@@ -36,7 +40,10 @@ struct AppEventDispatch: Equatable {
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.core === rhs.core
+        // Only one AppCore exists per app lifetime, so equality reduces to
+        // whether both sides are the installed dispatcher (non-nil) or both
+        // are the default env value (nil).
+        (lhs.core == nil) == (rhs.core == nil)
     }
 }
 
