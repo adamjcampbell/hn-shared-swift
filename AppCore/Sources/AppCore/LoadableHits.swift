@@ -8,20 +8,14 @@ import Foundation
 /// intentionally not bumped when subsequent pages are appended: the
 /// user-facing meaning is "how stale is this feed", and appending
 /// page 1 doesn't make page 0's rows any newer.
-// SKIP @bridge
+// SKIP @bridgeMembers
 public struct LoadedHits: Sendable, Equatable {
-    // SKIP @bridge
     public var ids: [String]
-    // SKIP @bridge
     public var loadedAt: Date
-    // SKIP @bridge
     public var page: Int
-    // SKIP @bridge
     public var totalPages: Int
 
-    // SKIP @bridge
     public var hasMore: Bool { page + 1 < totalPages }
-    // SKIP @bridge
     public var nextPage: Int { page + 1 }
 
     public init(ids: [String], page: Int, totalPages: Int, loadedAt: Date = Date()) {
@@ -46,11 +40,9 @@ public struct LoadedHits: Sendable, Equatable {
 /// `startLoading()` does **not** clear `error`. A stale banner
 /// persists through a retry until either success clears it or another
 /// failure replaces it.
-// SKIP @bridge
+// SKIP @bridgeMembers
 public struct LoadStatus: Sendable, Equatable {
-    // SKIP @bridge
     public var isLoading: Bool
-    // SKIP @bridge
     public var error: String?
 
     public init(isLoading: Bool = false, error: String? = nil) {
@@ -81,13 +73,10 @@ public struct LoadStatus: Sendable, Equatable {
 /// persists across `startLoading()` and `finishFailure()`, so the UI
 /// shows stale data under a spinner or behind an error banner without
 /// any explicit prev-payload threading.
-// SKIP @bridge
+// SKIP @bridgeMembers
 public struct LoadableHits: Sendable, Equatable {
-    // SKIP @bridge
     public var loadedHits: LoadedHits?
-    // SKIP @bridge
     public var initialStatus: LoadStatus
-    // SKIP @bridge
     public var loadMoreStatus: LoadStatus
 
     public init(

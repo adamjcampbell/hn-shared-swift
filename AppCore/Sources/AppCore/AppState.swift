@@ -14,7 +14,7 @@ import SkipFuse
 /// search surfaces project it through their own ordered id lists. A story
 /// that appears in both surfaces is stored once, so toggle-read flows to
 /// both projections through `readIds` without any cross-surface sync.
-// SKIP @bridge
+// SKIP @bridgeMembers
 @Observable
 public final class AppState {
 
@@ -26,14 +26,11 @@ public final class AppState {
     /// trying to bridge them with a `withObservationTracking`-based
     /// iterator created an arm/disarm window where bursts of writes
     /// during a long `await` were silently dropped.
-    // SKIP @bridge
     public var searchQuery: String = "" {
         didSet { searchQueryEvents.yield(searchQuery) }
     }
 
-    // SKIP @bridge
     public var feed: LoadableHits = LoadableHits()
-    // SKIP @bridge
     public var search: LoadableHits = LoadableHits()
 
     // MARK: Stored sources of truth (internal)
@@ -58,14 +55,12 @@ public final class AppState {
     /// `compactMap` (not `map`) because the projection shouldn't crash
     /// if a stale id ever outlives its entry; in practice
     /// upsert-then-assign-ids on the same actor makes that unreachable.
-    // SKIP @bridge
     public var feedStories: [Story] {
         (feed.loadedHits?.ids ?? []).compactMap { id in
             hits[id].map { Story(hit: $0, isRead: readIds.contains(id)) }
         }
     }
 
-    // SKIP @bridge
     public var searchResults: [Story] {
         (search.loadedHits?.ids ?? []).compactMap { id in
             hits[id].map { Story(hit: $0, isRead: readIds.contains(id)) }
@@ -84,7 +79,6 @@ public final class AppState {
         return page.hits.map(\.id)
     }
 
-    // SKIP @bridge
     public init() {
         let (stream, continuation) = AsyncStream<String>.makeStream(
             bufferingPolicy: .bufferingNewest(1)

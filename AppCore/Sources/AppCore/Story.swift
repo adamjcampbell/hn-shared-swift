@@ -40,28 +40,22 @@ public struct HNHit: Sendable, Identifiable, Codable, Equatable {
 /// View row: `HNHit` fields plus the per-user `isRead` flag, projected
 /// from `AppState.readIds` at read time. Constructed by `AppState.stories`
 /// from `HNHit` + `readIds`. SkipFuse bridges `Story` to Kotlin as a
-/// peer-backed class; each `// SKIP @bridge` field below becomes a
-/// Kotlin property getter that JNI-calls back into the Swift struct
-/// (so dropping a marker hides that field on the Android side).
-// SKIP @bridge
+/// peer-backed class; `// SKIP @bridgeMembers` exposes every public
+/// field as a Kotlin property getter that JNI-calls back into the
+/// Swift struct. The init is opted out (`// SKIP @nobridge`) because
+/// `HNHit` isn't bridged — `Story` is constructed on the Swift side.
+// SKIP @bridgeMembers
 public struct Story: Sendable, Identifiable, Equatable {
-    // SKIP @bridge
     public let id: String
-    // SKIP @bridge
     public let title: String
-    // SKIP @bridge
     public let author: String
-    // SKIP @bridge
     public let points: Int
-    // SKIP @bridge
     public let commentCount: Int
-    // SKIP @bridge
     public let url: String?
-    // SKIP @bridge
     public let createdAt: Date
-    // SKIP @bridge
     public let isRead: Bool
 
+    // SKIP @nobridge — `HNHit` isn't bridged; this init is Swift-only.
     public init(hit: HNHit, isRead: Bool) {
         self.id = hit.id
         self.title = hit.title

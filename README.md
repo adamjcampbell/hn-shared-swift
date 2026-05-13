@@ -18,7 +18,7 @@ render the snapshot.
 Both UIs render the same Swift `AppState` instance:
 
 ```swift
-// AppCore/Sources/AppCore/AppState.swift — bridged via // SKIP @bridge
+// AppCore/Sources/AppCore/AppState.swift — bridged via // SKIP @bridgeMembers
 @Observable public final class AppState {
     public var searchQuery: String = ""
     public var isLoading: Bool = false
@@ -35,7 +35,7 @@ LazyColumn { items(state.stories.kotlin() as List<Story>) { StoryRow(it) } }
 
 There is no hand-written JNI glue, no per-property thunk, no
 `SwiftState`, no `*OnChange` SAM. SkipFuse generates all of it from
-the `// SKIP @bridge` markers on the Swift sources.
+the `// SKIP @bridgeMembers` markers on the Swift sources.
 
 ## Layout
 
