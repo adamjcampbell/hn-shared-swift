@@ -12,7 +12,8 @@ public actor TestCore {
 
     public init(
         client: HNClient = HNClient(),
-        clock: any Clock<Duration> = ContinuousClock()
+        clock: any Clock<Duration> = ContinuousClock(),
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         let state = AppState()
         let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
@@ -23,7 +24,8 @@ public actor TestCore {
             commands: stream,
             commandsContinuation: continuation,
             client: client,
-            clock: clock
+            clock: clock,
+            now: now
         )
     }
 

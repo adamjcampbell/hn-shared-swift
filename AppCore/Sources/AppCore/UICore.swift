@@ -22,7 +22,8 @@ public struct UICore {
             commands: stream,
             commandsContinuation: continuation,
             client: HNClient(),
-            clock: ContinuousClock()
+            clock: ContinuousClock(),
+            now: Date.init
         )
     }
 

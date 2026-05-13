@@ -2,21 +2,14 @@ import Foundation
 import Testing
 @testable import AppCore
 
-/// `URLProtocolStub` is single-static-state, so this whole suite must
-/// run serially — and `swift test` itself must run with `--no-parallel`
-/// (Swift Testing parallelises across suites by default).
-@Suite("HNClient", .serialized)
+@Suite("HNClient")
 struct HNClientTests {
-
-    init() { URLProtocolStub.reset() }
 
     @Test("frontPage decodes Algolia envelope into a paginated HNPage")
     func frontPage_decodesEnvelope() async throws {
-        URLProtocolStub.responder = { request in
+        let client = HNClient(fetch: { request in
             okResponse(Self.frontPageFixture, for: request.url!)
-        }
-
-        let client = HNClient(session: makeStubbedSession())
+        })
         let result = try await client.frontPage(0)
 
         #expect(result.hits.count == 2)
@@ -32,16 +25,14 @@ struct HNClientTests {
 
     @Test("frontPage hits the search_by_date front_page endpoint with the requested page")
     func frontPage_hitsCorrectEndpoint() async throws {
-        var capturedURL: URL?
-        URLProtocolStub.requestRecorder = { capturedURL = $0.url }
-        URLProtocolStub.responder = { request in
-            okResponse(#"{"hits":[],"nbPages":0}"#, for: request.url!)
-        }
-
-        let client = HNClient(session: makeStubbedSession())
+        let captured = CapturedRequest()
+        let client = HNClient(fetch: { request in
+            await captured.record(request.url)
+            return okResponse(#"{"hits":[],"nbPages":0}"#, for: request.url!)
+        })
         _ = try await client.frontPage(2)
 
-        let url = try #require(capturedURL)
+        let url = try #require(await captured.url)
         #expect(url.path == "/api/v1/search_by_date")
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
         let items = Dictionary(uniqueKeysWithValues:
@@ -53,16 +44,14 @@ struct HNClientTests {
 
     @Test("search builds the expected query string with the requested page")
     func search_buildsCorrectQueryString() async throws {
-        var capturedURL: URL?
-        URLProtocolStub.requestRecorder = { capturedURL = $0.url }
-        URLProtocolStub.responder = { request in
-            okResponse(#"{"hits":[],"nbPages":0}"#, for: request.url!)
-        }
-
-        let client = HNClient(session: makeStubbedSession())
+        let captured = CapturedRequest()
+        let client = HNClient(fetch: { request in
+            await captured.record(request.url)
+            return okResponse(#"{"hits":[],"nbPages":0}"#, for: request.url!)
+        })
         _ = try await client.search("rust async", 3)
 
-        let url = try #require(capturedURL)
+        let url = try #require(await captured.url)
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
         #expect(components.host == "hn.algolia.com")
         #expect(components.path == "/api/v1/search")
@@ -76,16 +65,21 @@ struct HNClientTests {
 
     @Test("decode skips hits missing title or author")
     func decode_skipsIncompleteHits() async throws {
-        URLProtocolStub.responder = { request in
+        let client = HNClient(fetch: { request in
             okResponse(Self.partialFixture, for: request.url!)
-        }
-
-        let client = HNClient(session: makeStubbedSession())
+        })
         let result = try await client.frontPage(0)
 
         #expect(result.hits.count == 1)
         #expect(result.hits.first?.id == "1")
     }
+}
+
+/// Actor-wrapped URL capture so the `@Sendable` fetch closure can record
+/// without crossing isolation boundaries with a non-Sendable mutable.
+private actor CapturedRequest {
+    private(set) var url: URL?
+    func record(_ url: URL?) { self.url = url }
 }
 
 extension HNClientTests {

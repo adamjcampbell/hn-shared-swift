@@ -89,8 +89,8 @@ public struct LoadableHits: Sendable, Equatable {
         self.loadMoreStatus = loadMoreStatus
     }
 
-    public mutating func receiveInitialPage(_ ids: [String], totalPages: Int) {
-        loadedHits = LoadedHits(ids: ids, page: 0, totalPages: totalPages)
+    public mutating func receiveInitialPage(_ ids: [String], totalPages: Int, loadedAt: Date) {
+        loadedHits = LoadedHits(ids: ids, page: 0, totalPages: totalPages, loadedAt: loadedAt)
         initialStatus.finishSuccess()
     }
 

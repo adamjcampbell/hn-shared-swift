@@ -2,6 +2,7 @@ import Clocks
 import ConcurrencyExtras
 import Foundation
 import Testing
+import os
 @testable import AppCore
 
 private let storyA = HNHit(
@@ -40,12 +41,27 @@ private actor CallRecorder {
 private func makeCore(
     frontPage: @escaping @Sendable (Int) async throws -> HNPage = { _ in HNPage(hits: [], totalPages: 0) },
     search: @escaping @Sendable (String, Int) async throws -> HNPage = { _, _ in HNPage(hits: [], totalPages: 0) },
-    clock: any Clock<Duration> = ContinuousClock()
+    clock: any Clock<Duration> = ContinuousClock(),
+    now: @escaping @Sendable () -> Date = Date.init
 ) -> TestCore {
     TestCore(
         client: HNClient(frontPage: frontPage, search: search),
-        clock: clock
+        clock: clock,
+        now: now
     )
+}
+
+/// Sendable monotonic Date source for tests that need to assert
+/// "this Date didn't change" without depending on `Date()` wall-clock
+/// resolution. Each `next()` call returns a strictly later Date.
+private final class MonotonicDates: Sendable {
+    private let counter = OSAllocatedUnfairLock<TimeInterval>(initialState: 0)
+    func next() -> Date {
+        counter.withLock { value in
+            value += 1
+            return Date(timeIntervalSince1970: value)
+        }
+    }
 }
 
 /// Convenience: a single-page response.
@@ -295,10 +311,11 @@ struct AppCoreTests {
         let core = makeCore(
             search: { query, _ in
                 if query == "ru" {
-                    while !Task.isCancelled {
-                        try? await Task.sleep(for: .milliseconds(5))
-                    }
-                    throw URLError(.cancelled)
+                    // Park until cancelled; surface URLError(.cancelled) so
+                    // we exercise AppCore's URLError → CancellationError
+                    // normalisation.
+                    do { try await Task.sleep(for: .seconds(60)) }
+                    catch { throw URLError(.cancelled) }
                 }
                 return page([storyA])
             },
@@ -552,12 +569,8 @@ struct AppCoreTests {
             frontPage: { p in
                 await calls.recordFrontPage(page: p)
                 if p == 1 {
-                    // Park in a cancellable sleep so the refresh has time
-                    // to cancel us before we return.
-                    while !Task.isCancelled {
-                        try? await Task.sleep(for: .milliseconds(5))
-                    }
-                    throw CancellationError()
+                    // Park until the refresh cancels us.
+                    try await Task.sleep(for: .seconds(60))
                 }
                 return page([storyA], totalPages: 5)
             },
@@ -639,10 +652,9 @@ struct AppCoreTests {
         let core = makeCore(
             search: { _, p in
                 if p == 0 { return page([storyA], totalPages: 5) }
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .milliseconds(5))
-                }
-                throw CancellationError()
+                // Park until cancelled.
+                try await Task.sleep(for: .seconds(60))
+                return page([])
             },
             clock: clock
         )
@@ -670,17 +682,21 @@ struct AppCoreTests {
 
     @Test("loadMore preserves loadedAt from the initial fetch")
     func loadMore_preservesLoadedAt() async {
+        // Monotonic `now` so that *if* loadMore wrongly called
+        // `receiveInitialPage`, its `loadedAt` would deterministically
+        // differ from the refresh's — no Date()-resolution sleep needed.
+        let dates = MonotonicDates()
         let core = makeCore(
             frontPage: { p in
                 if p == 0 { return page([storyA], totalPages: 2) }
                 return page([storyB], totalPages: 2)
-            }
+            },
+            now: dates.next
         )
 
         await core.run { await $0.appCore.dispatch(.refresh) }
         let initialLoadedAt = await core.run { $0.state.feed.loadedHits?.loadedAt }
 
-        try? await Task.sleep(for: .milliseconds(10))
         await core.run { await $0.appCore.dispatch(.loadMore) }
 
         await core.run { #expect($0.state.feed.loadedHits?.loadedAt == initialLoadedAt) }

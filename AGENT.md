@@ -134,11 +134,11 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 - **Networking on Android requires `import FoundationNetworking`**
   inside `#if canImport(FoundationNetworking)`. Without the
   conditional import, the cross-compile fails on `URLSession`.
-- **`URLProtocolStub` is `nonisolated(unsafe) static var` storage**
-  (acceptable in `Tests/`, forbidden in `Sources/`). Only
-  `HNClientTests` touches it, and that suite carries `.serialized`.
-  If a future suite starts using `URLProtocolStub` it also needs
-  `.serialized`.
+- **`HNClient(fetch:)` is the URL-construction test seam.** Tests
+  inject a `@Sendable (URLRequest) async throws -> (Data, URLResponse)`
+  closure and capture the request directly — no `URLProtocol`, no
+  global mutable state, no `.serialized` suite, and tests run in full
+  parallel.
 
 ### SkipFuse gotchas (full list in
 [`docs/skip-fuse-adoption.md`](docs/skip-fuse-adoption.md))

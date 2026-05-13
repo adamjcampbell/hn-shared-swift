@@ -17,6 +17,7 @@ final class AppCore {
     let commands: AsyncStream<AppCommand>
     private let client: HNClient
     private let clock: any Clock<Duration>
+    private let now: @Sendable () -> Date
 
     enum TaskID { case feed, feedMore, search, searchCommit, searchMore, searchListener }
     private var tasks = TaskRegistry<TaskID>()
@@ -32,6 +33,7 @@ final class AppCore {
         commandsContinuation: AsyncStream<AppCommand>.Continuation,
         client: HNClient,
         clock: any Clock<Duration>,
+        now: @escaping @Sendable () -> Date = Date.init,
         isolation: isolated (any Actor)? = #isolation
     ) {
         self.state = state
@@ -39,6 +41,7 @@ final class AppCore {
         self.commandsContinuation = commandsContinuation
         self.client = client
         self.clock = clock
+        self.now = now
 
         // Listener for `state.searchQuery` writes (iOS @Bindable,
         // Android textFieldState collector). Empty → clear the search
@@ -98,7 +101,7 @@ final class AppCore {
                 try Task.checkCancellation()
                 for hit in page.hits { state.hits[hit.id] = hit }
                 let ids = page.hits.map(\.id)
-                state.search.receiveInitialPage(ids, totalPages: page.totalPages)
+                state.search.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: now())
             } catch is CancellationError {
                 // Newer keystroke (or clearSearch) cancelled us.
             } catch {
@@ -143,7 +146,7 @@ final class AppCore {
                 let page = try await task.value
                 for hit in page.hits { state.hits[hit.id] = hit }
                 let ids = page.hits.map(\.id)
-                state.feed.receiveInitialPage(ids, totalPages: page.totalPages)
+                state.feed.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: now())
             } catch is CancellationError {
                 // Newer fetch will clear loading when it commits.
             } catch {
@@ -166,7 +169,7 @@ final class AppCore {
                 let page = try await task.value
                 for hit in page.hits { state.hits[hit.id] = hit }
                 let ids = page.hits.map(\.id)
-                state.search.receiveInitialPage(ids, totalPages: page.totalPages)
+                state.search.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: now())
             } catch is CancellationError {
             } catch {
                 state.search.initialStatus.finishFailure(error.localizedDescription)

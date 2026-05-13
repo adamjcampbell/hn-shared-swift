@@ -52,37 +52,27 @@ public struct HNPage: Sendable, Equatable {
 extension HNClient {
     /// Live implementation hitting `hn.algolia.com/api/v1`.
     public init() {
-        self.init(session: HNClient.productionSession)
+        let session = HNClient.productionSession
+        self.init(fetch: { request in
+            try await session.data(for: request)
+        })
     }
 
-    /// Test seam for URL-construction tests that want to drive the
-    /// live HTTP path through a `URLProtocol`-stubbed `URLSession`.
-    /// Module-internal so production callers can't pass a session by
-    /// accident.
-    init(session: URLSession) {
+    /// Test seam: inject the HTTP transport directly. Lets tests assert
+    /// on the exact `URLRequest` and return canned `(Data, URLResponse)`
+    /// without any `URLSession` / `URLProtocol` machinery. Module-
+    /// internal so production callers can't bypass `init()` by accident.
+    init(fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)) {
         self.init(
             frontPage: { page in
-                try await HNClient.fetch(
-                    session: session,
-                    path: "search_by_date",
-                    queryItems: [
-                        URLQueryItem(name: "tags", value: "front_page"),
-                        URLQueryItem(name: "hitsPerPage", value: "50"),
-                        URLQueryItem(name: "page", value: String(page)),
-                    ]
-                )
+                let request = HNClient.frontPageRequest(page: page)
+                let (data, _) = try await fetch(request)
+                return try HNClient.decode(data)
             },
             search: { query, page in
-                try await HNClient.fetch(
-                    session: session,
-                    path: "search",
-                    queryItems: [
-                        URLQueryItem(name: "query", value: query),
-                        URLQueryItem(name: "tags", value: "story"),
-                        URLQueryItem(name: "hitsPerPage", value: "50"),
-                        URLQueryItem(name: "page", value: String(page)),
-                    ]
-                )
+                let request = HNClient.searchRequest(query: query, page: page)
+                let (data, _) = try await fetch(request)
+                return try HNClient.decode(data)
             }
         )
     }
@@ -104,17 +94,33 @@ extension HNClient {
         return URLSession(configuration: configuration)
     }()
 
-    private static func fetch(
-        session: URLSession,
-        path: String,
-        queryItems: [URLQueryItem]
-    ) async throws -> HNPage {
+    static func frontPageRequest(page: Int) -> URLRequest {
+        makeRequest(path: "search_by_date", queryItems: [
+            URLQueryItem(name: "tags", value: "front_page"),
+            URLQueryItem(name: "hitsPerPage", value: "50"),
+            URLQueryItem(name: "page", value: String(page)),
+        ])
+    }
+
+    static func searchRequest(query: String, page: Int) -> URLRequest {
+        makeRequest(path: "search", queryItems: [
+            URLQueryItem(name: "query", value: query),
+            URLQueryItem(name: "tags", value: "story"),
+            URLQueryItem(name: "hitsPerPage", value: "50"),
+            URLQueryItem(name: "page", value: String(page)),
+        ])
+    }
+
+    private static func makeRequest(path: String, queryItems: [URLQueryItem]) -> URLRequest {
         var components = URLComponents(
             url: HNClient.baseURL.appendingPathComponent(path),
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = queryItems
-        let (data, _) = try await session.data(from: components.url!)
+        return URLRequest(url: components.url!)
+    }
+
+    static func decode(_ data: Data) throws -> HNPage {
         let response = try HNClient.decoder.decode(HNSearchResponse.self, from: data)
         return HNPage(
             hits: response.hits.compactMap(HNHit.init(payload:)),
