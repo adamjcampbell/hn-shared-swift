@@ -74,7 +74,7 @@ public actor TestCore {
 /// the block.
 ///
 /// ```swift
-/// await core.run { await $0.appCore.dispatch(.refresh) }
+/// await core.run { await $0.appCore.sendEvent(.refresh) }
 /// await core.run { core in
 ///     #expect(core.state.feedStories.count == 2)
 ///     #expect(core.state.feed.loadedHits?.loadedAt != nil)

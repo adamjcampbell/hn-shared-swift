@@ -114,7 +114,7 @@ final class AppCore {
     /// holds the entire flow for its event — the explicit
     /// feed/search and refresh/loadMore duplication is the point:
     /// each path reads top-to-bottom without jumping between helpers.
-    func dispatch(_ event: AppEvent, isolation: isolated (any Actor)? = #isolation) async {
+    func sendEvent(_ event: AppEvent, isolation: isolated (any Actor)? = #isolation) async {
         switch event {
 
         case .toggleRead(let id):

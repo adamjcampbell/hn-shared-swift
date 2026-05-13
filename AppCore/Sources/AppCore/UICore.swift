@@ -28,7 +28,7 @@ public struct UICore {
     }
 
     /// Single entry point for every user-driven mutation.
-    public func dispatch(_ event: AppEvent) async {
-        await appCore.dispatch(event)
+    public func sendEvent(_ event: AppEvent) async {
+        await appCore.sendEvent(event)
     }
 }
