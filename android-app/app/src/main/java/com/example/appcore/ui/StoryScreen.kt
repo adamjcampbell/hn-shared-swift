@@ -61,7 +61,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.core.AppCommand
 import app.core.AppEvent
-import app.core.AppCore
+import app.core.UICore
 import app.core.AppState
 import app.core.LoadStatus
 import app.core.Story
