@@ -38,14 +38,14 @@ bridge for Android); Xcode prompts for plugin approval otherwise.
 Two source files in `AppCoreBridgeExample/`:
 
 - **`RootView.swift`** — the view tree. `RootView` owns the singleton
-  `AppModel` (as `@State`) and installs `\.dispatch` on the
+  `AppModel` (as `@State`) and installs `\.sendEvent` on the
   `NavigationStack`. `AppState` itself is the `@Observable final
   class`; descendants take it as a parameter and rely on per-property
   tracking for invalidation.
-- **`AppEventDispatch.swift`** — the `\.dispatch` capability action.
+- **`SendAppEvent.swift`** — the `\.sendEvent` capability action.
   An `Equatable` callable struct mirroring SwiftUI's `DismissAction`:
-  child views call `dispatch(.toggleRead(id:))` (sync, fire-and-forget)
-  or `await dispatch.run(.refresh)` (awaitable, for `.refreshable`).
+  child views call `sendEvent(.toggleRead(id:))` (sync, fire-and-forget)
+  or `await sendEvent.run(.refresh)` (awaitable, for `.refreshable`).
   The `Equatable` conformance is load-bearing — raw closures in
   `EnvironmentValues` defeat SwiftUI's reflection diff and invalidate
   every descendant on each parent body re-eval.

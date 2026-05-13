@@ -7,7 +7,7 @@ struct RootView: View {
 
     var body: some View {
         NavigationStack { StoriesScreen(state: appCore.state) }
-            .environment(\.dispatch, AppEventDispatch(appCore))
+            .environment(\.sendEvent, SendAppEvent(appCore))
             .sheet(item: $presented) { item in
                 SafariView(url: item.url)
                     .ignoresSafeArea()
@@ -28,7 +28,7 @@ struct RootView: View {
 
 private struct StoriesScreen: View {
     @Bindable var state: AppState
-    @Environment(\.dispatch) private var dispatch
+    @Environment(\.sendEvent) private var sendEvent
 
     var body: some View {
         StoriesContent(state: state)
@@ -44,7 +44,7 @@ private struct StoriesScreen: View {
             .autocorrectionDisabled()
             .task {
                 // One-shot first-appear fetch.
-                await dispatch.run(.refresh)
+                await sendEvent.run(.refresh)
             }
             .navigationTitle("Hacker News")
     }
@@ -108,7 +108,7 @@ private struct SearchResults: View {
 
 private struct StoriesList: View {
     let state: AppState
-    @Environment(\.dispatch) private var dispatch
+    @Environment(\.sendEvent) private var sendEvent
 
     var body: some View {
         List {
@@ -128,13 +128,13 @@ private struct StoriesList: View {
             }
         }
         .listStyle(.insetGrouped)
-        .refreshable { await dispatch.run(.refresh) }
+        .refreshable { await sendEvent.run(.refresh) }
     }
 }
 
 private struct LoadMoreRow: View {
     let status: LoadStatus
-    @Environment(\.dispatch) private var dispatch
+    @Environment(\.sendEvent) private var sendEvent
 
     // Forces a fresh `ProgressView` instance on every row appearance.
     // SwiftUI's `ProgressView` wraps `UIActivityIndicatorView`, which
@@ -158,7 +158,7 @@ private struct LoadMoreRow: View {
                     .id(spinId)
                     .opacity(showError ? 0 : 1)
 
-                Button("Try again") { dispatch(.loadMore) }
+                Button("Try again") { sendEvent(.loadMore) }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .opacity(showError ? 1 : 0)
@@ -168,7 +168,7 @@ private struct LoadMoreRow: View {
         .animation(.default, value: status)
         .onAppear {
             spinId &+= 1
-            dispatch(.loadMore)
+            sendEvent(.loadMore)
         }
     }
 }
@@ -249,13 +249,13 @@ private struct SearchHeader: View {
 
 private struct StoryRow: View {
     let story: Story
-    @Environment(\.dispatch) private var dispatch
+    @Environment(\.sendEvent) private var sendEvent
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if story.url != nil {
                 Button {
-                    dispatch(.openStory(id: story.id))
+                    sendEvent(.openStory(id: story.id))
                 } label: {
                     Text(story.title)
                         .font(.body)
@@ -278,7 +278,7 @@ private struct StoryRow: View {
                 story.isRead ? "Mark Unread" : "Mark Read",
                 systemImage: story.isRead ? "circle" : "checkmark.circle.fill"
             ) {
-                dispatch(.toggleRead(id: story.id))
+                sendEvent(.toggleRead(id: story.id))
             }
             .tint(.blue)
         }
