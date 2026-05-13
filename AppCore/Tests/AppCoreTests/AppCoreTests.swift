@@ -1,4 +1,5 @@
 import Clocks
+import ConcurrencyExtras
 import Foundation
 import Testing
 @testable import AppCore
@@ -206,45 +207,56 @@ struct AppCoreTests {
         #expect(await core.search.initialStatus.isLoading == false)
     }
 
+    /// Wrapped in `withMainSerialExecutor` because the listener task
+    /// (running on `TestCore`'s isolation) and the explicit `t1/t2/t3`
+    /// Tasks race against the same `tasks[.search]` slot, and the
+    /// new isolation-inheriting class has one extra suspension at
+    /// Task creation (the `@isolated(any)` hop in `isolatedTask`) —
+    /// that's enough to let listener-spawned tasks register *during*
+    /// `clock.advance(by:)` and have their sleeps unblocked by the
+    /// same advance call. Serial-executor mode makes Task scheduling
+    /// deterministic so only the intended last-writer survives.
     @Test("rapid runSearchFetch calls coalesce — only the latest fires")
     func runSearchFetch_coalescesRapidKeystrokes() async {
-        let calls = CallRecorder()
-        let clock = TestClock()
-        let core = makeCore(
-            search: { query, p in
-                await calls.recordSearch(query, page: p)
-                return page([storyA])
-            },
-            clock: clock
-        )
+        await withMainSerialExecutor {
+            let calls = CallRecorder()
+            let clock = TestClock()
+            let core = makeCore(
+                search: { query, p in
+                    await calls.recordSearch(query, page: p)
+                    return page([storyA])
+                },
+                clock: clock
+            )
 
-        // Three back-to-back keystrokes; each runSearchFetch cancels the
-        // prior in-flight searchTask, so only the latest query fires.
-        await core.with { $0.searchQuery = "ru" }
-        let t1 = Task { [core] in
-            await core.runSearchFetch(query: "ru", debounce: TestCore.searchDebounce)
-        }
-        await Task.megaYield()
-        await core.with { $0.searchQuery = "rus" }
-        let t2 = Task { [core] in
-            await core.runSearchFetch(query: "rus", debounce: TestCore.searchDebounce)
-        }
-        await Task.megaYield()
-        await core.with { $0.searchQuery = "rust" }
-        let t3 = Task { [core] in
-            await core.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce)
-        }
-        await Task.megaYield()
+            // Three back-to-back keystrokes; each runSearchFetch cancels the
+            // prior in-flight searchTask, so only the latest query fires.
+            await core.with { $0.searchQuery = "ru" }
+            let t1 = Task { [core] in
+                await core.runSearchFetch(query: "ru", debounce: TestCore.searchDebounce)
+            }
+            await Task.megaYield()
+            await core.with { $0.searchQuery = "rus" }
+            let t2 = Task { [core] in
+                await core.runSearchFetch(query: "rus", debounce: TestCore.searchDebounce)
+            }
+            await Task.megaYield()
+            await core.with { $0.searchQuery = "rust" }
+            let t3 = Task { [core] in
+                await core.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce)
+            }
+            await Task.megaYield()
 
-        await clock.advance(by: TestCore.searchDebounce)
-        await t1.value
-        await t2.value
-        await t3.value
+            await clock.advance(by: TestCore.searchDebounce)
+            await t1.value
+            await t2.value
+            await t3.value
 
-        let recorded = await calls.searchCalls
-        #expect(recorded.map(\.0) == ["rust"])
-        #expect(await core.searchQuery == "rust")
-        #expect(await core.searchResults.map(\.id) == ["100"])
+            let recorded = await calls.searchCalls
+            #expect(recorded.map(\.0) == ["rust"])
+            #expect(await core.searchQuery == "rust")
+            #expect(await core.searchResults.map(\.id) == ["100"])
+        }
     }
 
     @Test("refresh while a search is in flight re-runs the current search, not the feed")

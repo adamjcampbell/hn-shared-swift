@@ -266,6 +266,11 @@ final class AppCore {
             if let debounce {
                 try await clock.sleep(for: debounce)
             }
+            // Cancellation may land between `sleep` returning and
+            // `body` running — sleep's own check passed, then a fresh
+            // `tasks[.search] = …` arrived. The post-sleep check
+            // catches that window before we commit a stale page.
+            try Task.checkCancellation()
             do {
                 return try await body(client)
             } catch let urlError as URLError where urlError.code == .cancelled {
