@@ -41,12 +41,9 @@ public final class AppCore {
         )
         self.handler = handler
 
+        let mutator = MainActorMutator(self.state)
         handler.assumeIsolated { handler in
-            handler.acquireState = { mutation in
-                MainActor.assumeIsolated {
-                    mutation(self.state)
-                }
-            }
+            handler.state = StateAccess(mutator)
         }
     }
 
@@ -67,12 +64,9 @@ public final class AppCore {
         )
         self.handler = handler
 
+        let mutator = MainActorMutator(self.state)
         handler.assumeIsolated { handler in
-            handler.acquireState = { mutation in
-                MainActor.assumeIsolated {
-                    mutation(self.state)
-                }
-            }
+            handler.state = StateAccess(mutator)
         }
     }
 
