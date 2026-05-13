@@ -34,7 +34,6 @@ public actor TestCore {
             client: client,
             clock: clock
         )
-        appCore.bootstrap()
     }
 
     /// Mirrors `AppCore.searchDebounce` so test sites can say

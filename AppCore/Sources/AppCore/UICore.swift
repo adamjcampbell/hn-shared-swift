@@ -41,7 +41,6 @@ public struct UICore {
             client: client,
             clock: clock
         )
-        appCore.bootstrap()
     }
 
     /// Single entry point for every user-driven mutation.

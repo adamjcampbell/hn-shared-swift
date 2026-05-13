@@ -45,19 +45,17 @@ final class AppCore {
         commands: AsyncStream<AppCommand>,
         commandsContinuation: AsyncStream<AppCommand>.Continuation,
         client: HNClient,
-        clock: any Clock<Duration>
+        clock: any Clock<Duration>,
+        isolation: isolated (any Actor)? = #isolation
     ) {
         self.state = state
         self.commands = commands
         self.commandsContinuation = commandsContinuation
         self.client = client
         self.clock = clock
-    }
-
-    /// Post-construction setup the shell calls directly. Spawns the
-    /// search-query listener via `isolatedTask` so the long-lived Task
-    /// runs on the same isolation as the rest of the workhorse.
-    func bootstrap(isolation: isolated (any Actor)? = #isolation) {
+        // Long-lived listener on the caller's isolation. `isolatedTask`
+        // carries the dynamic isolation through `sending` + `@isolated(any)`
+        // so the closure can capture non-Sendable `self`.
         tasks[.searchListener] = isolatedTask { [self] in
             for await query in state.searchQueryChanges {
                 if query.isEmpty {
