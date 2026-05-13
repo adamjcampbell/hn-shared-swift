@@ -4,26 +4,13 @@ import Observation
 import FoundationNetworking
 #endif
 
-/// Workhorse for `UICore`. Plain `final class` (not `Sendable`); all
-/// methods take `isolation: isolated (any Actor)? = #isolation`
-/// (SE-0420), inheriting the caller's isolation statically. From
-/// `@MainActor` `UICore`, methods run on MainActor; from a per-test
-/// `TestCore` actor, on that actor.
+/// Workhorse for `UICore`. Non-`Sendable` `final class`; async and
+/// Task-spawning methods take `isolation: isolated (any Actor)? =
+/// #isolation` (SE-0420) so they inherit the caller's isolation
+/// statically. Sync internal mutators omit the parameter — `self` is
+/// reached through the caller's region with direct property access.
 ///
-/// Because the class is non-Sendable, its instance lives in exactly
-/// one isolation region at a time — the one in which it was
-/// constructed. `state: AppState` is a direct stored property; no
-/// shim, no `assumeIsolated`.
-///
-/// Internal sync mutation methods (`toggleRead`, `openStory`,
-/// `clearSearch`) deliberately omit the `isolation` parameter — they
-/// don't spawn Tasks and don't call other isolation-inheriting helpers
-/// in a way that requires forwarding. Region isolation tracks `self`
-/// through the caller's region and direct property access is fine.
-/// Any method that spawns an `isolatedTask` (or calls something that
-/// does) must keep the parameter so `#isolation` propagates through.
-///
-/// Not bridged to Kotlin. `UICore` re-exposes the public surface.
+/// Not bridged to Kotlin; `UICore` re-exposes the public surface.
 final class AppCore {
     let state: AppState
 
@@ -274,10 +261,9 @@ final class AppCore {
             if let debounce {
                 try await clock.sleep(for: debounce)
             }
-            // Cancellation may land between `sleep` returning and
-            // `body` running — sleep's own check passed, then a fresh
-            // `tasks[.search] = …` arrived. The post-sleep check
-            // catches that window before we commit a stale page.
+            // `Clock.sleep` honours cancellation, but a mock `body` that
+            // ignores cancellation would fall through and commit a stale
+            // page. The explicit check covers that test seam.
             try Task.checkCancellation()
             do {
                 return try await body(client)
@@ -304,22 +290,9 @@ final class AppCore {
 }
 
 /// Spawn an unstructured `Task` whose body runs on the caller's
-/// isolation. `@isolated(any)` (SE-0431) stores the caller's dynamic
-/// isolation in the closure value; the inner `Task { await body() }`
-/// hops to that isolation when invoking it. This lets the closure
-/// body capture non-Sendable values (e.g. `self` on `AppCore`) and
-/// reach them safely — exactly the affordance a real `actor` would
-/// give for free, but available to an isolation-inheriting class.
-///
-/// The combination of attributes:
-/// - `isolated (any Actor)? = #isolation` — captures the caller's
-///   isolation at the call site (SE-0420).
-/// - `@isolated(any)` — closure value carries that isolation; the
-///   inner `Task` hops to it when calling `body()` (SE-0431).
-/// - `sending` — the closure (which captures non-Sendable values) is
-///   transferred to `isolatedTask`'s region rather than treated as
-///   shared; combined with the hop-back-on-invoke, the caller can
-///   keep using its captures safely (SE-0430).
+/// isolation. `sending @isolated(any)` carries that isolation through
+/// the inner `Task`'s `@Sendable` boundary so the closure can capture
+/// non-Sendable values (e.g. `self` on `AppCore`).
 func isolatedTask(
     isolation: isolated (any Actor)? = #isolation,
     _ body: sending @escaping @isolated(any) () async -> Void

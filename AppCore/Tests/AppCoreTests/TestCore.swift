@@ -1,19 +1,10 @@
 import Foundation
 @testable import AppCore
 
-/// Per-test isolation shell. Each `TestCore` instance is its own
-/// `actor` with its own executor; the `AppCore` workhorse it owns is
-/// a non-Sendable class constructed in this actor's isolation.
-///
-/// Different `TestCore` instances → different executors → state
-/// mutations across tests run in parallel.
-///
-/// All access — reads, writes, and workhorse calls — flows through
-/// `core.run { … }` (Point-Free `Actor.run`, Video #362). Multiple
-/// reads grouped inside a single `run` block share one isolation hop
-/// AND a single consistent snapshot of state (Video #364 "Isolation:
-/// Performance" — the "smart actor" pattern that prevents
-/// interleaved reads from seeing inconsistent state).
+/// Per-test isolation shell. Each `TestCore` is its own actor —
+/// different instances run on different executors, so tests parallelise.
+/// All access flows through `core.run { … }`, which gives the closure
+/// a single consistent snapshot for grouped reads.
 public actor TestCore {
     public let state: AppState
     public nonisolated let commands: AsyncStream<AppCommand>
@@ -36,9 +27,6 @@ public actor TestCore {
         )
     }
 
-    /// Mirrors `AppCore.searchDebounce` so test sites can say
-    /// `TestCore.searchDebounce` instead of `AppCore.searchDebounce`,
-    /// keeping the test surface in terms of the test shell.
     public static let searchDebounce: Duration = AppCore.searchDebounce
 }
 

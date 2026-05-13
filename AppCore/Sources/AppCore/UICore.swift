@@ -1,19 +1,10 @@
 import Foundation
 import Observation
 
-/// `@MainActor`-pinned UI-facing shell. Bridged to Kotlin via Skip;
-/// SwiftUI and Compose both consume this type.
-///
-/// Owns `AppState` and the commands stream. Delegates all orchestration
-/// to an `AppCore` workhorse — a non-Sendable `final class` whose
-/// methods inherit isolation via `isolation: isolated (any Actor)?
-/// = #isolation` (SE-0420). Because the workhorse is constructed and
-/// only ever called from this `@MainActor` shell, every workhorse
-/// call inherits MainActor isolation statically — direct
-/// non-Sendable `AppState` access, no shim, no `assumeIsolated`.
-///
-/// Named `UICore` (vs. `MainActorCore`) so the symmetry with `TestCore`
-/// is by *domain* (UI vs. tests) rather than implementation mechanism.
+/// `@MainActor` UI-facing shell. Bridged to Kotlin via Skip; SwiftUI
+/// and Compose both consume this type. Owns `AppState` and the
+/// commands stream; the non-Sendable `AppCore` workhorse it holds
+/// inherits MainActor isolation from this struct's calls.
 // SKIP @bridgeMembers
 @MainActor
 public struct UICore {

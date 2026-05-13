@@ -223,15 +223,9 @@ struct AppCoreTests {
         await core.run { #expect($0.state.search.initialStatus.isLoading == false) }
     }
 
-    /// Wrapped in `withMainSerialExecutor` because the listener task
-    /// (running on `TestCore`'s isolation) and the explicit `t1/t2/t3`
-    /// Tasks race against the same `tasks[.search]` slot, and the
-    /// new isolation-inheriting class has one extra suspension at
-    /// Task creation (the `@isolated(any)` hop in `isolatedTask`) —
-    /// that's enough to let listener-spawned tasks register *during*
-    /// `clock.advance(by:)` and have their sleeps unblocked by the
-    /// same advance call. Serial-executor mode makes Task scheduling
-    /// deterministic so only the intended last-writer survives.
+    /// The listener and the explicit `t1/t2/t3` Tasks race for the same
+    /// `tasks[.search]` slot; `withMainSerialExecutor` forces deterministic
+    /// scheduling so the last-writer assertion is reliable.
     @Test("rapid runSearchFetch calls coalesce — only the latest fires")
     func runSearchFetch_coalescesRapidKeystrokes() async {
         await withMainSerialExecutor {
