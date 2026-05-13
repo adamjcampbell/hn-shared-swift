@@ -53,6 +53,21 @@ private func page(_ hits: [HNHit], totalPages: Int = 1) -> HNPage {
     HNPage(hits: hits, totalPages: totalPages)
 }
 
+private extension TestCore {
+    /// Drive the listener-debounced search end-to-end: set the query,
+    /// advance past the debounce, and let the commit land. Use when
+    /// the test only cares about the post-commit state. Tests that
+    /// assert mid-flight (during loading, during debounce) should
+    /// inline the steps instead.
+    func commitSearch(_ query: String, clock: TestClock<Duration>) async {
+        await Task.megaYield()
+        await self.run { $0.state.searchQuery = query }
+        await Task.megaYield()
+        await clock.advance(by: Self.searchDebounce)
+        await Task.megaYield()
+    }
+}
+
 @Suite("AppCore")
 struct AppCoreTests {
 
@@ -185,11 +200,7 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await Task.megaYield()
-        await core.run { $0.state.searchQuery = "rust" }
-        await Task.megaYield()
-        await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.commitSearch("rust", clock: clock)
 
         await core.run { core in
             #expect(core.state.searchQuery == "rust")
@@ -341,11 +352,7 @@ struct AppCoreTests {
         let feedBefore = await core.run { $0.state.feedStories.map(\.id) }
         let frontPageBefore = await calls.frontPageCalls.count
 
-        await Task.megaYield()
-        await core.run { $0.state.searchQuery = "rust" }
-        await Task.megaYield()
-        await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.commitSearch("rust", clock: clock)
         await core.run { #expect($0.state.searchResults.map(\.id) == ["100"]) }
 
         await core.run { $0.state.searchQuery = "" }
@@ -379,11 +386,7 @@ struct AppCoreTests {
         let feedSnapshot = await core.run { $0.state.feedStories.map(\.id) }
         #expect(feedSnapshot == ["100", "101"])
 
-        await Task.megaYield()
-        await core.run { $0.state.searchQuery = "x" }
-        await Task.megaYield()
-        await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.commitSearch("x", clock: clock)
 
         await core.run { core in
             #expect(core.state.searchResults.map(\.id) == ["100"])
@@ -492,11 +495,7 @@ struct AppCoreTests {
         await core.run { await $0.appCore.dispatch(.toggleRead(id: storyA.id)) }
         await core.run { #expect($0.state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true) }
 
-        await Task.megaYield()
-        await core.run { $0.state.searchQuery = "x" }
-        await Task.megaYield()
-        await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.commitSearch("x", clock: clock)
 
         await core.run { #expect($0.state.searchResults.first?.isRead == true) }
 
@@ -639,11 +638,7 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await Task.megaYield()
-        await core.run { $0.state.searchQuery = "x" }
-        await Task.megaYield()
-        await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.commitSearch("x", clock: clock)
         await core.run { core in
             #expect(core.state.searchResults.map(\.id) == ["100"])
             #expect(core.state.search.loadedHits?.hasMore == true)
@@ -672,11 +667,7 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await Task.megaYield()
-        await core.run { $0.state.searchQuery = "x" }
-        await Task.megaYield()
-        await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.commitSearch("x", clock: clock)
         await core.run { #expect($0.state.search.loadedHits?.hasMore == true) }
 
         let loadMore = Task { [core] in
