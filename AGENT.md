@@ -76,10 +76,10 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   is a test seam — its parameter types (`HNClient` closure-bag,
   `any Clock<Duration>` existential) don't bridge, and it's
   unmarked.
-- **`runFetch` is intentionally not bridged.** It's internal
-  coordination called from `dispatch(.refresh)` and
-  `runSearchQueryWatcher`; both of those *are* bridged and that's
-  enough surface for Android.
+- **`AppCore` (workhorse class) is intentionally not bridged.**
+  It's internal coordination — `dispatch`, `scheduleSearchFetch`,
+  `makeFetchTask`, the listener Task. `UICore` re-exposes the only
+  surface bridging needs (`dispatch`, `state`, `commands`).
 
 ### iOS view layer
 
@@ -119,14 +119,18 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 ### Concurrency / testing
 
 - **Inject `clock: any Clock<Duration>` into `AppCore` for tests.**
-  Default is `ContinuousClock()`. `runFetch`'s Task body uses
-  `clock.sleep(for:)` for the debounce wait. Tests pass a `TestClock`
-  (from `pointfreeco/swift-clocks`) and call `clock.advance(by:)` to
-  release suspended sleepers atomically.
-- **`try` (not `try?`) on the debounce `clock.sleep`.** The Task body
-  uses `try await clock.sleep(for: debounce)` and lets the throw
-  propagate. Swallowing it would let cancelled tasks fall through to
-  the client's fetch call.
+  Default is `ContinuousClock()`. `makeFetchTask`'s body uses
+  `clock.sleep(for:)` for the search debounce. Tests pass a
+  `TestClock` (from `pointfreeco/swift-clocks`) and call
+  `clock.advance(by:)` to release suspended sleepers atomically.
+  The `TestCore.commitSearch(_:clock:)` helper packages the
+  listener-debounce-settle pattern (`searchQuery = X` → megaYield →
+  advance → megaYield) for tests that only care about the
+  post-commit state.
+- **`try` (not `try?`) on the debounce `clock.sleep`.** The fetch
+  Task body uses `try await clock.sleep(for: debounce)` and lets the
+  throw propagate. Swallowing it would let cancelled tasks fall
+  through to the client's fetch call.
 - **Networking on Android requires `import FoundationNetworking`**
   inside `#if canImport(FoundationNetworking)`. Without the
   conditional import, the cross-compile fails on `URLSession`.
@@ -154,28 +158,40 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   Android too. `skipstone` wraps cdecl thunks for `@MainActor`-
   isolated members in `SkipBridge.assumeMainActorUnchecked { ... }`
   (which is `MainActor.assumeIsolated`).
-- **Architecture: `AppCore` shell + `AppCoreActor` workhorse.**
-  `AppCore` (production, `@MainActor` struct) owns `AppState` and
-  is the bridged public surface; copying the struct shares the
-  underlying `AppState` and `AppCoreActor` references, so `@State`
-  in `RootView` is still the single owning location. `AppCoreActor`
-  is a real `actor` whose `unownedExecutor` is borrowed from an
-  `isolation: any Actor` init parameter (SE-0392). Production
-  passes `MainActor.shared`, so `AppCoreActor`'s executor IS
-  MainActor's. All orchestration lives on `AppCoreActor`; it
-  reaches the non-`Sendable` `AppState` via a `StateAccess` shim
-  (`@dynamicMemberLookup` struct wrapping `any StateMutator`) that
-  the shell installs post-init via
-  `handler.assumeIsolated { handler.state = StateAccess(mutator) }`.
-  Production uses `MainActorMutator`, which routes reads and writes
-  through `MainActor.assumeIsolated` — a runtime no-op given the
-  borrowed executor. The `sending` (not `@Sendable`) closure
-  parameters on `StateMutator` keep keypath captures Sendable-free
-  and remove the `@unchecked Sendable` workarounds the older
-  closure-based design needed. Same `AppCoreActor` type also serves
-  `TestCore` (in Tests/), a per-instance actor that gives tests
-  parallel state-mutation isolation (~4× speedup on the AppCore
-  suite).
+- **Architecture: `UICore` shell + `AppCore` workhorse class.**
+  `UICore` (production, `@MainActor public struct`) owns `AppState`
+  and is the bridged public surface; copying the struct shares the
+  underlying `AppState` and `AppCore` references, so `@State` in
+  `RootView` is still the single owning location. `AppCore` is a
+  non-`Sendable` `final class` — explicitly *not* an actor. Its
+  async methods carry `isolation: isolated (any Actor)? = #isolation`
+  (SE-0420) and inherit the caller's isolation statically; when
+  called from `UICore` they run on `MainActor` and access the
+  non-`Sendable` `state` directly via property access (no shim).
+  The long-lived `searchQuery` listener Task is spawned via
+  `isolatedTask` (a free helper using `sending @isolated(any)`,
+  SE-0431 + SE-0430), the only construction that can capture
+  non-`Sendable` `self` into an unstructured Task while preserving
+  the caller's actor.
+- **`dispatch` is the single orchestration entry.** All four
+  fetch flows (feed refresh / feed load-more / search refresh /
+  search load-more) plus `toggleRead` / `openStory` live inline as
+  switch arms in `AppCore.dispatch(_:)`. The intentional duplication
+  is the point — each arm reads top-to-bottom for its event with
+  no helper jumps. The one method that survives outside `dispatch`
+  is `scheduleSearchFetch`, kept private because nesting
+  `isolatedTask` inside the listener's `@isolated(any)` body trips
+  SE-0461 region isolation; the method-level isolation parameter
+  is the load-bearing escape hatch.
+- **Tests substitute `TestCore` (per-instance `actor`).**
+  Different `TestCore`s run on different executors so tests
+  parallelise. `TestCore.run { ... }` is the Point-Free actor-run
+  hop for grouped snapshot reads. `TestCore` carries an `isolated
+  deinit` (SE-0371, Swift 6.2) that calls `appCore.shutdown()` —
+  this breaks the `TaskRegistry → listener-Task → self` cycle when
+  each test releases. (Requires macOS 15.4 floor for SE-0371;
+  iOS floor stays at 17 because production `UICore` is app-lifetime
+  and never deinits.)
 
 ## Build & test
 
