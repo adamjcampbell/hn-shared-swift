@@ -32,7 +32,7 @@ final class AppCore {
     private let client: HNClient
     private let clock: any Clock<Duration>
 
-    enum TaskID { case feed, feedMore, search, searchMore, searchListener }
+    enum TaskID { case feed, feedMore, search, searchCommit, searchMore, searchListener }
     private var tasks = TaskRegistry<TaskID>()
 
     /// Debounce window between a `state.searchQuery` write and the
@@ -63,7 +63,7 @@ final class AppCore {
                 if query.isEmpty {
                     clearSearch()
                 } else {
-                    await scheduleSearchFetch(query: query, debounce: Self.searchDebounce)
+                    scheduleSearchFetch(query: query, debounce: Self.searchDebounce)
                 }
             }
         }
@@ -105,6 +105,7 @@ final class AppCore {
     /// the projection never observes a partially-cleared state.
     func clearSearch() {
         tasks[.search] = nil
+        tasks[.searchCommit] = nil
         tasks[.searchMore] = nil
         state.search = LoadableHits()
     }
@@ -211,34 +212,43 @@ final class AppCore {
         }
     }
 
-    /// Fire-and-forget debounced search fetch: parks the network call
-    /// in `tasks[.search]` and returns immediately, so the listener
-    /// stays responsive to a backspace-to-empty arriving mid-debounce.
-    ///
-    /// The trailing `isolatedTask { [self] in … }` awaits `task.value`
-    /// on the caller's isolation so the success/failure commit and any
-    /// `state.…` access happen there.
+    /// Fire-and-forget debounced search fetch. Parks the network call
+    /// in `tasks[.search]` (cancellable via newer fetch or `clearSearch`)
+    /// and the trailing commit awaiter in `tasks[.searchCommit]` so a
+    /// backspace-to-empty mid-debounce can cancel both halves.
     private func scheduleSearchFetch(
         query: String,
         debounce: Duration,
         isolation: isolated (any Actor)? = #isolation
-    ) async {
+    ) {
         tasks[.searchMore] = nil
-        state.search.loadMoreStatus = LoadStatus()
-        state.search.initialStatus.startLoading()
+        // Skip the no-op write when the second/third keystroke arrives
+        // while we're already loading — avoids re-firing `@Observable`
+        // notifications (→ SwiftUI/Compose recomposition) per character.
+        if state.search.loadMoreStatus != LoadStatus() {
+            state.search.loadMoreStatus = LoadStatus()
+        }
+        if !state.search.initialStatus.isLoading {
+            state.search.initialStatus.startLoading()
+        }
 
         let task = makeFetchTask(debounce: debounce) { client in
             try await client.search(query, 0)
         }
         tasks[.search] = task
 
-        _ = isolatedTask { [self] in
+        // Registering the commit Task closes a race: if a `clearSearch`
+        // lands between `task.value` resolving and the state write, the
+        // commit would otherwise repopulate cleared state. The
+        // post-await `checkCancellation` is what observes that cancel.
+        tasks[.searchCommit] = isolatedTask { [self] in
             do {
                 let page = try await task.value
+                try Task.checkCancellation()
                 let ids = state.upsert(page)
                 state.search.receiveInitialPage(ids, totalPages: page.totalPages)
             } catch is CancellationError {
-                // Newer fetch will clear loading when it commits.
+                // Newer fetch (or clearSearch) clears loading when it commits.
             } catch {
                 state.search.initialStatus.finishFailure(error.localizedDescription)
             }
