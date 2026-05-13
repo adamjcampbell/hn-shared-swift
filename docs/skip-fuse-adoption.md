@@ -43,7 +43,7 @@ Android — Compose now reads the bridged AppCore directly. No
 ```kotlin
 @Composable
 fun StoryScreen() {
-    val appModel = rememberAppModel()
+    val appCore = rememberAppCore()
     val state = appModel.state
 
     LaunchedEffect(appModel) { appModel.dispatch(AppEvent.refresh) }
@@ -121,10 +121,10 @@ public func AppState_Swift_searchQuery(...) -> JavaString {
     }
 }
 
-@_cdecl("Java_app_core_AppModel_Swift_1callback_1dispatch_11")
-public func AppModel_Swift_callback_dispatch_1(...) {
+@_cdecl("Java_app_core_AppCore_Swift_1callback_1dispatch_11")
+public func AppCore_Swift_callback_dispatch_1(...) {
     let f_callback_swift = ...
-    let peer_swift: AppModel = Swift_peer.pointee()!
+    let peer_swift: AppCore = Swift_peer.pointee()!
     let p_0_swift = AppEvent.fromJavaObject(p_0, options: [])
     Task {
         await peer_swift.dispatch(p_0_swift)
@@ -171,7 +171,7 @@ upstream.
 
 ### Verified empirically
 
-`AppModel` and `AppEventHandler` are pinned to `@MainActor`. This
+`AppCore` and `AppCoreActor` are pinned to `@MainActor`. This
 produces:
 
 - A clean `swift build` (the `// SKIP @bridge` markers stay the same).

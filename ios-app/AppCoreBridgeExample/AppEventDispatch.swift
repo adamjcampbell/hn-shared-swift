@@ -3,40 +3,40 @@ import AppCore
 
 /// Capability-style action exposed via `@Environment(\.dispatch)`. Mirrors
 /// the ergonomic of SwiftUI's `DismissAction`: child views call
-/// `dispatch(.someEvent)` without ever holding a reference to `AppModel`.
+/// `dispatch(.someEvent)` without ever holding a reference to `AppCore`.
 ///
-/// The wrapper holds the `AppModel` directly rather than an arbitrary
+/// The wrapper holds the `AppCore` directly rather than an arbitrary
 /// closure so it can implement `Equatable` via `===`. Without that,
 /// SwiftUI's reflection-based environment diffing would treat the value
 /// as changed on every parent body re-evaluation (closures are neither
 /// equatable nor reference-comparable in Swift) and invalidate every
 /// descendant reading the key.
 ///
-/// The model is optional so the default environment value is a real
-/// no-op (no throwaway `AppModel` allocation) for views rendered outside
+/// The core is optional so the default environment value is a real
+/// no-op (no throwaway `AppCore` allocation) for views rendered outside
 /// an installed `\.dispatch` (e.g. previews).
 struct AppEventDispatch: Equatable {
-    private let model: AppModel?
+    private let core: AppCore?
 
-    init(_ model: AppModel? = nil) {
-        self.model = model
+    init(_ core: AppCore? = nil) {
+        self.core = core
     }
 
     /// Fire-and-forget. Used by tap handlers and `onChange` call sites.
     @MainActor
     func callAsFunction(_ event: AppEvent) {
-        Task { @MainActor [model] in await model?.dispatch(event) }
+        Task { @MainActor [core] in await core?.dispatch(event) }
     }
 
     /// Awaitable. Use from `.refreshable` so the pull-to-refresh spinner
     /// stays visible until the dispatch actually completes.
     @MainActor
     func run(_ event: AppEvent) async {
-        await model?.dispatch(event)
+        await core?.dispatch(event)
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.model === rhs.model
+        lhs.core === rhs.core
     }
 }
 

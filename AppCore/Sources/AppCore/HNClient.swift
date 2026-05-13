@@ -7,14 +7,14 @@ import FoundationNetworking
 ///
 /// **Closure-struct shape, not a class.** The struct holds two
 /// `@Sendable` closure properties — `frontPage` and `search` — which
-/// `AppModel` calls. This is the natural mock point: tests inject
+/// `AppCoreActor` calls. This is the natural mock point: tests inject
 /// closures directly without going through `URLSession` or
 /// `URLProtocol`. Production callers use the no-arg `init()`, which
 /// wires the closures to `URLSession.shared`-style live HTTP.
 ///
 /// **`Sendable`.** All properties are `@Sendable` closures of
 /// `Sendable` types, so the whole struct is `Sendable`. That's what
-/// makes the cancel-and-replace pattern in `AppModel` work: the
+/// makes the cancel-and-replace pattern in `AppCoreActor` work: the
 /// unstructured `Task` that issues the HTTP call captures `[client]`
 /// directly, with no `self` capture, so the closure has no
 /// non-Sendable region to send across.

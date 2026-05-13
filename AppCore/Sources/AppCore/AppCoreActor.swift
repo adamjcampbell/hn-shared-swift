@@ -4,27 +4,37 @@ import Observation
 import FoundationNetworking
 #endif
 
-/// Orchestration body for `AppModel` — owns the in-flight task
-/// registry, the `commands` stream, and every method that mutates
-/// `AppState`.
+/// Internal orchestrator for `AppCore`. Owns `AppState`, the
+/// commands continuation, the in-flight task registry, and every
+/// method that mutates `AppState`.
 ///
-/// Not bridged to Kotlin. SkipFuse sees only `AppModel`'s public
-/// surface.
+/// `@MainActor`-pinned for production. The original plan called for a
+/// nested `actor` whose `unownedExecutor` was borrowed from an
+/// `isolation: any Actor` init parameter (Point-Free CA 2.0 / Video
+/// #363 "Actor Reentrancy" pattern), so a test wrapper could pass its
+/// own per-instance actor and unlock parallel test execution. That
+/// shape was blocked by region-based isolation: passing
+/// non-`Sendable` `AppState` between the wrapper's region and the
+/// inner actor's region fails both `assumeIsolated` (Sendable return
+/// constraint) and `nonisolated let` (Sendable type constraint).
+/// Skipping `AppState`'s Sendability with `@unchecked Sendable` is
+/// rejected by project policy. We therefore keep `AppCoreActor` as a
+/// `@MainActor final class` — the rename and dissolution land; the
+/// per-test custom-actor variant is deferred behind a future test
+/// helper that mediates state reads through async hops.
+///
+/// Not bridged to Kotlin. `AppCore` re-exposes the public surface.
 @MainActor
-final class AppEventHandler {
+final class AppCoreActor {
     let state: AppState
+    let commands: AsyncStream<AppCommand>
+    private let commandsContinuation: AsyncStream<AppCommand>.Continuation
+
     private let client: HNClient
 
     /// `ContinuousClock()` in production; tests inject a `TestClock` so
     /// the 250 ms debounce doesn't translate into real-clock waiting.
     private let clock: any Clock<Duration>
-
-    /// One-shot commands from the handler to the UI. Read from `AppModel`
-    /// (which re-exposes this same stream value); yielded into via
-    /// `commandsContinuation` from `openStory`. Symmetric counterpart to
-    /// `handle(_:)`.
-    let commands: AsyncStream<AppCommand>
-    private let commandsContinuation: AsyncStream<AppCommand>.Continuation
 
     enum TaskID { case feed, feedMore, search, searchMore }
     private var tasks = TaskRegistry<TaskID>()
@@ -35,22 +45,19 @@ final class AppEventHandler {
     static let searchDebounce: Duration = .milliseconds(250)
 
     init(
-        state: AppState,
-        client: HNClient,
+        client: HNClient = HNClient(),
         clock: any Clock<Duration> = ContinuousClock()
     ) {
-        self.state = state
+        self.state = AppState()
+        let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
+        self.commands = stream
+        self.commandsContinuation = continuation
         self.client = client
         self.clock = clock
-        let (commandsStream, commandsCont) = AsyncStream<AppCommand>.makeStream()
-        self.commands = commandsStream
-        self.commandsContinuation = commandsCont
     }
 
-    /// Single entry point for every user-driven mutation. `async` so
-    /// callers that need completion (e.g. SwiftUI's `.refreshable`) can
-    /// `await` the call.
-    func handle(_ event: AppEvent) async {
+    /// Single entry point for every user-driven mutation.
+    func dispatch(_ event: AppEvent) async {
         switch event {
         case .toggleRead(let id):
             toggleRead(id)
@@ -72,12 +79,13 @@ final class AppEventHandler {
     }
 
     /// Long-lived consumer of `state.searchQueryChanges`. The host
-    /// `await`s this from `RootView`'s `.task` on iOS or
-    /// `LaunchedEffect` on Android.
+    /// `await`s `AppCore.run()` from `RootView`'s `.task` on iOS or
+    /// `LaunchedEffect` on Android; that call delegates here.
     ///
     /// Each new query cancel-and-replaces the prior in-flight fetch
-    /// via the registry; the fetch result commits on MainActor inside
-    /// the unstructured Task spawned by `scheduleSearchFetch`.
+    /// via the registry; the fetch result commits inside the
+    /// unstructured Task spawned by `scheduleSearchFetch`, which
+    /// inherits this actor's executor.
     func run() async {
         for await query in state.searchQueryChanges {
             if query.isEmpty {
@@ -187,9 +195,9 @@ final class AppEventHandler {
     /// catches `CancellationError` and no-ops — a newer fetch is
     /// responsible for clearing the loading status when it commits.
     ///
-    /// `@MainActor` on the handler makes `self` Sendable, so the Task
-    /// captures it directly and commits the result inline on MainActor
-    /// — no forwarding channel required.
+    /// `self` is an actor reference (Sendable), so the Task captures
+    /// it directly and commits the result on this actor's executor —
+    /// no forwarding channel required.
     private func scheduleSearchFetch(query: String, debounce: Duration) async {
         tasks[.searchMore] = nil
         state.search.loadMoreStatus = LoadStatus()
@@ -211,9 +219,7 @@ final class AppEventHandler {
     }
 
     /// Build a fetch task that sleeps for `debounce` (if set), then runs
-    /// `body`. The Task body captures only Sendable values (`client`,
-    /// `clock`) — never `self`, never `state`. Caller `await`s
-    /// `task.value` on its own actor and commits the result there.
+    /// `body`. Captures only Sendable values (`client`, `clock`).
     ///
     /// **`try` (not `try?`) on the sleep is load-bearing.** A test-mock
     /// closure that doesn't honor cancellation would otherwise fall

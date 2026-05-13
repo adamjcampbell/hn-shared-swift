@@ -23,7 +23,7 @@ let package = Package(
         .package(url: "https://source.skip.tools/skip-fuse.git", from: "1.0.0"),
         .package(url: "https://source.skip.tools/skip-model.git", from: "1.0.0"),
         // Test-only: deterministic time control via TestClock so the
-        // 250 ms debounce in AppModel doesn't translate into 250 ms of
+        // 250 ms debounce in AppCore doesn't translate into 250 ms of
         // real-clock waiting per test.
         .package(url: "https://github.com/pointfreeco/swift-clocks", from: "1.0.0"),
     ],

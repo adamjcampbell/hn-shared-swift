@@ -19,10 +19,10 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 
 ## Goals
 
-- One Swift type (`AppModel`) drives both platforms; one `AppEvent`
+- One Swift type (`AppCore`) drives both platforms; one `AppEvent`
   enum carries every user-driven mutation.
 - iOS: direct `@Observable` + SwiftUI; no bridge in the iOS path.
-  `RootView` owns the singleton `AppModel` and installs an
+  `RootView` owns the singleton `AppCore` and installs an
   `AppEventDispatch` action via `\.dispatch`. Descendants take
   `AppState` (the `@Observable final class`) as a parameter.
 - Android: bridged via SkipFuse. The Compose UI reads `appModel.state`
@@ -33,7 +33,7 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   mutations recompose.
 - Networking lives in Swift: `HNClient` is a `Sendable` struct with two
   `@Sendable` closure properties (`frontPage`, `search`). Tests inject
-  closures directly. Production callers use `AppModel()` which wires
+  closures directly. Production callers use `AppCore()` which wires
   the live `URLSession` HTTP path.
 - Modern Swift concurrency: language mode 6,
   `NonisolatedNonsendingByDefault` (SE-0461), `Observations` (SE-0475),
@@ -72,7 +72,7 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   that produces a Kotlin class with no field accessors (only
   `Identifiable.id` as `ObjectIdentifier`). Always use `@bridgeMembers`
   for whole-type bridging.
-- **`AppModel.init()` is the bridged init.** The `init(client:clock:)`
+- **`AppCore.init()` is the bridged init.** The `init(client:clock:)`
   is a test seam — its parameter types (`HNClient` closure-bag,
   `any Clock<Duration>` existential) don't bridge, and it's
   unmarked.
@@ -86,12 +86,12 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 (Enforced by `ios-app/AppCoreBridgeExample/RootView.swift` +
 `AppEventDispatch.swift`.)
 
-- `AppModel` is held only by `RootView`. Below the root, views accept
+- `AppCore` is held only by `RootView`. Below the root, views accept
   `AppState` (the `@Observable final class`) as a parameter; never
-  `AppModel` itself.
+  `AppCore` itself.
 - Events flow back via `@Environment(\.dispatch)`, an
   `AppEventDispatch` callable struct. The struct is **`Equatable`**
-  (`===` on the held `AppModel`); without that conformance, SwiftUI's
+  (`===` on the held `AppCore`); without that conformance, SwiftUI's
   reflection-based environment diff cannot compare a closure-holding
   value, marks the env entry as changed on every parent body re-eval,
   and invalidates every descendant reading the key.
@@ -114,7 +114,7 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 
 ### Concurrency / testing
 
-- **Inject `clock: any Clock<Duration>` into `AppModel` for tests.**
+- **Inject `clock: any Clock<Duration>` into `AppCore` for tests.**
   Default is `ContinuousClock()`. `runFetch`'s Task body uses
   `clock.sleep(for:)` for the debounce wait. Tests pass a `TestClock`
   (from `pointfreeco/swift-clocks`) and call `clock.advance(by:)` to
@@ -149,7 +149,7 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   Apple's `MainActor` executes on the main thread on Android too.
   `skipstone` wraps cdecl thunks for `@MainActor`-isolated members
   in `SkipBridge.assumeMainActorUnchecked { ... }` (which is
-  `MainActor.assumeIsolated`). `AppModel` and `AppEventHandler` are
+  `MainActor.assumeIsolated`). `AppCore` and `AppCoreActor` are
   pinned to `@MainActor` — see `docs/skip-fuse-adoption.md` §
   Actor isolation. The pinning lets unstructured `Task { [self] in … }`
   inside the handler capture `self` directly; the SE-0461 region-

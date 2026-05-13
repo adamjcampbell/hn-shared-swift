@@ -2,12 +2,12 @@ import SwiftUI
 import AppCore
 
 struct RootView: View {
-    @State private var appModel = AppModel()
+    @State private var appCore = AppCore()
     @State private var presented: IdentifiedURL?
 
     var body: some View {
-        NavigationStack { StoriesScreen(state: appModel.state) }
-            .environment(\.dispatch, AppEventDispatch(appModel))
+        NavigationStack { StoriesScreen(state: appCore.state) }
+            .environment(\.dispatch, AppEventDispatch(appCore))
             .sheet(item: $presented) { item in
                 SafariView(url: item.url)
                     .ignoresSafeArea()
@@ -16,18 +16,16 @@ struct RootView: View {
                 // Long-lived consumer of AppCommand. The sheet binding
                 // lives here in the SwiftUI tree; user-driven dismissal
                 // sets `presented = nil` without touching AppCore.
-                for await command in appModel.commands {
+                for await command in appCore.commands {
                     switch command {
                     case .presentURL(let urlString):
                         presented = IdentifiedURL(urlString)
                     }
                 }
             }
-            // Long-lived background pipeline: merges searchQuery writes
-            // (debounced-schedule) and fetch outcomes (commit) into a
-            // single consumer on this actor. Cancellation propagates
+            // Long-lived background pipeline. Cancellation propagates
             // from this Task when the view goes away.
-            .task { await appModel.run() }
+            .task { await appCore.run() }
     }
 }
 

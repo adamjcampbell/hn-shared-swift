@@ -28,7 +28,7 @@ Both UIs render the same Swift `AppState` instance:
 
 ```kotlin
 // android-app — Compose reads the bridged class directly.
-val state = rememberAppModel().state
+val state = rememberAppCore().state
 TextField(value = state.searchQuery, onValueChange = { state.searchQuery = it })
 LazyColumn { items(state.stories.kotlin() as List<Story>) { StoryRow(it) } }
 ```

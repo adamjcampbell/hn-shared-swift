@@ -61,39 +61,39 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.core.AppCommand
 import app.core.AppEvent
-import app.core.AppModel
+import app.core.AppCore
 import app.core.AppState
 import app.core.LoadStatus
 import app.core.Story
 import com.example.appcore.R
-import com.example.appcore.state.rememberAppModel
+import com.example.appcore.state.rememberAppCore
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StoryScreen() {
-    val appModel = rememberAppModel()
+    val appCore = rememberAppCore()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
     // Initial fetch on first composition.
-    LaunchedEffect(appModel) {
-        appModel.dispatch(AppEvent.refresh)
+    LaunchedEffect(appCore) {
+        appCore.dispatch(AppEvent.refresh)
     }
 
     // Long-lived background pipeline: merges searchQuery writes
     // (debounced-schedule) and fetch outcomes (commit) into a single
     // consumer on this coroutine's actor. Cancellation propagates when
     // this composable leaves the composition.
-    LaunchedEffect(appModel) {
-        appModel.run()
+    LaunchedEffect(appCore) {
+        appCore.run()
     }
 
     // One-shot commands from the core.
-    LaunchedEffect(appModel) {
-        appModel.commands.kotlin().collect { command ->
+    LaunchedEffect(appCore) {
+        appCore.commands.kotlin().collect { command ->
             when (command) {
                 is AppCommand.PresentURLCase -> context.launchCustomTab(command.value)
             }
@@ -113,11 +113,11 @@ fun StoryScreen() {
         },
     ) { innerPadding ->
         StoriesContent(
-            state = appModel.state,
-            onRefresh = { appModel.dispatch(AppEvent.refresh) },
-            onLoadMore = { appModel.dispatch(AppEvent.loadMore) },
-            onToggleRead = { id -> scope.launch { appModel.dispatch(AppEvent.toggleRead(id)) } },
-            onOpenStory = { id -> scope.launch { appModel.dispatch(AppEvent.openStory(id)) } },
+            state = appCore.state,
+            onRefresh = { appCore.dispatch(AppEvent.refresh) },
+            onLoadMore = { appCore.dispatch(AppEvent.loadMore) },
+            onToggleRead = { id -> scope.launch { appCore.dispatch(AppEvent.toggleRead(id)) } },
+            onOpenStory = { id -> scope.launch { appCore.dispatch(AppEvent.openStory(id)) } },
             modifier = Modifier
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)

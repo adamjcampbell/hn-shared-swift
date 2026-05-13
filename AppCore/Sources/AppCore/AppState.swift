@@ -22,7 +22,7 @@ public final class AppState {
 
     /// `@Observable` drives reads-to-recompose (SwiftUI / Compose);
     /// `searchQueryChanges` drives the writes-to-fetch consumer in
-    /// `AppModel.runSearchQueryWatcher`. Two channels deliberately —
+    /// `AppCoreActor.run`. Two channels deliberately —
     /// trying to bridge them with a `withObservationTracking`-based
     /// iterator created an arm/disarm window where bursts of writes
     /// during a long `await` were silently dropped.
