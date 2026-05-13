@@ -53,8 +53,9 @@ public final class AppState {
     // MARK: Derived view rows
 
     /// `compactMap` (not `map`) because the projection shouldn't crash
-    /// if a stale id ever outlives its entry; in practice
-    /// upsert-then-assign-ids on the same actor makes that unreachable.
+    /// if a stale id ever outlives its entry; in practice each fetch
+    /// commits hits to the store before assigning ids on the same
+    /// actor, so the lookup is total.
     public var feedStories: [Story] {
         (feed.loadedHits?.ids ?? []).compactMap { id in
             hits[id].map { Story(hit: $0, isRead: readIds.contains(id)) }
@@ -65,18 +66,6 @@ public final class AppState {
         (search.loadedHits?.ids ?? []).compactMap { id in
             hits[id].map { Story(hit: $0, isRead: readIds.contains(id)) }
         }
-    }
-
-    // MARK: Mutators
-
-    /// Upsert a page's hits into the entity store and return the ids in
-    /// page order. Every fetch-success commit needs both halves — having
-    /// them in one place keeps the projection ids in sync with the
-    /// entity store automatically.
-    @discardableResult
-    func upsert(_ page: HNPage) -> [String] {
-        for hit in page.hits { hits[hit.id] = hit }
-        return page.hits.map(\.id)
     }
 
     public init() {

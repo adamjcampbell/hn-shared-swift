@@ -96,7 +96,8 @@ final class AppCore {
             do {
                 let page = try await task.value
                 try Task.checkCancellation()
-                let ids = state.upsert(page)
+                for hit in page.hits { state.hits[hit.id] = hit }
+                let ids = page.hits.map(\.id)
                 state.search.receiveInitialPage(ids, totalPages: page.totalPages)
             } catch is CancellationError {
                 // Newer keystroke (or clearSearch) cancelled us.
@@ -140,7 +141,8 @@ final class AppCore {
             tasks[.feed] = task
             do {
                 let page = try await task.value
-                let ids = state.upsert(page)
+                for hit in page.hits { state.hits[hit.id] = hit }
+                let ids = page.hits.map(\.id)
                 state.feed.receiveInitialPage(ids, totalPages: page.totalPages)
             } catch is CancellationError {
                 // Newer fetch will clear loading when it commits.
@@ -162,7 +164,8 @@ final class AppCore {
             tasks[.search] = task
             do {
                 let page = try await task.value
-                let ids = state.upsert(page)
+                for hit in page.hits { state.hits[hit.id] = hit }
+                let ids = page.hits.map(\.id)
                 state.search.receiveInitialPage(ids, totalPages: page.totalPages)
             } catch is CancellationError {
             } catch {
@@ -179,7 +182,8 @@ final class AppCore {
             tasks[.feedMore] = task
             do {
                 let page = try await task.value
-                let ids = state.upsert(page)
+                for hit in page.hits { state.hits[hit.id] = hit }
+                let ids = page.hits.map(\.id)
                 state.feed.receiveLoadMorePage(ids, totalPages: page.totalPages)
             } catch is CancellationError {
             } catch {
@@ -197,7 +201,8 @@ final class AppCore {
             tasks[.searchMore] = task
             do {
                 let page = try await task.value
-                let ids = state.upsert(page)
+                for hit in page.hits { state.hits[hit.id] = hit }
+                let ids = page.hits.map(\.id)
                 state.search.receiveLoadMorePage(ids, totalPages: page.totalPages)
             } catch is CancellationError {
             } catch {
