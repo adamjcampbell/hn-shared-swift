@@ -1,5 +1,4 @@
 import Clocks
-import ConcurrencyExtras
 import Foundation
 import Testing
 import os
@@ -76,11 +75,11 @@ private extension TestCore {
     /// assert mid-flight (during loading, during debounce) should
     /// inline the steps instead.
     func commitSearch(_ query: String, clock: TestClock<Duration>) async {
-        await Task.megaYield()
+        await self.settle()
         await self.run { $0.state.searchQuery = query }
-        await Task.megaYield()
+        await self.settle()
         await clock.advance(by: Self.searchDebounce)
-        await Task.megaYield()
+        await self.settle()
     }
 }
 
@@ -234,15 +233,15 @@ struct AppCoreTests {
 
         await core.run { #expect($0.state.search.initialStatus.isLoading == false) }
 
-        await Task.megaYield()
+        await core.settle()
         await core.run { $0.state.searchQuery = "r" }
-        await Task.megaYield()
+        await core.settle()
 
         // Spinner asserted synchronously on listener entry, before the debounce.
         await core.run { #expect($0.state.search.initialStatus.isLoading == true) }
 
         await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.settle()
 
         await core.run { #expect($0.state.search.initialStatus.isLoading == false) }
     }
@@ -263,16 +262,16 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await Task.megaYield()
+        await core.settle()
         await core.run { $0.state.searchQuery = "rust" }
-        await Task.megaYield()
+        await core.settle()
         // Listener has spawned a debounced fetch parked in clock.sleep.
 
         // .refresh with non-empty searchQuery re-runs the search; the
         // pending listener fetch is cancelled before its sleep elapses.
         await core.run { await $0.appCore.dispatch(.refresh) }
         await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.settle()
 
         let frontPageCalls = await calls.frontPageCalls
         let searchCalls = await calls.searchCalls
@@ -322,17 +321,17 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await Task.megaYield()
+        await core.settle()
         await core.run { $0.state.searchQuery = "ru" }
-        await Task.megaYield()
+        await core.settle()
         await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.settle()
         // "ru" is now parked in the cancel-loop inside the search mock.
 
         await core.run { $0.state.searchQuery = "rust" }
-        await Task.megaYield()
+        await core.settle()
         await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.settle()
 
         await core.run { core in
             #expect(core.state.search.initialStatus.error == nil)
@@ -365,7 +364,7 @@ struct AppCoreTests {
         await core.run { #expect($0.state.searchResults.map(\.id) == ["100"]) }
 
         await core.run { $0.state.searchQuery = "" }
-        await Task.megaYield()
+        await core.settle()
 
         await core.run { core in
             #expect(core.state.searchResults.isEmpty)
@@ -421,21 +420,21 @@ struct AppCoreTests {
 
         // Let the listener spawned in `AppCore.init` reach
         // its `for await` suspension point before the first write.
-        await Task.megaYield()
+        await core.settle()
 
         // Listener reads "rust" and schedules a search task that parks
         // in the debounce sleep.
         await core.run { $0.state.searchQuery = "rust" }
-        await Task.megaYield()
+        await core.settle()
 
         // Backspace to empty. The non-blocking listener consumes this
         // immediately and calls `clearSearch()`, cancelling the parked
         // task before it reaches the network.
         await core.run { $0.state.searchQuery = "" }
-        await Task.megaYield()
+        await core.settle()
 
         await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.settle()
 
         await core.run { core in
             #expect(core.state.searchResults.isEmpty)
@@ -466,17 +465,17 @@ struct AppCoreTests {
 
         // Let the listener spawned in `AppCore.init` reach
         // its `for await` suspension point before the first write.
-        await Task.megaYield()
+        await core.settle()
 
         await core.run { $0.state.searchQuery = "r" }
-        await Task.megaYield()
+        await core.settle()
         await core.run { $0.state.searchQuery = "ru" }
-        await Task.megaYield()
+        await core.settle()
         await core.run { $0.state.searchQuery = "rust" }
-        await Task.megaYield()
+        await core.settle()
 
         await clock.advance(by: TestCore.searchDebounce)
-        await Task.megaYield()
+        await core.settle()
 
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == ["rust"])
@@ -583,7 +582,7 @@ struct AppCoreTests {
         let loadMore = Task { [core] in
             await core.run { await $0.appCore.dispatch(.loadMore) }
         }
-        await Task.megaYield()
+        await core.settle()
         await core.run { #expect($0.state.feed.loadMoreStatus.isLoading == true) }
 
         // Refresh while page-1 is parked. Refresh's first action is
@@ -665,13 +664,13 @@ struct AppCoreTests {
         let loadMore = Task { [core] in
             await core.run { await $0.appCore.dispatch(.loadMore) }
         }
-        await Task.megaYield()
+        await core.settle()
         await core.run { #expect($0.state.search.loadMoreStatus.isLoading == true) }
 
         // Clear the search via the listener's empty-query path.
         await core.run { $0.state.searchQuery = "" }
         await loadMore.value
-        await Task.megaYield()
+        await core.settle()
 
         await core.run { core in
             #expect(core.state.search.loadedHits == nil)

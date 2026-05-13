@@ -1,3 +1,4 @@
+import Dispatch
 import Foundation
 @testable import AppCore
 
@@ -5,10 +6,22 @@ import Foundation
 /// different instances run on different executors, so tests parallelise.
 /// All access flows through `core.run { … }`, which gives the closure
 /// a single consistent snapshot for grouped reads.
+///
+/// `unownedExecutor` is overridden to a private `DispatchSerialQueue`
+/// (SE-0392) so tests can call `await core.settle()` for a FIFO-
+/// deterministic drain instead of `Task.megaYield()`. The pattern is
+/// straight from Point-Free Video #362; the FIFO trade-off (real
+/// actors honour task priority) is acceptable because test code has
+/// no priority diversity.
 public actor TestCore {
     public let state: AppState
     public nonisolated let commands: AsyncStream<AppCommand>
+    private nonisolated let executorQueue = DispatchSerialQueue(label: "TestCore.executor")
     let appCore: AppCore
+
+    public nonisolated var unownedExecutor: UnownedSerialExecutor {
+        executorQueue.asUnownedSerialExecutor()
+    }
 
     public init(
         client: HNClient = HNClient(),
@@ -37,6 +50,21 @@ public actor TestCore {
     /// listener task without it. Requires SE-0371 (Swift 6.2).
     isolated deinit {
         appCore.shutdown()
+    }
+
+    /// Wait until every job queued on this actor's executor at the
+    /// moment of call has finished, plus any jobs those jobs
+    /// synchronously enqueue. Replaces `Task.megaYield()` with a
+    /// FIFO-deterministic drain: the continuation-resume below sits at
+    /// the back of `executorQueue`, so awaiting it returns only after
+    /// the queue has settled past this point.
+    ///
+    /// Tasks suspended on `clock.sleep` aren't re-enqueued until the
+    /// clock advances — same boundary as megaYield.
+    public nonisolated func settle() async {
+        await withCheckedContinuation { continuation in
+            executorQueue.async { continuation.resume() }
+        }
     }
 }
 

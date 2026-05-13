@@ -124,9 +124,18 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `TestClock` (from `pointfreeco/swift-clocks`) and call
   `clock.advance(by:)` to release suspended sleepers atomically.
   The `TestCore.commitSearch(_:clock:)` helper packages the
-  listener-debounce-settle pattern (`searchQuery = X` → megaYield →
-  advance → megaYield) for tests that only care about the
+  listener-debounce-settle pattern (`searchQuery = X` → `settle` →
+  advance → `settle`) for tests that only care about the
   post-commit state.
+- **`TestCore` installs a `DispatchSerialQueue` as `unownedExecutor`.**
+  SE-0392 + Point-Free Video #362 pattern. The `nonisolated func
+  settle() async` enqueues a continuation-resume at the back of the
+  queue, so awaiting it drains every pending job (listener-Task
+  resumption, `isolatedTask` spawns, post-`clock.sleep` fetch
+  continuations) deterministically. Replaces `Task.megaYield()`,
+  which was probabilistic. Caveat: the queue is strict FIFO, while
+  real actors honour task priority — fine because test code has no
+  `Task(priority: …)` diversity.
 - **`try` (not `try?`) on the debounce `clock.sleep`.** The fetch
   Task body uses `try await clock.sleep(for: debounce)` and lets the
   throw propagate. Swallowing it would let cancelled tasks fall
