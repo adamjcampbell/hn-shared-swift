@@ -57,7 +57,7 @@ public struct AppCore {
 
         let mutator = MainActorMutator(self.state)
         handler.assumeIsolated { handler in
-            handler.state = StateAccess(mutator)
+            handler.bootstrap(state: StateAccess(mutator))
         }
     }
 
@@ -66,10 +66,8 @@ public struct AppCore {
         await handler.dispatch(event)
     }
 
-    /// Long-lived background pipeline. The host `await`s this from
-    /// `RootView`'s `.task` on iOS or `LaunchedEffect` on Android;
-    /// cancellation propagates from the host's surrounding Task.
-    public func run() async {
-        await handler.run()
+    /// Test-only teardown — production `AppCore` is app-lifetime.
+    public func shutdown() async {
+        await handler.shutdown()
     }
 }

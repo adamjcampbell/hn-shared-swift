@@ -412,13 +412,13 @@ struct AppCoreTests {
     }
 
     @Test("backspacing all the way to empty during an in-flight fetch still clears results")
-    func run_burstWriteDuringFetchClearsResults() async {
+    func listener_burstWriteDuringFetchClearsResults() async {
         // Regression: burst writes during an in-flight fetch must still
-        // clear results when the final value is empty. The non-blocking
-        // pipeline schedules "rust" (parked in the debounce sleep), then
-        // immediately consumes the empty write, which calls
-        // `clearSearch()` and cancels the parked task before its network
-        // call fires — so zero recorded calls.
+        // clear results when the final value is empty. The internal
+        // listener schedules "rust" (parked in the debounce sleep),
+        // then immediately consumes the empty write, which calls
+        // `clearSearch()` and cancels the parked task before its
+        // network call fires — so zero recorded calls.
         let calls = CallRecorder()
         let clock = TestClock()
         let core = await makeCore(
@@ -429,17 +429,16 @@ struct AppCoreTests {
             clock: clock
         )
 
-        let pipeline = Task { [core] in
-            await core.run()
-        }
+        // Let the listener spawned in `AppCoreActor.bootstrap` reach
+        // its `for await` suspension point before the first write.
         await Task.megaYield()
 
-        // Pipeline reads "rust" and schedules a search task that parks
+        // Listener reads "rust" and schedules a search task that parks
         // in the debounce sleep.
         await core.with { $0.searchQuery = "rust" }
         await Task.megaYield()
 
-        // Backspace to empty. The non-blocking pipeline consumes this
+        // Backspace to empty. The non-blocking listener consumes this
         // immediately and calls `clearSearch()`, cancelling the parked
         // task before it reaches the network.
         await core.with { $0.searchQuery = "" }
@@ -454,16 +453,15 @@ struct AppCoreTests {
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == [])
 
-        pipeline.cancel()
-        _ = await pipeline.value
+        await core.shutdown()
     }
 
     @Test("rapid keystrokes within the debounce window collapse to one search")
-    func run_rapidKeystrokes_onlyFinalQueryFires() async {
+    func listener_rapidKeystrokes_onlyFinalQueryFires() async {
         // Regression: typing "rust" quickly used to produce two result
         // sets — the pre-fix watcher's `for await` blocked on the first
         // fetch's debounce, so "r" fired before the rest collapsed via
-        // `.bufferingNewest(1)`. With the non-blocking pipeline, each
+        // `.bufferingNewest(1)`. With the non-blocking listener, each
         // keystroke schedules a new task that cancels the prior in its
         // debounce sleep — only "rust" reaches the network.
         let calls = CallRecorder()
@@ -476,9 +474,8 @@ struct AppCoreTests {
             clock: clock
         )
 
-        let pipeline = Task { [core] in
-            await core.run()
-        }
+        // Let the listener spawned in `AppCoreActor.bootstrap` reach
+        // its `for await` suspension point before the first write.
         await Task.megaYield()
 
         await core.with { $0.searchQuery = "r" }
@@ -495,8 +492,7 @@ struct AppCoreTests {
         #expect(recorded.map(\.0) == ["rust"])
         #expect(await core.searchResults.map(\.id) == ["100"])
 
-        pipeline.cancel()
-        _ = await pipeline.value
+        await core.shutdown()
     }
 
     @Test("a story present in both feed and search shares its read state across projections")

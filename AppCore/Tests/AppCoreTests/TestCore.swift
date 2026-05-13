@@ -67,7 +67,7 @@ public actor TestCore {
     private func installStateAccess() {
         let mutator = TestCoreMutator(self)
         handler.assumeIsolated { handler in
-            handler.state = StateAccess(mutator)
+            handler.bootstrap(state: StateAccess(mutator))
         }
     }
 
@@ -77,8 +77,8 @@ public actor TestCore {
         await handler.dispatch(event)
     }
 
-    public func run() async {
-        await handler.run()
+    public func shutdown() async {
+        await handler.shutdown()
     }
 
     // MARK: - Named Sendable read accessors

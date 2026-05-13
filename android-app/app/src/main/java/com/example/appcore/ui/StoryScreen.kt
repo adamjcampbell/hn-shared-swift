@@ -83,14 +83,6 @@ fun StoryScreen() {
         appCore.dispatch(AppEvent.refresh)
     }
 
-    // Long-lived background pipeline: merges searchQuery writes
-    // (debounced-schedule) and fetch outcomes (commit) into a single
-    // consumer on this coroutine's actor. Cancellation propagates when
-    // this composable leaves the composition.
-    LaunchedEffect(appCore) {
-        appCore.run()
-    }
-
     // One-shot commands from the core.
     LaunchedEffect(appCore) {
         appCore.commands.kotlin().collect { command ->

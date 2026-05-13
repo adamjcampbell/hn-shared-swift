@@ -23,9 +23,6 @@ struct RootView: View {
                     }
                 }
             }
-            // Long-lived background pipeline. Cancellation propagates
-            // from this Task when the view goes away.
-            .task { await appCore.run() }
     }
 }
 

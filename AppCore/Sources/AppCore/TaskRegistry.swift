@@ -24,4 +24,9 @@ struct TaskRegistry<ID: Hashable> {
             entries[id] = newValue
         }
     }
+
+    mutating func cancelAll() {
+        for entry in entries.values { entry.cancel() }
+        entries.removeAll()
+    }
 }

@@ -53,7 +53,7 @@ actor AppCoreActor {
     /// waiting.
     private let clock: any Clock<Duration>
 
-    enum TaskID { case feed, feedMore, search, searchMore }
+    enum TaskID { case feed, feedMore, search, searchMore, searchListener }
     private var tasks = TaskRegistry<TaskID>()
 
     /// Debounce window between a `state.searchQuery` write and the
@@ -73,6 +73,31 @@ actor AppCoreActor {
         self.commandsContinuation = commandsContinuation
         self.client = client
         self.clock = clock
+    }
+
+    /// Post-construction setup the shell drives via
+    /// `handler.assumeIsolated { handler.bootstrap(state: …) }`.
+    /// Installs the shim and spawns the listener from a method (not
+    /// `init`) so that capturing `self` in the Task closure doesn't
+    /// block the subsequent isolated write to `tasks`.
+    func bootstrap(state: StateAccess) {
+        self.state = state
+        tasks[.searchListener] = Task { [self] in
+            await self.consumeSearchQueries()
+        }
+    }
+
+    /// `scheduleSearchFetch` is fire-and-forget: it parks the network
+    /// call in its own Task and returns immediately, so this loop
+    /// stays responsive to a backspace-to-empty arriving mid-debounce.
+    private func consumeSearchQueries() async {
+        for await query in state.searchQueryChanges {
+            if query.isEmpty {
+                clearSearch()
+            } else {
+                await scheduleSearchFetch(query: query, debounce: Self.searchDebounce)
+            }
+        }
     }
 
     // MARK: - Public dispatch surface
@@ -99,23 +124,9 @@ actor AppCoreActor {
         }
     }
 
-    /// Long-lived consumer of `state.searchQueryChanges`. The host
-    /// `await`s `AppCore.run()` from `RootView`'s `.task` on iOS or
-    /// `LaunchedEffect` on Android; that call delegates here.
-    ///
-    /// Each new query cancel-and-replaces the prior in-flight fetch
-    /// via the registry; the fetch result commits inside the
-    /// unstructured Task spawned by `scheduleSearchFetch`, which
-    /// inherits this actor's executor (= shell's).
-    func run() async {
-        let stream = state.searchQueryChanges
-        for await query in stream {
-            if query.isEmpty {
-                clearSearch()
-            } else {
-                await scheduleSearchFetch(query: query, debounce: Self.searchDebounce)
-            }
-        }
+    /// Test-only teardown — production `AppCore` is app-lifetime.
+    func shutdown() {
+        tasks.cancelAll()
     }
 
     // MARK: - Synchronous mutations
