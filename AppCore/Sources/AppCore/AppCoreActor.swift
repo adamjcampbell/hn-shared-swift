@@ -4,106 +4,49 @@ import Observation
 import FoundationNetworking
 #endif
 
-/// Internal orchestrator for `AppCore`. Real `actor` whose executor is
-/// borrowed from `isolation: any Actor` via `unownedExecutor` (SE-0392).
-/// Production passes `MainActor.shared`; tests pass a per-instance
-/// `TestCore` actor.
+/// PROTOTYPE: Non-Sendable class with isolation-inheriting methods.
 ///
-/// `AppCoreActor` does **not** own `AppState` — the shell does. State
-/// access is mediated by `state: StateAccess`, a shim the shell installs
-/// post-construction via `handler.assumeIsolated { handler.state = … }`.
-/// The shim wraps an `any StateMutator` which uses `assumeIsolated` on
-/// the shell's actor to reach `AppState`. Non-`Sendable` `AppState`
-/// never crosses an actor boundary.
+/// Instead of being a real `actor` with a borrowed executor + a
+/// `StateAccess` shim, `AppCoreActor` is a plain `final class` (not
+/// `Sendable`). All methods take `isolation: isolated (any Actor)?
+/// = #isolation` (SE-0420), inheriting the caller's isolation
+/// statically. From `@MainActor` `AppCore`, methods run on MainActor;
+/// from a per-test `TestCore` actor, on that actor.
 ///
-/// Inside this actor's methods:
-/// - `state.foo` reads a Sendable property via the shim's dynamicMember
-///   subscript.
-/// - `state.read { $0.foo }` is the compound-read escape hatch.
-/// - `state { $0.foo = bar }` is the compound-mutation escape hatch (also
-///   used for single writes since a writable subscript would conflict
-///   with Swift's `_modify` synthesis).
-///
-/// Not bridged to Kotlin. `AppCore` re-exposes the public surface.
-actor AppCoreActor {
-    private let isolation: any Actor
-
-    nonisolated var unownedExecutor: UnownedSerialExecutor {
-        isolation.unownedExecutor
-    }
-
-    /// Set by the shell post-init. Default is a no-op mutator; the
-    /// brief window before installation is unobservable in production
-    /// (`AppCore.init` installs synchronously) and the test target's
-    /// async init awaits past the install.
-    var state: StateAccess = StateAccess(NoopMutator())
+/// Because the class is non-Sendable, its instance lives in exactly
+/// one isolation region at a time — the one in which it was
+/// constructed. `state: AppState` is a direct stored property; no
+/// shim, no `assumeIsolated`.
+final class AppCoreActor {
+    let state: AppState
 
     private let commandsContinuation: AsyncStream<AppCommand>.Continuation
-
-    /// The shell-side read end. The shell constructs the (stream,
-    /// continuation) pair externally and passes both in so the shell
-    /// has the stream available *before* calling this init (needs
-    /// `commands` initialized before passing `self` as `isolation`).
-    nonisolated let commands: AsyncStream<AppCommand>
-
+    let commands: AsyncStream<AppCommand>
     private let client: HNClient
-
-    /// `ContinuousClock()` in production; tests inject a `TestClock`
-    /// so the 250 ms debounce doesn't translate into real-clock
-    /// waiting.
     private let clock: any Clock<Duration>
 
     enum TaskID { case feed, feedMore, search, searchMore, searchListener }
     private var tasks = TaskRegistry<TaskID>()
 
-    /// Debounce window between a `state.searchQuery` write and the
-    /// resulting fetch. Static so tests can name the same duration
-    /// when advancing their `TestClock`.
     static let searchDebounce: Duration = .milliseconds(250)
 
     init(
-        isolation: any Actor,
+        state: AppState,
         commands: AsyncStream<AppCommand>,
         commandsContinuation: AsyncStream<AppCommand>.Continuation,
         client: HNClient,
         clock: any Clock<Duration>
     ) {
-        self.isolation = isolation
+        self.state = state
         self.commands = commands
         self.commandsContinuation = commandsContinuation
         self.client = client
         self.clock = clock
     }
 
-    /// Post-construction setup the shell drives via
-    /// `handler.assumeIsolated { handler.bootstrap(state: …) }`.
-    /// Installs the shim and spawns the listener from a method (not
-    /// `init`) so that capturing `self` in the Task closure doesn't
-    /// block the subsequent isolated write to `tasks`.
-    func bootstrap(state: StateAccess) {
-        self.state = state
-        tasks[.searchListener] = Task { [self] in
-            await self.consumeSearchQueries()
-        }
-    }
-
-    /// `scheduleSearchFetch` is fire-and-forget: it parks the network
-    /// call in its own Task and returns immediately, so this loop
-    /// stays responsive to a backspace-to-empty arriving mid-debounce.
-    private func consumeSearchQueries() async {
-        for await query in state.searchQueryChanges {
-            if query.isEmpty {
-                clearSearch()
-            } else {
-                await scheduleSearchFetch(query: query, debounce: Self.searchDebounce)
-            }
-        }
-    }
-
-    // MARK: - Public dispatch surface
-
-    /// Single entry point for every user-driven mutation.
-    func dispatch(_ event: AppEvent) async {
+    /// Direct state access — no shim. Reads any property of `AppState`
+    /// directly because the function inherits the caller's isolation.
+    func dispatch(_ event: AppEvent, isolation: isolated (any Actor)? = #isolation) async {
         switch event {
         case .toggleRead(let id):
             toggleRead(id)
@@ -116,212 +59,71 @@ actor AppCoreActor {
                 await runSearchFetch(query: state.searchQuery)
             }
         case .loadMore:
-            if state.searchQuery.isEmpty {
-                await runFeedLoadMore()
-            } else {
-                await runSearchLoadMore()
-            }
+            break // omitted in prototype
         }
     }
 
-    /// Test-only teardown — production `AppCore` is app-lifetime.
-    func shutdown() {
-        tasks.cancelAll()
-    }
-
-    // MARK: - Synchronous mutations
-
-    /// Replace the entire search section atomically: cancel any
-    /// in-flight search tasks and drop the snapshot in one write so
-    /// the projection never observes a partially-cleared state.
-    func clearSearch() {
+    /// Synchronous mutation — no `state { … }` block, no `assumeIsolated`.
+    func clearSearch(isolation: isolated (any Actor)? = #isolation) {
         tasks[.search] = nil
         tasks[.searchMore] = nil
-        state { $0.search = LoadableHits() }
+        state.search = LoadableHits()
     }
 
-    private func toggleRead(_ id: String) {
-        state { state in
-            if state.readIds.contains(id) {
-                state.readIds.remove(id)
-            } else {
-                state.readIds.insert(id)
-            }
+    private func toggleRead(_ id: String, isolation: isolated (any Actor)? = #isolation) {
+        if state.readIds.contains(id) {
+            state.readIds.remove(id)
+        } else {
+            state.readIds.insert(id)
         }
     }
 
-    /// Mark a known story as read and, if it has a URL, ask the UI to
-    /// present it. Single dictionary lookup against the entity store —
-    /// no per-projection scan. Unknown ids are a no-op (no readIds
-    /// insert, no command yielded).
-    private func openStory(_ id: String) {
-        struct Lookup: Sendable { let exists: Bool; let url: String? }
-        let lookup = state.read { state -> Lookup in
-            guard let hit = state.hits[id] else { return Lookup(exists: false, url: nil) }
-            return Lookup(exists: true, url: hit.url)
-        }
-        guard lookup.exists else { return }
-        state { $0.readIds.insert(id) }
-        if let url = lookup.url {
+    private func openStory(_ id: String, isolation: isolated (any Actor)? = #isolation) {
+        guard let hit = state.hits[id] else { return }
+        state.readIds.insert(id)
+        if let url = hit.url {
             commandsContinuation.yield(.presentURL(value: url))
         }
     }
 
-    // MARK: - Fetch orchestration
+    // MARK: Fetch path — shape of async + Task spawning
 
-    func runFeedFetch() async {
-        // Refresh supersedes any in-flight load-more: cancel its task
-        // (otherwise its appended page would land on the snapshot
-        // we're about to replace) and reset its status (otherwise
-        // the stale spinner/error would outlive the refresh).
+    func runFeedFetch(isolation: isolated (any Actor)? = #isolation) async {
         tasks[.feedMore] = nil
-        state {
-            $0.feed.loadMoreStatus = LoadStatus()
-            $0.feed.initialStatus.startLoading()
-        }
+        state.feed.loadMoreStatus = LoadStatus()
+        state.feed.initialStatus.startLoading()
         do {
             let page = try await runFetchTask(id: .feed, debounce: nil) { client in
                 try await client.frontPage(0)
             }
-            state {
-                let ids = $0.upsert(page)
-                $0.feed.receiveInitialPage(ids, totalPages: page.totalPages)
-            }
+            let ids = state.upsert(page)
+            state.feed.receiveInitialPage(ids, totalPages: page.totalPages)
         } catch is CancellationError {
-            // Newer fetch will clear loading when it commits.
+            // newer fetch will clear
         } catch {
-            let message = error.localizedDescription
-            state { $0.feed.initialStatus.finishFailure(message) }
+            state.feed.initialStatus.finishFailure(error.localizedDescription)
         }
     }
 
-    func runFeedLoadMore() async {
-        let next: Int? = state.read { state in
-            guard let loaded = state.feed.loadedHits, loaded.hasMore,
-                  !state.feed.loadMoreStatus.isLoading else { return nil }
-            return loaded.nextPage
-        }
-        guard let next else { return }
-
-        state { $0.feed.loadMoreStatus.startLoading() }
-        do {
-            let page = try await runFetchTask(id: .feedMore, debounce: nil) { client in
-                try await client.frontPage(next)
-            }
-            state {
-                let ids = $0.upsert(page)
-                $0.feed.receiveLoadMorePage(ids, totalPages: page.totalPages)
-            }
-        } catch is CancellationError {
-            // Newer fetch will clear loading when it commits.
-        } catch {
-            let message = error.localizedDescription
-            state { $0.feed.loadMoreStatus.finishFailure(message) }
-        }
-    }
-
-    func runSearchFetch(query: String, debounce: Duration? = nil) async {
+    func runSearchFetch(query: String, debounce: Duration? = nil,
+                        isolation: isolated (any Actor)? = #isolation) async {
         tasks[.searchMore] = nil
-        state {
-            $0.search.loadMoreStatus = LoadStatus()
-            $0.search.initialStatus.startLoading()
-        }
+        state.search.loadMoreStatus = LoadStatus()
+        state.search.initialStatus.startLoading()
         do {
             let page = try await runFetchTask(id: .search, debounce: debounce) { client in
                 try await client.search(query, 0)
             }
-            state {
-                let ids = $0.upsert(page)
-                $0.search.receiveInitialPage(ids, totalPages: page.totalPages)
-            }
+            let ids = state.upsert(page)
+            state.search.receiveInitialPage(ids, totalPages: page.totalPages)
         } catch is CancellationError {
-            // Newer fetch will clear loading when it commits.
         } catch {
-            let message = error.localizedDescription
-            state { $0.search.initialStatus.finishFailure(message) }
+            state.search.initialStatus.finishFailure(error.localizedDescription)
         }
     }
 
-    func runSearchLoadMore() async {
-        struct LoadMoreParams: Sendable { let query: String; let next: Int }
-        let params: LoadMoreParams? = state.read { state in
-            guard let loaded = state.search.loadedHits, loaded.hasMore,
-                  !state.search.loadMoreStatus.isLoading else { return nil }
-            return LoadMoreParams(query: state.searchQuery, next: loaded.nextPage)
-        }
-        guard let params else { return }
-
-        state { $0.search.loadMoreStatus.startLoading() }
-        do {
-            let page = try await runFetchTask(id: .searchMore, debounce: nil) { client in
-                try await client.search(params.query, params.next)
-            }
-            state {
-                let ids = $0.upsert(page)
-                $0.search.receiveLoadMorePage(ids, totalPages: page.totalPages)
-            }
-        } catch is CancellationError {
-            // Newer fetch will clear loading when it commits.
-        } catch {
-            let message = error.localizedDescription
-            state { $0.search.loadMoreStatus.finishFailure(message) }
-        }
-    }
-
-    /// Schedules a debounced search fetch without blocking the caller.
-    ///
-    /// **Fire-and-forget cancellation**: the inner network Task is
-    /// stored in `tasks[.search]`; assigning a new one cancels the
-    /// prior. The trailing `Task { [self] in … }` awaiting
-    /// `task.value` catches `CancellationError` and no-ops — a newer
-    /// fetch is responsible for clearing the loading status when it
-    /// commits.
-    ///
-    /// `self` is `AppCoreActor` (Sendable since actor), so the Task
-    /// captures it directly. The Task body inherits this actor's
-    /// executor (= shell's), so `state { … }` calls run on the
-    /// shell's isolation.
-    private func scheduleSearchFetch(query: String, debounce: Duration) async {
-        tasks[.searchMore] = nil
-        state {
-            $0.search.loadMoreStatus = LoadStatus()
-            $0.search.initialStatus.startLoading()
-        }
-
-        let task = makeFetchTask(debounce: debounce) { client in
-            try await client.search(query, 0)
-        }
-        tasks[.search] = task
-
-        Task { [self] in
-            do {
-                let page = try await task.value
-                state {
-                    let ids = $0.upsert(page)
-                    $0.search.receiveInitialPage(ids, totalPages: page.totalPages)
-                }
-            } catch is CancellationError {
-                // Newer fetch will clear loading when it commits.
-            } catch {
-                let message = error.localizedDescription
-                state { $0.search.initialStatus.finishFailure(message) }
-            }
-        }
-    }
-
-    /// Build a fetch task that sleeps for `debounce` (if set), then
-    /// runs `body`. Captures only Sendable values (`client`, `clock`).
-    ///
-    /// **`try` (not `try?`) on the sleep is load-bearing.** A
-    /// test-mock closure that doesn't honor cancellation would
-    /// otherwise fall through to the network call and commit stale
-    /// data; the throw propagating is what makes cancel-and-replace
-    /// robust against any client implementation.
-    ///
-    /// **`URLError(.cancelled)` is normalised to `CancellationError`.**
-    /// `URLSession` surfaces task cancellation as `URLError.cancelled`,
-    /// which would otherwise be reported as a transient error in the
-    /// caller's catch arm rather than a silent supersede.
+    /// Fetch task body captures only Sendable values (`client`, `clock`).
+    /// The result `HNPage` is Sendable so it crosses back fine.
     private func makeFetchTask(
         debounce: Duration?,
         body: @Sendable @escaping (HNClient) async throws -> HNPage
@@ -338,17 +140,43 @@ actor AppCoreActor {
         }
     }
 
-    /// Spawns a fetch task, stores it in the registry (cancelling
-    /// any prior with the same id), and awaits its value. Used by
-    /// the awaiting paths (`runFeedFetch`, `runFeedLoadMore`,
-    /// `runSearchFetch`, `runSearchLoadMore`).
     private func runFetchTask(
         id: TaskID,
         debounce: Duration?,
-        body: @Sendable @escaping (HNClient) async throws -> HNPage
+        body: @Sendable @escaping (HNClient) async throws -> HNPage,
+        isolation: isolated (any Actor)? = #isolation
     ) async throws -> HNPage {
         let task = makeFetchTask(debounce: debounce, body: body)
         tasks[id] = task
         return try await task.value
+    }
+
+    /// PROTOTYPE OPEN QUESTION — long-lived listener Task that captures
+    /// `self` (non-Sendable). Two candidate shapes:
+    ///
+    ///   (a) `Task { [self, isolation] in
+    ///           guard let iso = isolation else { return }
+    ///           for await query in state.searchQueryChanges {
+    ///               iso.assumeIsolated { _ in self.handle(query) }
+    ///           }
+    ///       }`
+    ///       — one runtime `assumeIsolated` check per event; iso captured
+    ///       as `(any Actor)?` which is Sendable.
+    ///
+    ///   (b) `Task { @MainActor [self] in … }` — only works because
+    ///       production isolation *is* MainActor. Tests pin to a per-test
+    ///       actor instead, so (b) doesn't generalise.
+    ///
+    /// Either way the Task can't capture non-Sendable `self` without
+    /// some isolation pin. In the current `actor` design, `self` is
+    /// Sendable so the capture is free — this is the one ergonomic
+    /// cost of dropping the shim.
+    func bootstrap(isolation: isolated (any Actor)? = #isolation) {
+        // shape (a) — left commented; see runFeedFetch above for the
+        // direct-state-access shape that's the win we care about.
+    }
+
+    func shutdown(isolation: isolated (any Actor)? = #isolation) {
+        tasks.cancelAll()
     }
 }
