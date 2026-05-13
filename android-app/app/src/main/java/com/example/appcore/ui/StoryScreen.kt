@@ -80,7 +80,7 @@ fun StoryScreen() {
 
     // Initial fetch on first composition.
     LaunchedEffect(appCore) {
-        appCore.dispatch(AppEvent.refresh)
+        appCore.sendEvent(AppEvent.refresh)
     }
 
     // One-shot commands from the core.
@@ -106,10 +106,10 @@ fun StoryScreen() {
     ) { innerPadding ->
         StoriesContent(
             state = appCore.state,
-            onRefresh = { appCore.dispatch(AppEvent.refresh) },
-            onLoadMore = { appCore.dispatch(AppEvent.loadMore) },
-            onToggleRead = { id -> scope.launch { appCore.dispatch(AppEvent.toggleRead(id)) } },
-            onOpenStory = { id -> scope.launch { appCore.dispatch(AppEvent.openStory(id)) } },
+            onRefresh = { appCore.sendEvent(AppEvent.refresh) },
+            onLoadMore = { appCore.sendEvent(AppEvent.loadMore) },
+            onToggleRead = { id -> scope.launch { appCore.sendEvent(AppEvent.toggleRead(id)) } },
+            onOpenStory = { id -> scope.launch { appCore.sendEvent(AppEvent.openStory(id)) } },
             modifier = Modifier
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
