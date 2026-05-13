@@ -19,7 +19,7 @@ import Observation
 public struct UICore {
     public let state: AppState
     public let commands: AsyncStream<AppCommand>
-    let handler: AppCore
+    let appCore: AppCore
 
     public init() {
         self.init(client: HNClient(), clock: ContinuousClock())
@@ -34,23 +34,23 @@ public struct UICore {
         let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
         self.state = state
         self.commands = stream
-        self.handler = AppCore(
+        self.appCore = AppCore(
             state: state,
             commands: stream,
             commandsContinuation: continuation,
             client: client,
             clock: clock
         )
-        handler.bootstrap()
+        appCore.bootstrap()
     }
 
     /// Single entry point for every user-driven mutation.
     public func dispatch(_ event: AppEvent) async {
-        await handler.dispatch(event)
+        await appCore.dispatch(event)
     }
 
     /// Test-only teardown — production `UICore` is app-lifetime.
     public func shutdown() {
-        handler.shutdown()
+        appCore.shutdown()
     }
 }

@@ -60,15 +60,19 @@ struct AppCoreTests {
     func refresh_populatesStoriesAndTimestamp() async {
         let core = makeCore(frontPage: { _ in page([storyA, storyB]) })
 
-        #expect(await core.feedStories.isEmpty)
-        #expect(await core.feed.loadedHits == nil)
+        await core.run { core in
+            #expect(core.state.feedStories.isEmpty)
+            #expect(core.state.feed.loadedHits == nil)
+        }
 
-        await core.run { await $0.handler.dispatch(.refresh) }
+        await core.run { await $0.appCore.dispatch(.refresh) }
 
-        #expect(await core.feedStories.count == 2)
-        #expect(await core.feedStories.first?.title == "Top story")
-        #expect(await core.feed.loadedHits?.loadedAt != nil)
-        #expect(await core.feed.initialStatus.error == nil)
+        await core.run { core in
+            #expect(core.state.feedStories.count == 2)
+            #expect(core.state.feedStories.first?.title == "Top story")
+            #expect(core.state.feed.loadedHits?.loadedAt != nil)
+            #expect(core.state.feed.initialStatus.error == nil)
+        }
     }
 
     @Test("refresh records initialStatus.error on failure")
@@ -79,36 +83,42 @@ struct AppCoreTests {
             search: { _, _ in throw Boom() }
         )
 
-        await core.run { await $0.handler.dispatch(.refresh) }
+        await core.run { await $0.appCore.dispatch(.refresh) }
 
-        #expect(await core.feedStories.isEmpty)
-        #expect(await core.feed.initialStatus.error != nil)
+        await core.run { core in
+            #expect(core.state.feedStories.isEmpty)
+            #expect(core.state.feed.initialStatus.error != nil)
+        }
     }
 
     @Test("toggleRead adds and removes")
     func toggleRead_addsAndRemoves() async {
         let core = makeCore(frontPage: { _ in page([storyA]) })
-        await core.run { await $0.handler.dispatch(.refresh) }
-        #expect(await core.feedStories.first?.isRead == false)
+        await core.run { await $0.appCore.dispatch(.refresh) }
+        await core.run { #expect($0.state.feedStories.first?.isRead == false) }
 
-        await core.run { await $0.handler.dispatch(.toggleRead(id: storyA.id)) }
-        #expect(await core.feedStories.first?.isRead == true)
-        #expect(await core.readIds.contains(storyA.id))
+        await core.run { await $0.appCore.dispatch(.toggleRead(id: storyA.id)) }
+        await core.run { core in
+            #expect(core.state.feedStories.first?.isRead == true)
+            #expect(core.state.readIds.contains(storyA.id))
+        }
 
-        await core.run { await $0.handler.dispatch(.toggleRead(id: storyA.id)) }
-        #expect(await core.feedStories.first?.isRead == false)
-        #expect(await core.readIds.contains(storyA.id) == false)
+        await core.run { await $0.appCore.dispatch(.toggleRead(id: storyA.id)) }
+        await core.run { core in
+            #expect(core.state.feedStories.first?.isRead == false)
+            #expect(core.state.readIds.contains(storyA.id) == false)
+        }
     }
 
     @Test("openStory marks read and emits presentURL command")
     func openStory_marksReadAndEmitsPresentURL() async {
         let core = makeCore(frontPage: { _ in page([storyA, storyB]) })
-        await core.run { await $0.handler.dispatch(.refresh) }
+        await core.run { await $0.appCore.dispatch(.refresh) }
 
         var iterator = core.commands.makeAsyncIterator()
-        await core.run { await $0.handler.dispatch(.openStory(id: storyA.id)) }
+        await core.run { await $0.appCore.dispatch(.openStory(id: storyA.id)) }
 
-        #expect(await core.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
+        await core.run { #expect($0.state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true) }
         let command = await iterator.next()
         #expect(command == .presentURL(value: storyA.url!))
     }
@@ -116,15 +126,15 @@ struct AppCoreTests {
     @Test("openStory on a story without a URL marks read but emits nothing")
     func openStory_withoutURL_marksReadOnly() async {
         let core = makeCore(frontPage: { _ in page([storyA, storyB]) })
-        await core.run { await $0.handler.dispatch(.refresh) }
+        await core.run { await $0.appCore.dispatch(.refresh) }
 
         // Open storyB (no URL) then storyA (has URL). The first emission
         // we observe is storyA's — proving storyB emitted nothing.
         var iterator = core.commands.makeAsyncIterator()
-        await core.run { await $0.handler.dispatch(.openStory(id: storyB.id)) }
-        await core.run { await $0.handler.dispatch(.openStory(id: storyA.id)) }
+        await core.run { await $0.appCore.dispatch(.openStory(id: storyB.id)) }
+        await core.run { await $0.appCore.dispatch(.openStory(id: storyA.id)) }
 
-        #expect(await core.feedStories.first(where: { $0.id == storyB.id })?.isRead == true)
+        await core.run { #expect($0.state.feedStories.first(where: { $0.id == storyB.id })?.isRead == true) }
         let command = await iterator.next()
         #expect(command == .presentURL(value: storyA.url!))
     }
@@ -132,14 +142,14 @@ struct AppCoreTests {
     @Test("openStory with unknown id is a no-op")
     func openStory_unknownId_isNoop() async {
         let core = makeCore(frontPage: { _ in page([storyA]) })
-        await core.run { await $0.handler.dispatch(.refresh) }
-        let readBefore = await core.readIds
+        await core.run { await $0.appCore.dispatch(.refresh) }
+        let readBefore = await core.run { $0.state.readIds }
 
         var iterator = core.commands.makeAsyncIterator()
-        await core.run { await $0.handler.dispatch(.openStory(id: "does-not-exist")) }
-        await core.run { await $0.handler.dispatch(.openStory(id: storyA.id)) }
+        await core.run { await $0.appCore.dispatch(.openStory(id: "does-not-exist")) }
+        await core.run { await $0.appCore.dispatch(.openStory(id: storyA.id)) }
 
-        #expect(await core.readIds == readBefore.union([storyA.id]))
+        await core.run { #expect($0.state.readIds == readBefore.union([storyA.id])) }
         let command = await iterator.next()
         #expect(command == .presentURL(value: storyA.url!))
     }
@@ -149,14 +159,18 @@ struct AppCoreTests {
         let core = makeCore(frontPage: { _ in page([storyA, storyB]) })
         // Toggle before any stories are loaded — readIds is the canonical
         // record; the projection has nothing to map onto yet.
-        await core.run { await $0.handler.dispatch(.toggleRead(id: "100")) }
-        #expect(await core.readIds.contains("100"))
-        #expect(await core.feedStories.isEmpty)
+        await core.run { await $0.appCore.dispatch(.toggleRead(id: "100")) }
+        await core.run { core in
+            #expect(core.state.readIds.contains("100"))
+            #expect(core.state.feedStories.isEmpty)
+        }
 
-        await core.run { await $0.handler.dispatch(.refresh) }
-        let projected = await core.feedStories.first(where: { $0.id == "100" })
-        #expect(projected != nil)
-        #expect(projected?.isRead == true)
+        await core.run { await $0.appCore.dispatch(.refresh) }
+        await core.run { core in
+            let projected = core.state.feedStories.first(where: { $0.id == "100" })
+            #expect(projected != nil)
+            #expect(projected?.isRead == true)
+        }
     }
 
     @Test("runSearchFetch debounces and fires search with current query")
@@ -173,14 +187,16 @@ struct AppCoreTests {
 
         await core.run { $0.state.searchQuery = "rust" }
         let fetch = Task { [core] in
-            await core.run { await $0.handler.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
+            await core.run { await $0.appCore.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
         }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
         await fetch.value
 
-        #expect(await core.searchQuery == "rust")
-        #expect(await core.searchResults.map(\.id) == ["100"])
+        await core.run { core in
+            #expect(core.state.searchQuery == "rust")
+            #expect(core.state.searchResults.map(\.id) == ["100"])
+        }
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == ["rust"])
         #expect(recorded.map(\.1) == [0])
@@ -191,20 +207,20 @@ struct AppCoreTests {
         let clock = TestClock()
         let core = makeCore(search: { _, _ in page([storyA]) }, clock: clock)
 
-        #expect(await core.search.initialStatus.isLoading == false)
+        await core.run { #expect($0.state.search.initialStatus.isLoading == false) }
 
         let fetch = Task { [core] in
-            await core.run { await $0.handler.runSearchFetch(query: "r", debounce: TestCore.searchDebounce) }
+            await core.run { await $0.appCore.runSearchFetch(query: "r", debounce: TestCore.searchDebounce) }
         }
         await Task.megaYield()
 
         // Spinner asserted synchronously on entry, before the debounce.
-        #expect(await core.search.initialStatus.isLoading == true)
+        await core.run { #expect($0.state.search.initialStatus.isLoading == true) }
 
         await clock.advance(by: TestCore.searchDebounce)
         await fetch.value
 
-        #expect(await core.search.initialStatus.isLoading == false)
+        await core.run { #expect($0.state.search.initialStatus.isLoading == false) }
     }
 
     /// Wrapped in `withMainSerialExecutor` because the listener task
@@ -233,17 +249,17 @@ struct AppCoreTests {
             // prior in-flight searchTask, so only the latest query fires.
             await core.run { $0.state.searchQuery = "ru" }
             let t1 = Task { [core] in
-                await core.run { await $0.handler.runSearchFetch(query: "ru", debounce: TestCore.searchDebounce) }
+                await core.run { await $0.appCore.runSearchFetch(query: "ru", debounce: TestCore.searchDebounce) }
             }
             await Task.megaYield()
             await core.run { $0.state.searchQuery = "rus" }
             let t2 = Task { [core] in
-                await core.run { await $0.handler.runSearchFetch(query: "rus", debounce: TestCore.searchDebounce) }
+                await core.run { await $0.appCore.runSearchFetch(query: "rus", debounce: TestCore.searchDebounce) }
             }
             await Task.megaYield()
             await core.run { $0.state.searchQuery = "rust" }
             let t3 = Task { [core] in
-                await core.run { await $0.handler.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
+                await core.run { await $0.appCore.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
             }
             await Task.megaYield()
 
@@ -254,8 +270,10 @@ struct AppCoreTests {
 
             let recorded = await calls.searchCalls
             #expect(recorded.map(\.0) == ["rust"])
-            #expect(await core.searchQuery == "rust")
-            #expect(await core.searchResults.map(\.id) == ["100"])
+            await core.run { core in
+                #expect(core.state.searchQuery == "rust")
+                #expect(core.state.searchResults.map(\.id) == ["100"])
+            }
         }
     }
 
@@ -277,13 +295,13 @@ struct AppCoreTests {
 
         await core.run { $0.state.searchQuery = "rust" }
         let pending = Task { [core] in
-            await core.run { await $0.handler.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
+            await core.run { await $0.appCore.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
         }
         await Task.megaYield()
 
         // .refresh with non-empty searchQuery re-runs the search; the
         // pending fetch is cancelled before it issues its own request.
-        await core.run { await $0.handler.dispatch(.refresh) }
+        await core.run { await $0.appCore.dispatch(.refresh) }
         await clock.advance(by: TestCore.searchDebounce)
         await pending.value
 
@@ -291,7 +309,7 @@ struct AppCoreTests {
         let searchCalls = await calls.searchCalls
         #expect(frontPageCalls.isEmpty)
         #expect(searchCalls.map(\.0) == ["rust"])
-        #expect(await core.searchResults.map(\.id) == ["100"])
+        await core.run { #expect($0.state.searchResults.map(\.id) == ["100"]) }
     }
 
 
@@ -306,10 +324,12 @@ struct AppCoreTests {
             search:    { _, _ in throw URLError(.cancelled) }
         )
 
-        await core.run { await $0.handler.dispatch(.refresh) }
+        await core.run { await $0.appCore.dispatch(.refresh) }
 
-        #expect(await core.feed.initialStatus.error == nil)
-        #expect(await core.feed.loadedHits == nil)
+        await core.run { core in
+            #expect(core.state.feed.initialStatus.error == nil)
+            #expect(core.state.feed.loadedHits == nil)
+        }
     }
 
     @Test("search-to-search cancel-and-replace through URLError(.cancelled) doesn't surface")
@@ -334,7 +354,7 @@ struct AppCoreTests {
 
         await core.run { $0.state.searchQuery = "ru" }
         let firstSearch = Task { [core] in
-            await core.run { await $0.handler.runSearchFetch(query: "ru", debounce: TestCore.searchDebounce) }
+            await core.run { await $0.appCore.runSearchFetch(query: "ru", debounce: TestCore.searchDebounce) }
         }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
@@ -342,7 +362,7 @@ struct AppCoreTests {
 
         await core.run { $0.state.searchQuery = "rust" }
         let secondSearch = Task { [core] in
-            await core.run { await $0.handler.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
+            await core.run { await $0.appCore.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
         }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
@@ -350,9 +370,11 @@ struct AppCoreTests {
         await firstSearch.value
         await secondSearch.value
 
-        #expect(await core.search.initialStatus.error == nil)
-        #expect(await core.searchQuery == "rust")
-        #expect(await core.searchResults.map(\.id) == ["100"])
+        await core.run { core in
+            #expect(core.state.search.initialStatus.error == nil)
+            #expect(core.state.searchQuery == "rust")
+            #expect(core.state.searchResults.map(\.id) == ["100"])
+        }
     }
 
     @Test("clearing the search query cancels the search, clears results, and does not refetch the feed")
@@ -371,27 +393,29 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await core.run { await $0.handler.dispatch(.refresh) }
-        let feedBefore = await core.feedStories.map(\.id)
+        await core.run { await $0.appCore.dispatch(.refresh) }
+        let feedBefore = await core.run { $0.state.feedStories.map(\.id) }
         let frontPageBefore = await calls.frontPageCalls.count
 
         await core.run { $0.state.searchQuery = "rust" }
         let search = Task { [core] in
-            await core.run { await $0.handler.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
+            await core.run { await $0.appCore.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
         }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
         await search.value
-        #expect(await core.searchResults.map(\.id) == ["100"])
+        await core.run { #expect($0.state.searchResults.map(\.id) == ["100"]) }
 
         await core.run { $0.state.searchQuery = "" }
-        await core.run { $0.handler.clearSearch() }
+        await core.run { $0.appCore.clearSearch() }
 
-        #expect(await core.searchResults.isEmpty)
-        #expect(await core.search.initialStatus.error == nil)
-        #expect(await core.search.initialStatus.isLoading == false)
-        #expect(await core.search.loadedHits == nil)
-        #expect(await core.feedStories.map(\.id) == feedBefore)
+        await core.run { core in
+            #expect(core.state.searchResults.isEmpty)
+            #expect(core.state.search.initialStatus.error == nil)
+            #expect(core.state.search.initialStatus.isLoading == false)
+            #expect(core.state.search.loadedHits == nil)
+            #expect(core.state.feedStories.map(\.id) == feedBefore)
+        }
         let frontPageAfter = await calls.frontPageCalls.count
         #expect(frontPageAfter == frontPageBefore)
         let searchCalls = await calls.searchCalls
@@ -407,20 +431,22 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await core.run { await $0.handler.dispatch(.refresh) }
-        let feedSnapshot = await core.feedStories.map(\.id)
+        await core.run { await $0.appCore.dispatch(.refresh) }
+        let feedSnapshot = await core.run { $0.state.feedStories.map(\.id) }
         #expect(feedSnapshot == ["100", "101"])
 
         await core.run { $0.state.searchQuery = "x" }
         let search = Task { [core] in
-            await core.run { await $0.handler.runSearchFetch(query: "x", debounce: TestCore.searchDebounce) }
+            await core.run { await $0.appCore.runSearchFetch(query: "x", debounce: TestCore.searchDebounce) }
         }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
         await search.value
 
-        #expect(await core.searchResults.map(\.id) == ["100"])
-        #expect(await core.feedStories.map(\.id) == feedSnapshot)
+        await core.run { core in
+            #expect(core.state.searchResults.map(\.id) == ["100"])
+            #expect(core.state.feedStories.map(\.id) == feedSnapshot)
+        }
     }
 
     @Test("backspacing all the way to empty during an in-flight fetch still clears results")
@@ -459,13 +485,15 @@ struct AppCoreTests {
         await clock.advance(by: TestCore.searchDebounce)
         await Task.megaYield()
 
-        #expect(await core.searchResults.isEmpty)
-        #expect(await core.search.initialStatus.error == nil)
-        #expect(await core.search.initialStatus.isLoading == false)
+        await core.run { core in
+            #expect(core.state.searchResults.isEmpty)
+            #expect(core.state.search.initialStatus.error == nil)
+            #expect(core.state.search.initialStatus.isLoading == false)
+        }
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == [])
 
-        await core.run { $0.handler.shutdown() }
+        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("rapid keystrokes within the debounce window collapse to one search")
@@ -502,9 +530,9 @@ struct AppCoreTests {
 
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == ["rust"])
-        #expect(await core.searchResults.map(\.id) == ["100"])
+        await core.run { #expect($0.state.searchResults.map(\.id) == ["100"]) }
 
-        await core.run { $0.handler.shutdown() }
+        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("a story present in both feed and search shares its read state across projections")
@@ -516,19 +544,19 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await core.run { await $0.handler.dispatch(.refresh) }
-        await core.run { await $0.handler.dispatch(.toggleRead(id: storyA.id)) }
-        #expect(await core.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
+        await core.run { await $0.appCore.dispatch(.refresh) }
+        await core.run { await $0.appCore.dispatch(.toggleRead(id: storyA.id)) }
+        await core.run { #expect($0.state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true) }
 
         await core.run { $0.state.searchQuery = "x" }
         let search = Task { [core] in
-            await core.run { await $0.handler.runSearchFetch(query: "x", debounce: TestCore.searchDebounce) }
+            await core.run { await $0.appCore.runSearchFetch(query: "x", debounce: TestCore.searchDebounce) }
         }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
         await search.value
 
-        #expect(await core.searchResults.first?.isRead == true)
+        await core.run { #expect($0.state.searchResults.first?.isRead == true) }
     }
 
     // MARK: Pagination
@@ -543,15 +571,19 @@ struct AppCoreTests {
             }
         )
 
-        await core.run { await $0.handler.dispatch(.refresh) }
-        #expect(await core.feed.loadedHits?.page == 0)
-        #expect(await core.feed.loadedHits?.hasMore == true)
-        #expect(await core.feedStories.map(\.id) == ["100", "101"])
+        await core.run { await $0.appCore.dispatch(.refresh) }
+        await core.run { core in
+            #expect(core.state.feed.loadedHits?.page == 0)
+            #expect(core.state.feed.loadedHits?.hasMore == true)
+            #expect(core.state.feedStories.map(\.id) == ["100", "101"])
+        }
 
-        await core.run { await $0.handler.dispatch(.loadMore) }
-        #expect(await core.feed.loadedHits?.page == 1)
-        #expect(await core.feed.loadedHits?.hasMore == true)  // page 1 of 3, page 2 still remains
-        #expect(await core.feedStories.map(\.id) == ["100", "101", "102"])
+        await core.run { await $0.appCore.dispatch(.loadMore) }
+        await core.run { core in
+            #expect(core.state.feed.loadedHits?.page == 1)
+            #expect(core.state.feed.loadedHits?.hasMore == true)  // page 1 of 3, page 2 still remains
+            #expect(core.state.feedStories.map(\.id) == ["100", "101", "102"])
+        }
     }
 
     @Test("loadMore on the last page is a no-op")
@@ -564,10 +596,10 @@ struct AppCoreTests {
             }
         )
 
-        await core.run { await $0.handler.dispatch(.refresh) }
-        #expect(await core.feed.loadedHits?.hasMore == false)
+        await core.run { await $0.appCore.dispatch(.refresh) }
+        await core.run { #expect($0.state.feed.loadedHits?.hasMore == false) }
 
-        await core.run { await $0.handler.dispatch(.loadMore) }
+        await core.run { await $0.appCore.dispatch(.loadMore) }
         let pages = await calls.frontPageCalls
         #expect(pages == [0])  // only the initial fetch
     }
@@ -582,7 +614,7 @@ struct AppCoreTests {
             }
         )
 
-        await core.run { await $0.handler.dispatch(.loadMore) }
+        await core.run { await $0.appCore.dispatch(.loadMore) }
         let pages = await calls.frontPageCalls
         #expect(pages.isEmpty)
     }
@@ -607,24 +639,26 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await core.run { await $0.handler.dispatch(.refresh) }  // page 0 lands
-        #expect(await core.feed.loadedHits?.page == 0)
+        await core.run { await $0.appCore.dispatch(.refresh) }  // page 0 lands
+        await core.run { #expect($0.state.feed.loadedHits?.page == 0) }
 
         let loadMore = Task { [core] in
-            await core.run { await $0.handler.runFeedLoadMore() }
+            await core.run { await $0.appCore.runFeedLoadMore() }
         }
         await Task.megaYield()
-        #expect(await core.feed.loadMoreStatus.isLoading == true)
+        await core.run { #expect($0.state.feed.loadMoreStatus.isLoading == true) }
 
         // Refresh while page-1 is parked. Refresh's first action is
         // `tasks[.feedMore] = nil`, which cancels the parked task.
-        await core.run { await $0.handler.dispatch(.refresh) }
+        await core.run { await $0.appCore.dispatch(.refresh) }
         await loadMore.value
 
         // page resets to 0 after refresh; loadMore status cleared.
-        #expect(await core.feed.loadedHits?.page == 0)
-        #expect(await core.feed.loadMoreStatus.isLoading == false)
-        #expect(await core.feed.loadMoreStatus.error == nil)
+        await core.run { core in
+            #expect(core.state.feed.loadedHits?.page == 0)
+            #expect(core.state.feed.loadMoreStatus.isLoading == false)
+            #expect(core.state.feed.loadMoreStatus.error == nil)
+        }
     }
 
     @Test("loadMore failure leaves the snapshot and initial status untouched")
@@ -637,14 +671,16 @@ struct AppCoreTests {
             }
         )
 
-        await core.run { await $0.handler.dispatch(.refresh) }
-        let before = await core.feedStories.map(\.id)
+        await core.run { await $0.appCore.dispatch(.refresh) }
+        let before = await core.run { $0.state.feedStories.map(\.id) }
 
-        await core.run { await $0.handler.dispatch(.loadMore) }
+        await core.run { await $0.appCore.dispatch(.loadMore) }
 
-        #expect(await core.feedStories.map(\.id) == before)
-        #expect(await core.feed.initialStatus.error == nil)
-        #expect(await core.feed.loadMoreStatus.error != nil)
+        await core.run { core in
+            #expect(core.state.feedStories.map(\.id) == before)
+            #expect(core.state.feed.initialStatus.error == nil)
+            #expect(core.state.feed.loadMoreStatus.error != nil)
+        }
     }
 
     @Test("search paginates symmetrically with feed")
@@ -657,13 +693,17 @@ struct AppCoreTests {
             }
         )
 
-        await core.run { await $0.handler.runSearchFetch(query: "x") }
-        #expect(await core.searchResults.map(\.id) == ["100"])
-        #expect(await core.search.loadedHits?.hasMore == true)
+        await core.run { await $0.appCore.runSearchFetch(query: "x") }
+        await core.run { core in
+            #expect(core.state.searchResults.map(\.id) == ["100"])
+            #expect(core.state.search.loadedHits?.hasMore == true)
+        }
 
-        await core.run { await $0.handler.runSearchLoadMore() }
-        #expect(await core.searchResults.map(\.id) == ["100", "101"])
-        #expect(await core.search.loadedHits?.hasMore == false)
+        await core.run { await $0.appCore.runSearchLoadMore() }
+        await core.run { core in
+            #expect(core.state.searchResults.map(\.id) == ["100", "101"])
+            #expect(core.state.search.loadedHits?.hasMore == false)
+        }
     }
 
     @Test("clearSearch cancels in-flight search load-more")
@@ -678,19 +718,21 @@ struct AppCoreTests {
             }
         )
 
-        await core.run { await $0.handler.runSearchFetch(query: "x") }
+        await core.run { await $0.appCore.runSearchFetch(query: "x") }
         let loadMore = Task { [core] in
-            await core.run { await $0.handler.runSearchLoadMore() }
+            await core.run { await $0.appCore.runSearchLoadMore() }
         }
         await Task.megaYield()
-        #expect(await core.search.loadMoreStatus.isLoading == true)
+        await core.run { #expect($0.state.search.loadMoreStatus.isLoading == true) }
 
-        await core.run { $0.handler.clearSearch() }
+        await core.run { $0.appCore.clearSearch() }
         await loadMore.value
 
-        #expect(await core.search.loadedHits == nil)
-        #expect(await core.search.loadMoreStatus.isLoading == false)
-        #expect(await core.search.loadMoreStatus.error == nil)
+        await core.run { core in
+            #expect(core.state.search.loadedHits == nil)
+            #expect(core.state.search.loadMoreStatus.isLoading == false)
+            #expect(core.state.search.loadMoreStatus.error == nil)
+        }
     }
 
     @Test("loadMore preserves loadedAt from the initial fetch")
@@ -702,12 +744,12 @@ struct AppCoreTests {
             }
         )
 
-        await core.run { await $0.handler.dispatch(.refresh) }
-        let initialLoadedAt = await core.feed.loadedHits?.loadedAt
+        await core.run { await $0.appCore.dispatch(.refresh) }
+        let initialLoadedAt = await core.run { $0.state.feed.loadedHits?.loadedAt }
 
         try? await Task.sleep(for: .milliseconds(10))
-        await core.run { await $0.handler.dispatch(.loadMore) }
+        await core.run { await $0.appCore.dispatch(.loadMore) }
 
-        #expect(await core.feed.loadedHits?.loadedAt == initialLoadedAt)
+        await core.run { #expect($0.state.feed.loadedHits?.loadedAt == initialLoadedAt) }
     }
 }
