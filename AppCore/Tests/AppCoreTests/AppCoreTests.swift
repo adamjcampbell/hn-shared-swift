@@ -173,8 +173,8 @@ struct AppCoreTests {
         }
     }
 
-    @Test("runSearchFetch debounces and fires search with current query")
-    func runSearchFetch_debouncesAndFires() async {
+    @Test("listener debounces and fires search with current query")
+    func listener_debouncesAndFires() async {
         let calls = CallRecorder()
         let clock = TestClock()
         let core = makeCore(
@@ -185,13 +185,11 @@ struct AppCoreTests {
             clock: clock
         )
 
+        await Task.megaYield()
         await core.run { $0.state.searchQuery = "rust" }
-        let fetch = Task { [core] in
-            await core.run { await $0.appCore.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
-        }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
-        await fetch.value
+        await Task.megaYield()
 
         await core.run { core in
             #expect(core.state.searchQuery == "rust")
@@ -200,6 +198,8 @@ struct AppCoreTests {
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == ["rust"])
         #expect(recorded.map(\.1) == [0])
+
+        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("initialStatus.isLoading activates on first keystroke, before debounce elapses")
@@ -209,66 +209,19 @@ struct AppCoreTests {
 
         await core.run { #expect($0.state.search.initialStatus.isLoading == false) }
 
-        let fetch = Task { [core] in
-            await core.run { await $0.appCore.runSearchFetch(query: "r", debounce: TestCore.searchDebounce) }
-        }
+        await Task.megaYield()
+        await core.run { $0.state.searchQuery = "r" }
         await Task.megaYield()
 
-        // Spinner asserted synchronously on entry, before the debounce.
+        // Spinner asserted synchronously on listener entry, before the debounce.
         await core.run { #expect($0.state.search.initialStatus.isLoading == true) }
 
         await clock.advance(by: TestCore.searchDebounce)
-        await fetch.value
+        await Task.megaYield()
 
         await core.run { #expect($0.state.search.initialStatus.isLoading == false) }
-    }
 
-    /// The listener and the explicit `t1/t2/t3` Tasks race for the same
-    /// `tasks[.search]` slot; `withMainSerialExecutor` forces deterministic
-    /// scheduling so the last-writer assertion is reliable.
-    @Test("rapid runSearchFetch calls coalesce — only the latest fires")
-    func runSearchFetch_coalescesRapidKeystrokes() async {
-        await withMainSerialExecutor {
-            let calls = CallRecorder()
-            let clock = TestClock()
-            let core = makeCore(
-                search: { query, p in
-                    await calls.recordSearch(query, page: p)
-                    return page([storyA])
-                },
-                clock: clock
-            )
-
-            // Three back-to-back keystrokes; each runSearchFetch cancels the
-            // prior in-flight searchTask, so only the latest query fires.
-            await core.run { $0.state.searchQuery = "ru" }
-            let t1 = Task { [core] in
-                await core.run { await $0.appCore.runSearchFetch(query: "ru", debounce: TestCore.searchDebounce) }
-            }
-            await Task.megaYield()
-            await core.run { $0.state.searchQuery = "rus" }
-            let t2 = Task { [core] in
-                await core.run { await $0.appCore.runSearchFetch(query: "rus", debounce: TestCore.searchDebounce) }
-            }
-            await Task.megaYield()
-            await core.run { $0.state.searchQuery = "rust" }
-            let t3 = Task { [core] in
-                await core.run { await $0.appCore.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
-            }
-            await Task.megaYield()
-
-            await clock.advance(by: TestCore.searchDebounce)
-            await t1.value
-            await t2.value
-            await t3.value
-
-            let recorded = await calls.searchCalls
-            #expect(recorded.map(\.0) == ["rust"])
-            await core.run { core in
-                #expect(core.state.searchQuery == "rust")
-                #expect(core.state.searchResults.map(\.id) == ["100"])
-            }
-        }
+        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("refresh while a search is in flight re-runs the current search, not the feed")
@@ -287,23 +240,24 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await core.run { $0.state.searchQuery = "rust" }
-        let pending = Task { [core] in
-            await core.run { await $0.appCore.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
-        }
         await Task.megaYield()
+        await core.run { $0.state.searchQuery = "rust" }
+        await Task.megaYield()
+        // Listener has spawned a debounced fetch parked in clock.sleep.
 
         // .refresh with non-empty searchQuery re-runs the search; the
-        // pending fetch is cancelled before it issues its own request.
+        // pending listener fetch is cancelled before its sleep elapses.
         await core.run { await $0.appCore.dispatch(.refresh) }
         await clock.advance(by: TestCore.searchDebounce)
-        await pending.value
+        await Task.megaYield()
 
         let frontPageCalls = await calls.frontPageCalls
         let searchCalls = await calls.searchCalls
         #expect(frontPageCalls.isEmpty)
         #expect(searchCalls.map(\.0) == ["rust"])
         await core.run { #expect($0.state.searchResults.map(\.id) == ["100"]) }
+
+        await core.run { $0.appCore.shutdown() }
     }
 
 
@@ -346,29 +300,25 @@ struct AppCoreTests {
             clock: clock
         )
 
+        await Task.megaYield()
         await core.run { $0.state.searchQuery = "ru" }
-        let firstSearch = Task { [core] in
-            await core.run { await $0.appCore.runSearchFetch(query: "ru", debounce: TestCore.searchDebounce) }
-        }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
         await Task.megaYield()
+        // "ru" is now parked in the cancel-loop inside the search mock.
 
         await core.run { $0.state.searchQuery = "rust" }
-        let secondSearch = Task { [core] in
-            await core.run { await $0.appCore.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
-        }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
-
-        await firstSearch.value
-        await secondSearch.value
+        await Task.megaYield()
 
         await core.run { core in
             #expect(core.state.search.initialStatus.error == nil)
             #expect(core.state.searchQuery == "rust")
             #expect(core.state.searchResults.map(\.id) == ["100"])
         }
+
+        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("clearing the search query cancels the search, clears results, and does not refetch the feed")
@@ -391,17 +341,15 @@ struct AppCoreTests {
         let feedBefore = await core.run { $0.state.feedStories.map(\.id) }
         let frontPageBefore = await calls.frontPageCalls.count
 
+        await Task.megaYield()
         await core.run { $0.state.searchQuery = "rust" }
-        let search = Task { [core] in
-            await core.run { await $0.appCore.runSearchFetch(query: "rust", debounce: TestCore.searchDebounce) }
-        }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
-        await search.value
+        await Task.megaYield()
         await core.run { #expect($0.state.searchResults.map(\.id) == ["100"]) }
 
         await core.run { $0.state.searchQuery = "" }
-        await core.run { $0.appCore.clearSearch() }
+        await Task.megaYield()
 
         await core.run { core in
             #expect(core.state.searchResults.isEmpty)
@@ -414,6 +362,8 @@ struct AppCoreTests {
         #expect(frontPageAfter == frontPageBefore)
         let searchCalls = await calls.searchCalls
         #expect(searchCalls.map(\.0) == ["rust"])
+
+        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("feed survives an active search")
@@ -429,18 +379,18 @@ struct AppCoreTests {
         let feedSnapshot = await core.run { $0.state.feedStories.map(\.id) }
         #expect(feedSnapshot == ["100", "101"])
 
+        await Task.megaYield()
         await core.run { $0.state.searchQuery = "x" }
-        let search = Task { [core] in
-            await core.run { await $0.appCore.runSearchFetch(query: "x", debounce: TestCore.searchDebounce) }
-        }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
-        await search.value
+        await Task.megaYield()
 
         await core.run { core in
             #expect(core.state.searchResults.map(\.id) == ["100"])
             #expect(core.state.feedStories.map(\.id) == feedSnapshot)
         }
+
+        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("backspacing all the way to empty during an in-flight fetch still clears results")
@@ -542,15 +492,15 @@ struct AppCoreTests {
         await core.run { await $0.appCore.dispatch(.toggleRead(id: storyA.id)) }
         await core.run { #expect($0.state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true) }
 
+        await Task.megaYield()
         await core.run { $0.state.searchQuery = "x" }
-        let search = Task { [core] in
-            await core.run { await $0.appCore.runSearchFetch(query: "x", debounce: TestCore.searchDebounce) }
-        }
         await Task.megaYield()
         await clock.advance(by: TestCore.searchDebounce)
-        await search.value
+        await Task.megaYield()
 
         await core.run { #expect($0.state.searchResults.first?.isRead == true) }
+
+        await core.run { $0.appCore.shutdown() }
     }
 
     // MARK: Pagination
@@ -637,7 +587,7 @@ struct AppCoreTests {
         await core.run { #expect($0.state.feed.loadedHits?.page == 0) }
 
         let loadMore = Task { [core] in
-            await core.run { await $0.appCore.runFeedLoadMore() }
+            await core.run { await $0.appCore.dispatch(.loadMore) }
         }
         await Task.megaYield()
         await core.run { #expect($0.state.feed.loadMoreStatus.isLoading == true) }
@@ -679,29 +629,38 @@ struct AppCoreTests {
 
     @Test("search paginates symmetrically with feed")
     func search_paginates() async {
+        let clock = TestClock()
         let core = makeCore(
             search: { _, p in
                 if p == 0 { return page([storyA], totalPages: 2) }
                 if p == 1 { return page([storyB], totalPages: 2) }
                 return page([])
-            }
+            },
+            clock: clock
         )
 
-        await core.run { await $0.appCore.runSearchFetch(query: "x") }
+        await Task.megaYield()
+        await core.run { $0.state.searchQuery = "x" }
+        await Task.megaYield()
+        await clock.advance(by: TestCore.searchDebounce)
+        await Task.megaYield()
         await core.run { core in
             #expect(core.state.searchResults.map(\.id) == ["100"])
             #expect(core.state.search.loadedHits?.hasMore == true)
         }
 
-        await core.run { await $0.appCore.runSearchLoadMore() }
+        await core.run { await $0.appCore.dispatch(.loadMore) }
         await core.run { core in
             #expect(core.state.searchResults.map(\.id) == ["100", "101"])
             #expect(core.state.search.loadedHits?.hasMore == false)
         }
+
+        await core.run { $0.appCore.shutdown() }
     }
 
-    @Test("clearSearch cancels in-flight search load-more")
+    @Test("clearing search cancels in-flight search load-more")
     func clearSearch_cancelsLoadMore() async {
+        let clock = TestClock()
         let core = makeCore(
             search: { _, p in
                 if p == 0 { return page([storyA], totalPages: 5) }
@@ -709,24 +668,35 @@ struct AppCoreTests {
                     try? await Task.sleep(for: .milliseconds(5))
                 }
                 throw CancellationError()
-            }
+            },
+            clock: clock
         )
 
-        await core.run { await $0.appCore.runSearchFetch(query: "x") }
+        await Task.megaYield()
+        await core.run { $0.state.searchQuery = "x" }
+        await Task.megaYield()
+        await clock.advance(by: TestCore.searchDebounce)
+        await Task.megaYield()
+        await core.run { #expect($0.state.search.loadedHits?.hasMore == true) }
+
         let loadMore = Task { [core] in
-            await core.run { await $0.appCore.runSearchLoadMore() }
+            await core.run { await $0.appCore.dispatch(.loadMore) }
         }
         await Task.megaYield()
         await core.run { #expect($0.state.search.loadMoreStatus.isLoading == true) }
 
-        await core.run { $0.appCore.clearSearch() }
+        // Clear the search via the listener's empty-query path.
+        await core.run { $0.state.searchQuery = "" }
         await loadMore.value
+        await Task.megaYield()
 
         await core.run { core in
             #expect(core.state.search.loadedHits == nil)
             #expect(core.state.search.loadMoreStatus.isLoading == false)
             #expect(core.state.search.loadMoreStatus.error == nil)
         }
+
+        await core.run { $0.appCore.shutdown() }
     }
 
     @Test("loadMore preserves loadedAt from the initial fetch")

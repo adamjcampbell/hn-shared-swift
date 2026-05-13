@@ -7,8 +7,7 @@ import FoundationNetworking
 /// Workhorse for `UICore`. Non-`Sendable` `final class`; async and
 /// Task-spawning methods take `isolation: isolated (any Actor)? =
 /// #isolation` (SE-0420) so they inherit the caller's isolation
-/// statically. Sync internal mutators omit the parameter — `self` is
-/// reached through the caller's region with direct property access.
+/// statically.
 ///
 /// Not bridged to Kotlin; `UICore` re-exposes the public surface.
 final class AppCore {
@@ -40,180 +39,47 @@ final class AppCore {
         self.commandsContinuation = commandsContinuation
         self.client = client
         self.clock = clock
-        // Long-lived listener on the caller's isolation. `isolatedTask`
-        // carries the dynamic isolation through `sending` + `@isolated(any)`
-        // so the closure can capture non-Sendable `self`.
+
+        // Listener for `state.searchQuery` writes (iOS @Bindable,
+        // Android textFieldState collector). Empty → clear the search
+        // surface and cancel anything in flight. Non-empty → schedule
+        // a debounced fetch fire-and-forget: the body must return to
+        // `for await` before the network call completes so the *next*
+        // keystroke can cancel-and-replace the parked task.
         tasks[.searchListener] = isolatedTask { [self] in
             for await query in state.searchQueryChanges {
                 if query.isEmpty {
-                    clearSearch()
+                    tasks[.search] = nil
+                    tasks[.searchCommit] = nil
+                    tasks[.searchMore] = nil
+                    state.search = LoadableHits()
                 } else {
-                    scheduleSearchFetch(query: query, debounce: Self.searchDebounce)
+                    scheduleSearchFetch(query: query)
                 }
             }
         }
     }
 
-    // MARK: - Public dispatch surface
-
-    /// Single entry point for every user-driven mutation.
-    func dispatch(_ event: AppEvent, isolation: isolated (any Actor)? = #isolation) async {
-        switch event {
-        case .toggleRead(let id):
-            toggleRead(id)
-        case .openStory(let id):
-            openStory(id)
-        case .refresh:
-            if state.searchQuery.isEmpty {
-                await runFeedFetch()
-            } else {
-                await runSearchFetch(query: state.searchQuery)
-            }
-        case .loadMore:
-            if state.searchQuery.isEmpty {
-                await runFeedLoadMore()
-            } else {
-                await runSearchLoadMore()
-            }
-        }
-    }
-
-    /// Test-only teardown — production `UICore` is app-lifetime.
-    func shutdown() {
-        tasks.cancelAll()
-    }
-
-    // MARK: - Synchronous mutations
-
-    /// Cancel every in-flight search task and drop the snapshot in
-    /// a single `state.search` write — the projection never observes
-    /// a partially-cleared state.
-    func clearSearch() {
-        tasks[.search] = nil
-        tasks[.searchCommit] = nil
-        tasks[.searchMore] = nil
-        state.search = LoadableHits()
-    }
-
-    private func toggleRead(_ id: String) {
-        if state.readIds.contains(id) {
-            state.readIds.remove(id)
-        } else {
-            state.readIds.insert(id)
-        }
-    }
-
-    /// Mark a known story as read and, if it has a URL, ask the UI to
-    /// present it. Single dictionary lookup against the entity store —
-    /// no per-projection scan. Unknown ids are a no-op.
-    private func openStory(_ id: String) {
-        guard let hit = state.hits[id] else { return }
-        state.readIds.insert(id)
-        if let url = hit.url {
-            commandsContinuation.yield(.presentURL(value: url))
-        }
-    }
-
-    // MARK: - Fetch orchestration
-
-    func runFeedFetch(isolation: isolated (any Actor)? = #isolation) async {
-        // Refresh supersedes any in-flight load-more: cancel its task
-        // (otherwise its appended page would land on the snapshot
-        // we're about to replace) and reset its status (otherwise
-        // the stale spinner/error would outlive the refresh).
-        tasks[.feedMore] = nil
-        state.feed.loadMoreStatus = LoadStatus()
-        state.feed.initialStatus.startLoading()
-        do {
-            let page = try await runFetchTask(id: .feed, debounce: nil) { client in
-                try await client.frontPage(0)
-            }
-            let ids = state.upsert(page)
-            state.feed.receiveInitialPage(ids, totalPages: page.totalPages)
-        } catch is CancellationError {
-            // Newer fetch will clear loading when it commits.
-        } catch {
-            state.feed.initialStatus.finishFailure(error.localizedDescription)
-        }
-    }
-
-    func runFeedLoadMore(isolation: isolated (any Actor)? = #isolation) async {
-        guard let loaded = state.feed.loadedHits, loaded.hasMore,
-              !state.feed.loadMoreStatus.isLoading else { return }
-        let next = loaded.nextPage
-
-        state.feed.loadMoreStatus.startLoading()
-        do {
-            let page = try await runFetchTask(id: .feedMore, debounce: nil) { client in
-                try await client.frontPage(next)
-            }
-            let ids = state.upsert(page)
-            state.feed.receiveLoadMorePage(ids, totalPages: page.totalPages)
-        } catch is CancellationError {
-            // Newer fetch will clear loading when it commits.
-        } catch {
-            state.feed.loadMoreStatus.finishFailure(error.localizedDescription)
-        }
-    }
-
-    func runSearchFetch(
-        query: String,
-        debounce: Duration? = nil,
-        isolation: isolated (any Actor)? = #isolation
-    ) async {
-        tasks[.searchMore] = nil
-        // Cancel any listener-spawned commit task too; otherwise the
-        // registry slot keeps pointing at a stale (completed or
-        // mid-flight) commit.
-        tasks[.searchCommit] = nil
-        state.search.loadMoreStatus = LoadStatus()
-        state.search.initialStatus.startLoading()
-        do {
-            let page = try await runFetchTask(id: .search, debounce: debounce) { client in
-                try await client.search(query, 0)
-            }
-            let ids = state.upsert(page)
-            state.search.receiveInitialPage(ids, totalPages: page.totalPages)
-        } catch is CancellationError {
-            // Newer fetch will clear loading when it commits.
-        } catch {
-            state.search.initialStatus.finishFailure(error.localizedDescription)
-        }
-    }
-
-    func runSearchLoadMore(isolation: isolated (any Actor)? = #isolation) async {
-        guard let loaded = state.search.loadedHits, loaded.hasMore,
-              !state.search.loadMoreStatus.isLoading else { return }
-        let query = state.searchQuery
-        let next = loaded.nextPage
-
-        state.search.loadMoreStatus.startLoading()
-        do {
-            let page = try await runFetchTask(id: .searchMore, debounce: nil) { client in
-                try await client.search(query, next)
-            }
-            let ids = state.upsert(page)
-            state.search.receiveLoadMorePage(ids, totalPages: page.totalPages)
-        } catch is CancellationError {
-            // Newer fetch will clear loading when it commits.
-        } catch {
-            state.search.loadMoreStatus.finishFailure(error.localizedDescription)
-        }
-    }
-
-    /// Fire-and-forget debounced search fetch. Parks the network call
-    /// in `tasks[.search]` (cancellable via newer fetch or `clearSearch`)
-    /// and the trailing commit awaiter in `tasks[.searchCommit]` so a
-    /// backspace-to-empty mid-debounce can cancel both halves.
+    /// Fire-and-forget debounced search. Parks the network call in
+    /// `tasks[.search]` (cancellable by a newer keystroke or by the
+    /// listener's empty-query path) and the post-await commit in
+    /// `tasks[.searchCommit]`. The split slot is what closes the race
+    /// where a clearSearch lands between `task.value` resolving and
+    /// the state write — cancelling `[.searchCommit]` drops the
+    /// commit before it repopulates cleared state.
+    ///
+    /// Lives outside the listener body because Swift can't propagate
+    /// region isolation through nested `@isolated(any)` closures; the
+    /// explicit `isolation:` parameter gives the inner `isolatedTask`
+    /// a static actor to inherit.
     private func scheduleSearchFetch(
         query: String,
-        debounce: Duration,
         isolation: isolated (any Actor)? = #isolation
     ) {
         tasks[.searchMore] = nil
-        // Skip the no-op write when the second/third keystroke arrives
-        // while we're already loading — avoids re-firing `@Observable`
-        // notifications (→ SwiftUI/Compose recomposition) per character.
+        // Skip no-op writes during keystroke bursts — re-firing
+        // @Observable notifications would trigger SwiftUI / Compose
+        // recomposition per character.
         if state.search.loadMoreStatus != LoadStatus() {
             state.search.loadMoreStatus = LoadStatus()
         }
@@ -221,15 +87,11 @@ final class AppCore {
             state.search.initialStatus.startLoading()
         }
 
-        let task = makeFetchTask(debounce: debounce) { client in
+        let task = makeFetchTask(debounce: Self.searchDebounce) { client in
             try await client.search(query, 0)
         }
         tasks[.search] = task
 
-        // Registering the commit Task closes a race: if a `clearSearch`
-        // lands between `task.value` resolving and the state write, the
-        // commit would otherwise repopulate cleared state. The
-        // post-await `checkCancellation` is what observes that cancel.
         tasks[.searchCommit] = isolatedTask { [self] in
             do {
                 let page = try await task.value
@@ -237,26 +99,133 @@ final class AppCore {
                 let ids = state.upsert(page)
                 state.search.receiveInitialPage(ids, totalPages: page.totalPages)
             } catch is CancellationError {
-                // Newer fetch (or clearSearch) clears loading when it commits.
+                // Newer keystroke (or clearSearch) cancelled us.
             } catch {
                 state.search.initialStatus.finishFailure(error.localizedDescription)
             }
         }
     }
 
+    /// Single entry point for every user-driven mutation. Each arm
+    /// holds the entire flow for its event — the explicit
+    /// feed/search and refresh/loadMore duplication is the point:
+    /// each path reads top-to-bottom without jumping between helpers.
+    func dispatch(_ event: AppEvent, isolation: isolated (any Actor)? = #isolation) async {
+        switch event {
+
+        case .toggleRead(let id):
+            if state.readIds.contains(id) {
+                state.readIds.remove(id)
+            } else {
+                state.readIds.insert(id)
+            }
+
+        case .openStory(let id):
+            guard let hit = state.hits[id] else { return }
+            state.readIds.insert(id)
+            if let url = hit.url {
+                commandsContinuation.yield(.presentURL(value: url))
+            }
+
+        case .refresh where state.searchQuery.isEmpty:
+            // Feed refresh — page 0. Supersedes any in-flight
+            // load-more (otherwise its appended page would land on
+            // the snapshot we're about to replace) and resets its
+            // status.
+            tasks[.feedMore] = nil
+            state.feed.loadMoreStatus = LoadStatus()
+            state.feed.initialStatus.startLoading()
+
+            let task = makeFetchTask(debounce: nil) { try await $0.frontPage(0) }
+            tasks[.feed] = task
+            do {
+                let page = try await task.value
+                let ids = state.upsert(page)
+                state.feed.receiveInitialPage(ids, totalPages: page.totalPages)
+            } catch is CancellationError {
+                // Newer fetch will clear loading when it commits.
+            } catch {
+                state.feed.initialStatus.finishFailure(error.localizedDescription)
+            }
+
+        case .refresh:
+            // Search refresh — page 0 with the current query. Cancels
+            // the listener's commit wrapper too so the registry slot
+            // doesn't keep pointing at a stale task.
+            let query = state.searchQuery
+            tasks[.searchMore] = nil
+            tasks[.searchCommit] = nil
+            state.search.loadMoreStatus = LoadStatus()
+            state.search.initialStatus.startLoading()
+
+            let task = makeFetchTask(debounce: nil) { try await $0.search(query, 0) }
+            tasks[.search] = task
+            do {
+                let page = try await task.value
+                let ids = state.upsert(page)
+                state.search.receiveInitialPage(ids, totalPages: page.totalPages)
+            } catch is CancellationError {
+            } catch {
+                state.search.initialStatus.finishFailure(error.localizedDescription)
+            }
+
+        case .loadMore where state.searchQuery.isEmpty:
+            guard let loaded = state.feed.loadedHits, loaded.hasMore,
+                  !state.feed.loadMoreStatus.isLoading else { return }
+            let next = loaded.nextPage
+            state.feed.loadMoreStatus.startLoading()
+
+            let task = makeFetchTask(debounce: nil) { try await $0.frontPage(next) }
+            tasks[.feedMore] = task
+            do {
+                let page = try await task.value
+                let ids = state.upsert(page)
+                state.feed.receiveLoadMorePage(ids, totalPages: page.totalPages)
+            } catch is CancellationError {
+            } catch {
+                state.feed.loadMoreStatus.finishFailure(error.localizedDescription)
+            }
+
+        case .loadMore:
+            guard let loaded = state.search.loadedHits, loaded.hasMore,
+                  !state.search.loadMoreStatus.isLoading else { return }
+            let query = state.searchQuery
+            let next = loaded.nextPage
+            state.search.loadMoreStatus.startLoading()
+
+            let task = makeFetchTask(debounce: nil) { try await $0.search(query, next) }
+            tasks[.searchMore] = task
+            do {
+                let page = try await task.value
+                let ids = state.upsert(page)
+                state.search.receiveLoadMorePage(ids, totalPages: page.totalPages)
+            } catch is CancellationError {
+            } catch {
+                state.search.loadMoreStatus.finishFailure(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Test-only teardown — production `UICore` is app-lifetime. The
+    /// listener captures `[self]`, so without this the
+    /// TaskRegistry → listener-Task → self cycle keeps the core
+    /// alive past test scope.
+    func shutdown() {
+        tasks.cancelAll()
+    }
+
     /// Build a fetch task that sleeps for `debounce` (if set), then
     /// runs `body`. Captures only Sendable values (`client`, `clock`).
     ///
-    /// **`try` (not `try?`) on the sleep is load-bearing.** A
-    /// test-mock closure that doesn't honor cancellation would
-    /// otherwise fall through to the network call and commit stale
-    /// data; the throw propagating is what makes cancel-and-replace
-    /// robust against any client implementation.
+    /// **`try` on the sleep is load-bearing.** A test-mock that
+    /// doesn't honor cancellation would otherwise fall through to the
+    /// network call and commit stale data; the throw propagating is
+    /// what makes cancel-and-replace robust against any client impl.
     ///
-    /// **`URLError(.cancelled)` is normalised to `CancellationError`.**
-    /// `URLSession` surfaces task cancellation as `URLError.cancelled`,
-    /// which would otherwise be reported as a transient error in the
-    /// caller's catch arm rather than a silent supersede.
+    /// **`URLError(.cancelled)` → `CancellationError`.** `URLSession`
+    /// surfaces task cancellation as `URLError.cancelled`, which would
+    /// otherwise be reported as a transient error rather than a silent
+    /// supersede.
     private func makeFetchTask(
         debounce: Duration?,
         body: @Sendable @escaping (HNClient) async throws -> HNPage
@@ -265,9 +234,6 @@ final class AppCore {
             if let debounce {
                 try await clock.sleep(for: debounce)
             }
-            // `Clock.sleep` honours cancellation, but a mock `body` that
-            // ignores cancellation would fall through and commit a stale
-            // page. The explicit check covers that test seam.
             try Task.checkCancellation()
             do {
                 return try await body(client)
@@ -275,21 +241,6 @@ final class AppCore {
                 throw CancellationError()
             }
         }
-    }
-
-    /// Spawns a fetch task, stores it in the registry (cancelling any
-    /// prior with the same id), and awaits its value. Used by awaiting
-    /// paths (`runFeedFetch`, `runFeedLoadMore`, `runSearchFetch`,
-    /// `runSearchLoadMore`).
-    private func runFetchTask(
-        id: TaskID,
-        debounce: Duration?,
-        body: @Sendable @escaping (HNClient) async throws -> HNPage,
-        isolation: isolated (any Actor)? = #isolation
-    ) async throws -> HNPage {
-        let task = makeFetchTask(debounce: debounce, body: body)
-        tasks[id] = task
-        return try await task.value
     }
 }
 
