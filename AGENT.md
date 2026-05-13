@@ -22,8 +22,8 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 - One Swift type (`AppCore`) drives both platforms; one `AppEvent`
   enum carries every user-driven mutation.
 - iOS: direct `@Observable` + SwiftUI; no bridge in the iOS path.
-  `RootView` owns the singleton `AppCore` and installs an
-  `AppEventDispatch` action via `\.dispatch`. Descendants take
+  `RootView` owns the singleton `AppCore` and installs a
+  `SendAppEvent` action via `\.sendEvent`. Descendants take
   `AppState` (the `@Observable final class`) as a parameter.
 - Android: bridged via SkipFuse. The Compose UI reads `appModel.state`
   directly — the bridging plugin emits a Kotlin `class AppState` whose
@@ -77,24 +77,24 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `any Clock<Duration>` existential) don't bridge, and it's
   unmarked.
 - **`AppCore` (workhorse class) is intentionally not bridged.**
-  It's internal coordination — `dispatch`, `scheduleSearchFetch`,
+  It's internal coordination — `sendEvent`, `scheduleSearchFetch`,
   `makeFetchTask`, the listener Task. `UICore` re-exposes the only
-  surface bridging needs (`dispatch`, `state`, `commands`).
+  surface bridging needs (`sendEvent`, `state`, `commands`).
 
 ### iOS view layer
 
 (Enforced by `ios-app/AppCoreBridgeExample/RootView.swift` +
-`AppEventDispatch.swift`.)
+`SendAppEvent.swift`.)
 
 - `AppCore` is held only by `RootView`. Below the root, views accept
   `AppState` (the `@Observable final class`) as a parameter; never
   `AppCore` itself.
-- Events flow back via `@Environment(\.dispatch)`, an
-  `AppEventDispatch` callable struct. The struct is **`Equatable`**
+- Events flow back via `@Environment(\.sendEvent)`, a
+  `SendAppEvent` callable struct. The struct is **`Equatable`**
   via nil-parity on the held optional `AppCore`, leaning on the
   invariant that `RootView` constructs exactly one `AppCore` for the
   app's lifetime — "both non-nil" uniquely identifies the installed
-  dispatcher and "both nil" is the default env value. Without that
+  sender and "both nil" is the default env value. Without that
   conformance, SwiftUI's reflection-based environment diff cannot
   compare a closure-holding value, marks the env entry as changed on
   every parent body re-eval, and invalidates every descendant reading
@@ -182,12 +182,12 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   SE-0431 + SE-0430), the only construction that can capture
   non-`Sendable` `self` into an unstructured Task while preserving
   the caller's actor.
-- **`dispatch` is the single orchestration entry.** All four
+- **`sendEvent` is the single orchestration entry.** All four
   fetch flows (feed refresh / feed load-more / search refresh /
   search load-more) plus `toggleRead` / `openStory` live inline as
-  switch arms in `AppCore.dispatch(_:)`. The intentional duplication
+  switch arms in `AppCore.sendEvent(_:)`. The intentional duplication
   is the point — each arm reads top-to-bottom for its event with
-  no helper jumps. The one method that survives outside `dispatch`
+  no helper jumps. The one method that survives outside `sendEvent`
   is `scheduleSearchFetch`, kept private because nesting
   `isolatedTask` inside the listener's `@isolated(any)` body trips
   SE-0461 region isolation; the method-level isolation parameter
