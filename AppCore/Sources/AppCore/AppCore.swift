@@ -85,9 +85,9 @@ final class AppCore {
 
     // MARK: - Synchronous mutations
 
-    /// Replace the entire search section atomically: cancel any
-    /// in-flight search tasks and drop the snapshot in one write so
-    /// the projection never observes a partially-cleared state.
+    /// Cancel every in-flight search task and drop the snapshot in
+    /// a single `state.search` write — the projection never observes
+    /// a partially-cleared state.
     func clearSearch() {
         tasks[.search] = nil
         tasks[.searchCommit] = nil
@@ -162,6 +162,10 @@ final class AppCore {
         isolation: isolated (any Actor)? = #isolation
     ) async {
         tasks[.searchMore] = nil
+        // Cancel any listener-spawned commit task too; otherwise the
+        // registry slot keeps pointing at a stale (completed or
+        // mid-flight) commit.
+        tasks[.searchCommit] = nil
         state.search.loadMoreStatus = LoadStatus()
         state.search.initialStatus.startLoading()
         do {

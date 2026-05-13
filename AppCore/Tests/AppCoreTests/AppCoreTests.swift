@@ -461,7 +461,7 @@ struct AppCoreTests {
             clock: clock
         )
 
-        // Let the listener spawned in `AppCore.bootstrap` reach
+        // Let the listener spawned in `AppCore.init` reach
         // its `for await` suspension point before the first write.
         await Task.megaYield()
 
@@ -508,7 +508,7 @@ struct AppCoreTests {
             clock: clock
         )
 
-        // Let the listener spawned in `AppCore.bootstrap` reach
+        // Let the listener spawned in `AppCore.init` reach
         // its `for await` suspension point before the first write.
         await Task.megaYield()
 
