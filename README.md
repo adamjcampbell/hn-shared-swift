@@ -57,7 +57,7 @@ the `// SKIP @bridgeMembers` markers on the Swift sources.
 
 | Surface | Tested how | Status |
 |---|---|---|
-| `AppCore` SwiftPM target | `cd AppCore && swift test --disable-sandbox`, 19/19 pass | ✅ |
+| `AppCore` SwiftPM target | `cd AppCore && swift test --disable-sandbox`, 32/32 pass | ✅ |
 | iOS app | `xcodebuild` for iPhone 17 / iOS 26.4 simulator | ✅ |
 | Android: build | `./gradlew :app:assembleDebug` produces a 99 MB debug APK | ✅ |
 | Android: runtime | App launches on `Medium_Phone_API_36.1` AVD, fetches HN stories, search debounces and updates | ✅ |
