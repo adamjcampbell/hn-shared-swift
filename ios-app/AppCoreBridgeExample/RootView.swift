@@ -2,7 +2,7 @@ import SwiftUI
 import AppCore
 
 struct RootView: View {
-    @State private var appCore = AppCore()
+    @State private var appCore = UICore()
     @State private var presented: IdentifiedURL?
 
     var body: some View {
@@ -15,7 +15,7 @@ struct RootView: View {
             .task {
                 // Long-lived consumer of AppCommand. The sheet binding
                 // lives here in the SwiftUI tree; user-driven dismissal
-                // sets `presented = nil` without touching AppCore.
+                // sets `presented = nil` without touching UICore.
                 for await command in appCore.commands {
                     switch command {
                     case .presentURL(let urlString):
