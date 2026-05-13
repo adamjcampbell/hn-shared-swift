@@ -13,14 +13,6 @@ public struct UICore {
     let appCore: AppCore
 
     public init() {
-        self.init(client: HNClient(), clock: ContinuousClock())
-    }
-
-    /// Test seam — not bridged.
-    init(
-        client: HNClient,
-        clock: any Clock<Duration> = ContinuousClock()
-    ) {
         let state = AppState()
         let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
         self.state = state
@@ -29,18 +21,13 @@ public struct UICore {
             state: state,
             commands: stream,
             commandsContinuation: continuation,
-            client: client,
-            clock: clock
+            client: HNClient(),
+            clock: ContinuousClock()
         )
     }
 
     /// Single entry point for every user-driven mutation.
     public func dispatch(_ event: AppEvent) async {
         await appCore.dispatch(event)
-    }
-
-    /// Test-only teardown — production `UICore` is app-lifetime.
-    public func shutdown() {
-        appCore.shutdown()
     }
 }
