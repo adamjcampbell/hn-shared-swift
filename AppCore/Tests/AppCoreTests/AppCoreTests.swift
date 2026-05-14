@@ -313,7 +313,7 @@ struct AppCoreTests {
                     // Park until cancelled; surface URLError(.cancelled) so
                     // we exercise AppCore's URLError → CancellationError
                     // normalisation.
-                    do { try await Task.sleep(for: .seconds(60)) }
+                    do { try await clock.sleep(for: .seconds(Int.max)) }
                     catch { throw URLError(.cancelled) }
                 }
                 return page([storyA])
@@ -569,7 +569,7 @@ struct AppCoreTests {
                 await calls.recordFrontPage(page: p)
                 if p == 1 {
                     // Park until the refresh cancels us.
-                    try await Task.sleep(for: .seconds(60))
+                    try await clock.sleep(for: .seconds(Int.max))
                 }
                 return page([storyA], totalPages: 5)
             },
@@ -652,7 +652,7 @@ struct AppCoreTests {
             search: { _, p in
                 if p == 0 { return page([storyA], totalPages: 5) }
                 // Park until cancelled.
-                try await Task.sleep(for: .seconds(60))
+                try await clock.sleep(for: .seconds(Int.max))
                 return page([])
             },
             clock: clock
