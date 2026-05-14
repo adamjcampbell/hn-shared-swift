@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import HackerNews
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -15,7 +16,7 @@ final class AppCore {
 
     private let commandsContinuation: AsyncStream<AppCommand>.Continuation
     let commands: AsyncStream<AppCommand>
-    private let client: HNClient
+    private let client: Client
     private let clock: any Clock<Duration>
     private let now: @Sendable () -> Date
 
@@ -31,7 +32,7 @@ final class AppCore {
         state: AppState,
         commands: AsyncStream<AppCommand>,
         commandsContinuation: AsyncStream<AppCommand>.Continuation,
-        client: HNClient,
+        client: Client,
         clock: any Clock<Duration>,
         now: @escaping @Sendable () -> Date = Date.init,
         isolation: isolated (any Actor)? = #isolation
@@ -55,7 +56,7 @@ final class AppCore {
                     tasks[.search] = nil
                     tasks[.searchCommit] = nil
                     tasks[.searchMore] = nil
-                    state.search = LoadableHits()
+                    state.search = LoadableStories()
                 } else {
                     scheduleSearchFetch(query: query)
                 }
@@ -99,8 +100,8 @@ final class AppCore {
             do {
                 let page = try await task.value
                 try Task.checkCancellation()
-                for hit in page.hits { state.hits[hit.id] = hit }
-                let ids = page.hits.map(\.id)
+                for story in page.stories { state.stories[story.id] = story }
+                let ids = page.stories.map(\.id)
                 state.search.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: now())
             } catch is CancellationError {
                 // Newer keystroke (or clearSearch) cancelled us.
@@ -125,9 +126,9 @@ final class AppCore {
             }
 
         case .openStory(let id):
-            guard let hit = state.hits[id] else { return }
+            guard let story = state.stories[id] else { return }
             state.readIds.insert(id)
-            if let url = hit.url {
+            if let url = story.url {
                 commandsContinuation.yield(.presentURL(value: url))
             }
 
@@ -144,8 +145,8 @@ final class AppCore {
             tasks[.feed] = task
             do {
                 let page = try await task.value
-                for hit in page.hits { state.hits[hit.id] = hit }
-                let ids = page.hits.map(\.id)
+                for story in page.stories { state.stories[story.id] = story }
+                let ids = page.stories.map(\.id)
                 state.feed.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: now())
             } catch is CancellationError {
                 // Newer fetch will clear loading when it commits.
@@ -167,8 +168,8 @@ final class AppCore {
             tasks[.search] = task
             do {
                 let page = try await task.value
-                for hit in page.hits { state.hits[hit.id] = hit }
-                let ids = page.hits.map(\.id)
+                for story in page.stories { state.stories[story.id] = story }
+                let ids = page.stories.map(\.id)
                 state.search.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: now())
             } catch is CancellationError {
             } catch {
@@ -176,7 +177,7 @@ final class AppCore {
             }
 
         case .loadMore where state.searchQuery.isEmpty:
-            guard let loaded = state.feed.loadedHits, loaded.hasMore,
+            guard let loaded = state.feed.loadedStories, loaded.hasMore,
                   !state.feed.loadMoreStatus.isLoading else { return }
             let next = loaded.nextPage
             state.feed.loadMoreStatus.startLoading()
@@ -185,8 +186,8 @@ final class AppCore {
             tasks[.feedMore] = task
             do {
                 let page = try await task.value
-                for hit in page.hits { state.hits[hit.id] = hit }
-                let ids = page.hits.map(\.id)
+                for story in page.stories { state.stories[story.id] = story }
+                let ids = page.stories.map(\.id)
                 state.feed.receiveLoadMorePage(ids, totalPages: page.totalPages)
             } catch is CancellationError {
             } catch {
@@ -194,7 +195,7 @@ final class AppCore {
             }
 
         case .loadMore:
-            guard let loaded = state.search.loadedHits, loaded.hasMore,
+            guard let loaded = state.search.loadedStories, loaded.hasMore,
                   !state.search.loadMoreStatus.isLoading else { return }
             let query = state.searchQuery
             let next = loaded.nextPage
@@ -204,8 +205,8 @@ final class AppCore {
             tasks[.searchMore] = task
             do {
                 let page = try await task.value
-                for hit in page.hits { state.hits[hit.id] = hit }
-                let ids = page.hits.map(\.id)
+                for story in page.stories { state.stories[story.id] = story }
+                let ids = page.stories.map(\.id)
                 state.search.receiveLoadMorePage(ids, totalPages: page.totalPages)
             } catch is CancellationError {
             } catch {
@@ -236,8 +237,8 @@ final class AppCore {
     /// supersede.
     private func makeFetchTask(
         debounce: Duration?,
-        body: @Sendable @escaping (HNClient) async throws -> HNPage
-    ) -> Task<HNPage, Error> {
+        body: @Sendable @escaping (Client) async throws -> Page
+    ) -> Task<Page, Error> {
         Task { [client, clock] in
             if let debounce {
                 try await clock.sleep(for: debounce)

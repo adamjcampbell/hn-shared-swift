@@ -1,6 +1,7 @@
 import Foundation
 import Testing
-@testable import AppCore
+@testable import HackerNewsReader
+import HackerNews
 
 @Suite("TaskRegistry")
 struct TaskRegistryTests {

@@ -9,7 +9,7 @@ import Foundation
 /// user-facing meaning is "how stale is this feed", and appending
 /// page 1 doesn't make page 0's rows any newer.
 // SKIP @bridgeMembers
-public struct LoadedHits: Sendable, Equatable {
+public struct LoadedStories: Sendable, Equatable {
     public var ids: [String]
     public var loadedAt: Date
     public var page: Int
@@ -34,7 +34,7 @@ public struct LoadedHits: Sendable, Equatable {
 
 /// Activity status for a single in-flight operation against a surface
 /// (initial fetch / refresh, or load-more). Orthogonal to the data
-/// result — `LoadableHits` holds two independent `LoadStatus` values
+/// result — `LoadableStories` holds two independent `LoadStatus` values
 /// for its two axes so they can run concurrently.
 ///
 /// `startLoading()` does **not** clear `error`. A stale banner
@@ -66,36 +66,36 @@ public struct LoadStatus: Sendable, Equatable {
 }
 
 /// One paginated surface (feed or search) packaged with its loading
-/// lifecycle: the accumulated `LoadedHits` plus two independent
+/// lifecycle: the accumulated `LoadedStories` plus two independent
 /// `LoadStatus` values for first-page-load/refresh and load-more.
 ///
-/// `loadedHits` and the two statuses are orthogonal axes — `loadedHits`
-/// persists across `startLoading()` and `finishFailure()`, so the UI
-/// shows stale data under a spinner or behind an error banner without
-/// any explicit prev-payload threading.
+/// `loadedStories` and the two statuses are orthogonal axes —
+/// `loadedStories` persists across `startLoading()` and
+/// `finishFailure()`, so the UI shows stale data under a spinner or
+/// behind an error banner without any explicit prev-payload threading.
 // SKIP @bridgeMembers
-public struct LoadableHits: Sendable, Equatable {
-    public var loadedHits: LoadedHits?
+public struct LoadableStories: Sendable, Equatable {
+    public var loadedStories: LoadedStories?
     public var initialStatus: LoadStatus
     public var loadMoreStatus: LoadStatus
 
     public init(
-        loadedHits: LoadedHits? = nil,
+        loadedStories: LoadedStories? = nil,
         initialStatus: LoadStatus = LoadStatus(),
         loadMoreStatus: LoadStatus = LoadStatus()
     ) {
-        self.loadedHits = loadedHits
+        self.loadedStories = loadedStories
         self.initialStatus = initialStatus
         self.loadMoreStatus = loadMoreStatus
     }
 
     public mutating func receiveInitialPage(_ ids: [String], totalPages: Int, loadedAt: Date) {
-        loadedHits = LoadedHits(ids: ids, page: 0, totalPages: totalPages, loadedAt: loadedAt)
+        loadedStories = LoadedStories(ids: ids, page: 0, totalPages: totalPages, loadedAt: loadedAt)
         initialStatus.finishSuccess()
     }
 
     public mutating func receiveLoadMorePage(_ ids: [String], totalPages: Int) {
-        loadedHits?.appendPage(ids, totalPages: totalPages)
+        loadedStories?.appendPage(ids, totalPages: totalPages)
         loadMoreStatus.finishSuccess()
     }
 }

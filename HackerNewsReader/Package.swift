@@ -9,7 +9,7 @@ let sharedSettings: [SwiftSetting] = [
 ]
 
 let package = Package(
-    name: "AppCore",
+    name: "HackerNewsReader",
     defaultLocalization: "en",
     platforms: [
         .iOS(.v17),
@@ -20,21 +20,30 @@ let package = Package(
         .macOS("15.4"),
     ],
     products: [
-        .library(name: "AppCore", type: .dynamic, targets: ["AppCore"]),
+        .library(name: "HackerNewsReader", type: .dynamic, targets: ["HackerNewsReader"]),
     ],
     dependencies: [
         .package(url: "https://source.skip.tools/skip.git", from: "1.8.14"),
         .package(url: "https://source.skip.tools/skip-fuse.git", from: "1.0.0"),
         .package(url: "https://source.skip.tools/skip-model.git", from: "1.0.0"),
         // Test-only: deterministic time control via TestClock so the
-        // 250 ms debounce in AppCore doesn't translate into 250 ms of
+        // 250 ms search debounce doesn't translate into 250 ms of
         // real-clock waiting per test.
         .package(url: "https://github.com/pointfreeco/swift-clocks", from: "1.0.0"),
     ],
     targets: [
         .target(
-            name: "AppCore",
+            name: "HackerNews",
             dependencies: [
+                .product(name: "SkipFuse", package: "skip-fuse"),
+            ],
+            swiftSettings: sharedSettings,
+            plugins: [.plugin(name: "skipstone", package: "skip")]
+        ),
+        .target(
+            name: "HackerNewsReader",
+            dependencies: [
+                "HackerNews",
                 .product(name: "SkipFuse", package: "skip-fuse"),
                 .product(name: "SkipModel", package: "skip-model"),
             ],
@@ -43,9 +52,16 @@ let package = Package(
             plugins: [.plugin(name: "skipstone", package: "skip")]
         ),
         .testTarget(
-            name: "AppCoreTests",
+            name: "HackerNewsTests",
             dependencies: [
-                "AppCore",
+                "HackerNews",
+            ],
+            swiftSettings: sharedSettings
+        ),
+        .testTarget(
+            name: "HackerNewsReaderTests",
+            dependencies: [
+                "HackerNewsReader",
                 .product(name: "Clocks", package: "swift-clocks"),
             ],
             swiftSettings: sharedSettings

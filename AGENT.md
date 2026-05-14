@@ -8,10 +8,14 @@ compiled natively to `.so` on Android and bridged to Kotlin by
 [SkipFuse](https://skip.dev) — Compose reads `@Observable` properties
 directly inside `@Composable`s, mutations recompose, `async` is `suspend`,
 `AsyncStream` is `Flow`. The example is a small **Hacker News reader**:
-front-page stories, search via the Algolia HN API, and a per-story read
-indicator. Networking lives in `AppCore` (Swift, `URLSession` via
-conditional `import FoundationNetworking` on Android); both UIs only
-render the snapshot.
+front-page stories (live-ranked via the [official HN Firebase
+API](https://github.com/HackerNews/API)), search via the Algolia HN API
+(Firebase has no text-search endpoint), and a per-story read indicator.
+
+The Swift package splits into two targets:
+- `HackerNews` — API client + entity types (`Client`, `Story`, `Page`).
+- `HackerNewsReader` — reducer + state (`AppCore`, `UICore`, `AppState`,
+  `StoryRow`, `LoadableStories`). Depends on `HackerNews`.
 
 The migration away from a hand-written `swift-java jextract` bridge is
 documented in [`docs/skip-fuse-adoption.md`](docs/skip-fuse-adoption.md).
@@ -19,22 +23,24 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 
 ## Goals
 
-- One Swift type (`AppCore`) drives both platforms; one `AppEvent`
-  enum carries every user-driven mutation.
+- One Swift type (the `AppCore` workhorse class in `HackerNewsReader`)
+  drives both platforms; one `AppEvent` enum carries every user-driven
+  mutation.
 - iOS: direct `@Observable` + SwiftUI; no bridge in the iOS path.
-  `RootView` owns the singleton `AppCore` and installs a
+  `RootView` owns the singleton `UICore` and installs a
   `SendAppEvent` action via `\.sendEvent`. Descendants take
   `AppState` (the `@Observable final class`) as a parameter.
-- Android: bridged via SkipFuse. The Compose UI reads `appModel.state`
+- Android: bridged via SkipFuse. The Compose UI reads `appCore.state`
   directly — the bridging plugin emits a Kotlin `class AppState` whose
   property getters JNI-call into the Swift `@Observable`'s
   ObservationRegistrar, which SkipFuse routes through Compose's
   `MutableStateBacking` so reads register with the snapshot system and
   mutations recompose.
-- Networking lives in Swift: `HNClient` is a `Sendable` struct with two
-  `@Sendable` closure properties (`frontPage`, `search`). Tests inject
-  closures directly. Production callers use `AppCore()` which wires
-  the live `URLSession` HTTP path.
+- Networking lives in the `HackerNews` target. `Client` is a `Sendable`
+  struct with two `@Sendable` closure properties (`frontPage`,
+  `search`). Tests inject closures directly. Production callers use
+  `Client()` which wires the live `URLSession` HTTP path. `frontPage`
+  hits the Firebase API; `search` hits Algolia.
 - Modern Swift concurrency: language mode 6,
   `NonisolatedNonsendingByDefault` (SE-0461), `Observations` (SE-0475),
   region-based isolation (SE-0414).
@@ -53,27 +59,45 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 
 ## Non-obvious project rules
 
+### Module split
+
+- **`HackerNews` is a thin SDK target.** Just `Client + Story + Page`
+  and the private Firebase / Algolia decoders. No app-level state, no
+  loading lifecycle. Reusable in isolation; the test target
+  `HackerNewsTests` exercises it without touching the reader.
+- **`HackerNewsReader` owns the reducer and presentation lifecycle.**
+  `AppCore` (workhorse class), `UICore` (bridged shell), `AppState`
+  (`@Observable`), `StoryRow` (UI row = `Story + isRead`), and
+  `LoadableStories` / `LoadStatus` (pagination + UI lifecycle). The
+  pagination logic stays here on purpose — `LoadStatus.error: String`
+  is presentation-shape, and the cursor (`LoadedStories`) is only
+  meaningful alongside it. `HackerNewsReader` is the only public product
+  in `Package.swift`; iOS and Android consume one product.
+
 ### Bridge
 
 - **Adding a new `@Observable` property: add the field on `AppState`.**
   The class already carries `// SKIP @bridgeMembers`, so every new
   public member bridges automatically — no per-field marker, no thunk,
   no Kotlin holder, no `*OnChange` SAM. After Swift changes,
-  regenerate the Android AAR with
-  `cd AppCore && skip export --debug --no-ios --module AppCore -d
-  ../android-app/skip-libs`.
+  regenerate the Android AARs with
+  `cd HackerNewsReader && skip export --debug --no-ios --module
+  HackerNewsReader -d ../android-app/skip-libs`. The export
+  transitively produces both `HackerNewsReader-debug.aar` and
+  `HackerNews-debug.aar`.
 - **`// SKIP @bridgeMembers` (type-level) vs `// SKIP @bridge`
   (per-member).** Bridged structs/classes here use `@bridgeMembers`,
   which bridges every public member of the type with one annotation.
   Reach for per-member `// SKIP @bridge` only when bridging a strict
   subset. Use `// SKIP @nobridge` on a single member to opt it out
-  (e.g. `Story.init(hit:isRead:)`, which takes the unbridged `HNHit`).
+  (e.g. `StoryRow.init(story:isRead:)`, kept `@nobridge` because rows
+  are constructed Swift-side from `AppState`'s projections).
   **`// SKIP @bridge` at the type level alone is not the same** —
   that produces a Kotlin class with no field accessors (only
   `Identifiable.id` as `ObjectIdentifier`). Always use `@bridgeMembers`
   for whole-type bridging.
 - **`AppCore.init()` is the bridged init.** The `init(client:clock:)`
-  is a test seam — its parameter types (`HNClient` closure-bag,
+  is a test seam — its parameter types (`Client` closure-bag,
   `any Clock<Duration>` existential) don't bridge, and it's
   unmarked.
 - **`AppCore` (workhorse class) is intentionally not bridged.**
@@ -83,16 +107,16 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 
 ### iOS view layer
 
-(Enforced by `ios-app/AppCoreBridgeExample/RootView.swift` +
+(Enforced by `ios-app/HackerNewsReader/RootView.swift` +
 `SendAppEvent.swift`.)
 
-- `AppCore` is held only by `RootView`. Below the root, views accept
+- `UICore` is held only by `RootView`. Below the root, views accept
   `AppState` (the `@Observable final class`) as a parameter; never
-  `AppCore` itself.
+  `UICore` itself.
 - Events flow back via `@Environment(\.sendEvent)`, a
   `SendAppEvent` callable struct. The struct is **`Equatable`**
-  via nil-parity on the held optional `AppCore`, leaning on the
-  invariant that `RootView` constructs exactly one `AppCore` for the
+  via nil-parity on the held optional `UICore`, leaning on the
+  invariant that `RootView` constructs exactly one `UICore` for the
   app's lifetime — "both non-nil" uniquely identifies the installed
   sender and "both nil" is the default env value. Without that
   conformance, SwiftUI's reflection-based environment diff cannot
@@ -115,6 +139,25 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   — scroll position, internal state, animation hooks all reset.
   `.background(.background)` occludes when the overlay needs to fully
   cover.
+
+### Networking
+
+- **`Client.frontPage` uses the official Firebase HN API**
+  (`hacker-news.firebaseio.com/v0`). One request for
+  `topstories.json` (up to 500 IDs in front-page order), then up to
+  50 parallel `item/{id}.json` fetches in a `withThrowingTaskGroup`.
+  The Algolia API does not expose HN's live ranking, so Firebase is
+  the only transport that matches `news.ycombinator.com`. Per-item
+  fetch failures are dropped (page returns `count - failed` stories)
+  rather than failing the whole page — mirrors the Algolia path's
+  tolerance for hits missing required fields.
+- **`Client.search` stays on Algolia** (`hn.algolia.com/api/v1`).
+  Firebase has no text-search endpoint. Both transports decode into
+  the same `Story` shape.
+- **Order preservation is load-bearing.** `withThrowingTaskGroup`
+  yields children in completion order, not submission order. Each
+  child returns `(orderIndex, Story?)`; the result is sorted by index
+  before `compactMap` flattens to `[Story]`.
 
 ### Concurrency / testing
 
@@ -161,11 +204,12 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 - **Networking on Android requires `import FoundationNetworking`**
   inside `#if canImport(FoundationNetworking)`. Without the
   conditional import, the cross-compile fails on `URLSession`.
-- **`HNClient(fetch:)` is the URL-construction test seam.** Tests
+- **`Client(fetch:)` is the URL-construction test seam.** Tests
   inject a `@Sendable (URLRequest) async throws -> (Data, URLResponse)`
   closure and capture the request directly — no `URLProtocol`, no
   global mutable state, no `.serialized` suite, and tests run in full
-  parallel.
+  parallel. The Firebase tests dispatch on URL path (`topstories.json`
+  vs `item/{id}.json`) inside the injected fetch.
 
 ### SkipFuse gotchas (full list in
 [`docs/skip-fuse-adoption.md`](docs/skip-fuse-adoption.md))
@@ -223,26 +267,28 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 ## Build & test
 
 ```sh
-# AppCore unit tests (macOS host).
-cd AppCore && \
+# HackerNewsReader + HackerNews unit tests (macOS host).
+cd HackerNewsReader && \
   JAVA_HOME=/Applications/Android\ Studio.app/Contents/jbr/Contents/Home \
   swift test --disable-sandbox
 
 # iOS app build.
 cd ios-app && \
-  xcodebuild -project AppCoreBridgeExample.xcodeproj \
-    -scheme AppCoreBridgeExample \
+  xcodebuild -project HackerNewsReader.xcodeproj \
+    -scheme HackerNewsReader \
     -destination 'platform=iOS Simulator,name=iPhone 17' \
     -skipPackagePluginValidation build
 
-# Android: rebuild the AAR after Swift changes, then build the APK.
-cd AppCore && \
-  skip export --debug --no-ios --module AppCore -d ../android-app/skip-libs
+# Android: rebuild the AARs after Swift changes, then build the APK.
+# `skip export` transitively produces both HackerNewsReader-debug.aar
+# and HackerNews-debug.aar from one invocation.
+cd HackerNewsReader && \
+  skip export --debug --no-ios --module HackerNewsReader -d ../android-app/skip-libs
 cd ../android-app && \
   JAVA_HOME=/Applications/Android\ Studio.app/Contents/jbr/Contents/Home \
   ./gradlew :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n com.example.appcore/.ui.MainActivity
+adb shell am start -n com.example.hackernewsreader/.ui.MainActivity
 ```
 
 The iOS `.xcodeproj` is generated from `ios-app/project.yml` via

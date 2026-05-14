@@ -1,0 +1,3 @@
+# HackerNews — natively-compiled Swift Fuse module bridged to Kotlin.
+skip:
+  mode: 'native'

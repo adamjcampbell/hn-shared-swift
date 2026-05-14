@@ -43,7 +43,7 @@ Android — Compose now reads the bridged AppCore directly. No
 ```kotlin
 @Composable
 fun StoryScreen() {
-    val appCore = rememberAppCore()
+    val core = rememberCore()
     val state = appModel.state
 
     LaunchedEffect(appModel) { appModel.dispatch(AppEvent.refresh) }
@@ -282,9 +282,11 @@ The empirical run:
 ## How the build runs
 
 ```sh
-# Build the AppCore .aar bundle (regenerate after Swift changes).
-cd AppCore
-skip export --debug --no-ios --module AppCore -d ../android-app/skip-libs
+# Build the HackerNewsReader .aar bundle (regenerate after Swift changes).
+# Skip transitively packages the HackerNews dependency target into a
+# separate AAR alongside the HackerNewsReader one.
+cd HackerNewsReader
+skip export --debug --no-ios --module HackerNewsReader -d ../android-app/skip-libs
 
 # Build the APK consuming the .aar.
 cd ../android-app

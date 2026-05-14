@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import HackerNews
 
 /// `@MainActor` UI-facing shell. Bridged to Kotlin via Skip; SwiftUI
 /// and Compose both consume this type. Owns `AppState` and the
@@ -21,7 +22,7 @@ public struct UICore {
             state: state,
             commands: stream,
             commandsContinuation: continuation,
-            client: HNClient(),
+            client: Client(),
             clock: ContinuousClock(),
             now: Date.init
         )

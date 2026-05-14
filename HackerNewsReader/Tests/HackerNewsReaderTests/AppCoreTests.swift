@@ -2,23 +2,24 @@ import Clocks
 import Foundation
 import Testing
 import os
-@testable import AppCore
+@testable import HackerNewsReader
+import HackerNews
 
-private let storyA = HNHit(
+private let storyA = Story(
     id: "100", title: "Top story", author: "alice",
-    points: 50, commentCount: 10,
+    score: 50, commentCount: 10,
     url: "https://example.com/a",
     createdAt: Date(timeIntervalSince1970: 1)
 )
-private let storyB = HNHit(
+private let storyB = Story(
     id: "101", title: "Second story", author: "bob",
-    points: 20, commentCount: 3,
+    score: 20, commentCount: 3,
     url: nil,
     createdAt: Date(timeIntervalSince1970: 2)
 )
-private let storyC = HNHit(
+private let storyC = Story(
     id: "102", title: "Page-1 story", author: "carol",
-    points: 9, commentCount: 1,
+    score: 9, commentCount: 1,
     url: "https://example.com/c",
     createdAt: Date(timeIntervalSince1970: 3)
 )
@@ -34,17 +35,17 @@ private actor CallRecorder {
     func recordSearch(_ query: String, page: Int) { searchCalls.append((query, page)) }
 }
 
-/// Test fixture for `TestCore` with optional `HNClient` mocks and an
+/// Test fixture for `TestCore` with optional `Client` mocks and an
 /// injected clock. Defaults give an empty front page and an empty
 /// search — override the relevant closure to express the test's intent.
 private func makeCore(
-    frontPage: @escaping @Sendable (Int) async throws -> HNPage = { _ in HNPage(hits: [], totalPages: 0) },
-    search: @escaping @Sendable (String, Int) async throws -> HNPage = { _, _ in HNPage(hits: [], totalPages: 0) },
+    frontPage: @escaping @Sendable (Int) async throws -> Page = { _ in Page(stories: [], totalPages: 0) },
+    search: @escaping @Sendable (String, Int) async throws -> Page = { _, _ in Page(stories: [], totalPages: 0) },
     clock: any Clock<Duration> = ContinuousClock(),
     now: @escaping @Sendable () -> Date = Date.init
 ) -> TestCore {
     TestCore(
-        client: HNClient(frontPage: frontPage, search: search),
+        client: Client(frontPage: frontPage, search: search),
         clock: clock,
         now: now
     )
@@ -64,8 +65,8 @@ private final class MonotonicDates: Sendable {
 }
 
 /// Convenience: a single-page response.
-private func page(_ hits: [HNHit], totalPages: Int = 1) -> HNPage {
-    HNPage(hits: hits, totalPages: totalPages)
+private func page(_ stories: [Story], totalPages: Int = 1) -> Page {
+    Page(stories: stories, totalPages: totalPages)
 }
 
 private extension TestCore {
@@ -92,13 +93,13 @@ struct AppCoreTests {
 
         await core.run { core in
             #expect(core.state.feedStories.isEmpty)
-            #expect(core.state.feed.loadedHits == nil)
+            #expect(core.state.feed.loadedStories == nil)
 
             await core.appCore.sendEvent(.refresh)
 
             #expect(core.state.feedStories.count == 2)
             #expect(core.state.feedStories.first?.title == "Top story")
-            #expect(core.state.feed.loadedHits?.loadedAt != nil)
+            #expect(core.state.feed.loadedStories?.loadedAt != nil)
             #expect(core.state.feed.initialStatus.error == nil)
         }
     }
@@ -291,7 +292,7 @@ struct AppCoreTests {
         await core.run { core in
             await core.appCore.sendEvent(.refresh)
             #expect(core.state.feed.initialStatus.error == nil)
-            #expect(core.state.feed.loadedHits == nil)
+            #expect(core.state.feed.loadedStories == nil)
         }
     }
 
@@ -368,7 +369,7 @@ struct AppCoreTests {
             #expect(core.state.searchResults.isEmpty)
             #expect(core.state.search.initialStatus.error == nil)
             #expect(core.state.search.initialStatus.isLoading == false)
-            #expect(core.state.search.loadedHits == nil)
+            #expect(core.state.search.loadedStories == nil)
             #expect(core.state.feedStories.map(\.id) == feedBefore)
         }
         let frontPageAfter = await calls.frontPageCalls.count
@@ -516,13 +517,13 @@ struct AppCoreTests {
 
         await core.run { core in
             await core.appCore.sendEvent(.refresh)
-            #expect(core.state.feed.loadedHits?.page == 0)
-            #expect(core.state.feed.loadedHits?.hasMore == true)
+            #expect(core.state.feed.loadedStories?.page == 0)
+            #expect(core.state.feed.loadedStories?.hasMore == true)
             #expect(core.state.feedStories.map(\.id) == ["100", "101"])
 
             await core.appCore.sendEvent(.loadMore)
-            #expect(core.state.feed.loadedHits?.page == 1)
-            #expect(core.state.feed.loadedHits?.hasMore == true)  // page 1 of 3, page 2 still remains
+            #expect(core.state.feed.loadedStories?.page == 1)
+            #expect(core.state.feed.loadedStories?.hasMore == true)  // page 1 of 3, page 2 still remains
             #expect(core.state.feedStories.map(\.id) == ["100", "101", "102"])
         }
     }
@@ -539,7 +540,7 @@ struct AppCoreTests {
 
         await core.run { core in
             await core.appCore.sendEvent(.refresh)
-            #expect(core.state.feed.loadedHits?.hasMore == false)
+            #expect(core.state.feed.loadedStories?.hasMore == false)
             await core.appCore.sendEvent(.loadMore)
         }
         let pages = await calls.frontPageCalls
@@ -579,7 +580,7 @@ struct AppCoreTests {
 
         await core.run { core in
             await core.appCore.sendEvent(.refresh)  // page 0 lands
-            #expect(core.state.feed.loadedHits?.page == 0)
+            #expect(core.state.feed.loadedStories?.page == 0)
         }
 
         let loadMore = Task { [core] in
@@ -595,7 +596,7 @@ struct AppCoreTests {
 
         // page resets to 0 after refresh; loadMore status cleared.
         await core.run { core in
-            #expect(core.state.feed.loadedHits?.page == 0)
+            #expect(core.state.feed.loadedStories?.page == 0)
             #expect(core.state.feed.loadMoreStatus.isLoading == false)
             #expect(core.state.feed.loadMoreStatus.error == nil)
         }
@@ -636,11 +637,11 @@ struct AppCoreTests {
         await core.commitSearch("x", clock: clock)
         await core.run { core in
             #expect(core.state.searchResults.map(\.id) == ["100"])
-            #expect(core.state.search.loadedHits?.hasMore == true)
+            #expect(core.state.search.loadedStories?.hasMore == true)
 
             await core.appCore.sendEvent(.loadMore)
             #expect(core.state.searchResults.map(\.id) == ["100", "101"])
-            #expect(core.state.search.loadedHits?.hasMore == false)
+            #expect(core.state.search.loadedStories?.hasMore == false)
         }
     }
 
@@ -658,7 +659,7 @@ struct AppCoreTests {
         )
 
         await core.commitSearch("x", clock: clock)
-        await core.run { #expect($0.state.search.loadedHits?.hasMore == true) }
+        await core.run { #expect($0.state.search.loadedStories?.hasMore == true) }
 
         let loadMore = Task { [core] in
             await core.run { await $0.appCore.sendEvent(.loadMore) }
@@ -672,7 +673,7 @@ struct AppCoreTests {
         await core.settle()
 
         await core.run { core in
-            #expect(core.state.search.loadedHits == nil)
+            #expect(core.state.search.loadedStories == nil)
             #expect(core.state.search.loadMoreStatus.isLoading == false)
             #expect(core.state.search.loadMoreStatus.error == nil)
         }
@@ -694,9 +695,9 @@ struct AppCoreTests {
 
         await core.run { core in
             await core.appCore.sendEvent(.refresh)
-            let initialLoadedAt = core.state.feed.loadedHits?.loadedAt
+            let initialLoadedAt = core.state.feed.loadedStories?.loadedAt
             await core.appCore.sendEvent(.loadMore)
-            #expect(core.state.feed.loadedHits?.loadedAt == initialLoadedAt)
+            #expect(core.state.feed.loadedStories?.loadedAt == initialLoadedAt)
         }
     }
 }

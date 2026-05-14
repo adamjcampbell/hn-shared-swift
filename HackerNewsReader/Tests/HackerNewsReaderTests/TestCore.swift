@@ -1,6 +1,7 @@
 import Dispatch
 import Foundation
-@testable import AppCore
+@testable import HackerNewsReader
+import HackerNews
 
 /// Per-test isolation shell. Each `TestCore` is its own actor —
 /// different instances run on different executors, so tests parallelise.
@@ -24,7 +25,7 @@ public actor TestCore {
     }
 
     public init(
-        client: HNClient = HNClient(),
+        client: Client = Client(),
         clock: any Clock<Duration> = ContinuousClock(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
@@ -77,7 +78,7 @@ public actor TestCore {
 /// await core.run { await $0.appCore.sendEvent(.refresh) }
 /// await core.run { core in
 ///     #expect(core.state.feedStories.count == 2)
-///     #expect(core.state.feed.loadedHits?.loadedAt != nil)
+///     #expect(core.state.feed.loadedStories?.loadedAt != nil)
 /// }
 /// ```
 extension TestCore {
