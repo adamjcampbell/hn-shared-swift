@@ -93,11 +93,9 @@ struct AppCoreTests {
         await core.run { core in
             #expect(core.state.feedStories.isEmpty)
             #expect(core.state.feed.loadedHits == nil)
-        }
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }
+            await core.appCore.sendEvent(.refresh)
 
-        await core.run { core in
             #expect(core.state.feedStories.count == 2)
             #expect(core.state.feedStories.first?.title == "Top story")
             #expect(core.state.feed.loadedHits?.loadedAt != nil)
@@ -113,9 +111,8 @@ struct AppCoreTests {
             search: { _, _ in throw Boom() }
         )
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-
         await core.run { core in
+            await core.appCore.sendEvent(.refresh)
             #expect(core.state.feedStories.isEmpty)
             #expect(core.state.feed.initialStatus.error != nil)
         }
@@ -124,17 +121,15 @@ struct AppCoreTests {
     @Test("toggleRead adds and removes")
     func toggleRead_addsAndRemoves() async {
         let core = makeCore(frontPage: { _ in page([storyA]) })
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-        await core.run { #expect($0.state.feedStories.first?.isRead == false) }
-
-        await core.run { await $0.appCore.sendEvent(.toggleRead(id: storyA.id)) }
         await core.run { core in
+            await core.appCore.sendEvent(.refresh)
+            #expect(core.state.feedStories.first?.isRead == false)
+
+            await core.appCore.sendEvent(.toggleRead(id: storyA.id))
             #expect(core.state.feedStories.first?.isRead == true)
             #expect(core.state.readIds.contains(storyA.id))
-        }
 
-        await core.run { await $0.appCore.sendEvent(.toggleRead(id: storyA.id)) }
-        await core.run { core in
+            await core.appCore.sendEvent(.toggleRead(id: storyA.id))
             #expect(core.state.feedStories.first?.isRead == false)
             #expect(core.state.readIds.contains(storyA.id) == false)
         }
@@ -146,9 +141,10 @@ struct AppCoreTests {
         await core.run { await $0.appCore.sendEvent(.refresh) }
 
         var iterator = core.commands.makeAsyncIterator()
-        await core.run { await $0.appCore.sendEvent(.openStory(id: storyA.id)) }
-
-        await core.run { #expect($0.state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true) }
+        await core.run { core in
+            await core.appCore.sendEvent(.openStory(id: storyA.id))
+            #expect(core.state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
+        }
         let command = await iterator.next()
         #expect(command == .presentURL(value: storyA.url!))
     }
@@ -161,10 +157,11 @@ struct AppCoreTests {
         // Open storyB (no URL) then storyA (has URL). The first emission
         // we observe is storyA's — proving storyB emitted nothing.
         var iterator = core.commands.makeAsyncIterator()
-        await core.run { await $0.appCore.sendEvent(.openStory(id: storyB.id)) }
-        await core.run { await $0.appCore.sendEvent(.openStory(id: storyA.id)) }
-
-        await core.run { #expect($0.state.feedStories.first(where: { $0.id == storyB.id })?.isRead == true) }
+        await core.run { core in
+            await core.appCore.sendEvent(.openStory(id: storyB.id))
+            await core.appCore.sendEvent(.openStory(id: storyA.id))
+            #expect(core.state.feedStories.first(where: { $0.id == storyB.id })?.isRead == true)
+        }
         let command = await iterator.next()
         #expect(command == .presentURL(value: storyA.url!))
     }
@@ -172,14 +169,14 @@ struct AppCoreTests {
     @Test("openStory with unknown id is a no-op")
     func openStory_unknownId_isNoop() async {
         let core = makeCore(frontPage: { _ in page([storyA]) })
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-        let readBefore = await core.run { $0.state.readIds }
-
         var iterator = core.commands.makeAsyncIterator()
-        await core.run { await $0.appCore.sendEvent(.openStory(id: "does-not-exist")) }
-        await core.run { await $0.appCore.sendEvent(.openStory(id: storyA.id)) }
-
-        await core.run { #expect($0.state.readIds == readBefore.union([storyA.id])) }
+        await core.run { core in
+            await core.appCore.sendEvent(.refresh)
+            let readBefore = core.state.readIds
+            await core.appCore.sendEvent(.openStory(id: "does-not-exist"))
+            await core.appCore.sendEvent(.openStory(id: storyA.id))
+            #expect(core.state.readIds == readBefore.union([storyA.id]))
+        }
         let command = await iterator.next()
         #expect(command == .presentURL(value: storyA.url!))
     }
@@ -187,16 +184,14 @@ struct AppCoreTests {
     @Test("read state survives a refresh")
     func toggleRead_survivesRefresh() async {
         let core = makeCore(frontPage: { _ in page([storyA, storyB]) })
-        // Toggle before any stories are loaded — readIds is the canonical
-        // record; the projection has nothing to map onto yet.
-        await core.run { await $0.appCore.sendEvent(.toggleRead(id: "100")) }
         await core.run { core in
+            // Toggle before any stories are loaded — readIds is the canonical
+            // record; the projection has nothing to map onto yet.
+            await core.appCore.sendEvent(.toggleRead(id: "100"))
             #expect(core.state.readIds.contains("100"))
             #expect(core.state.feedStories.isEmpty)
-        }
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-        await core.run { core in
+            await core.appCore.sendEvent(.refresh)
             let projected = core.state.feedStories.first(where: { $0.id == "100" })
             #expect(projected != nil)
             #expect(projected?.isRead == true)
@@ -231,10 +226,11 @@ struct AppCoreTests {
         let clock = TestClock()
         let core = makeCore(search: { _, _ in page([storyA]) }, clock: clock)
 
-        await core.run { #expect($0.state.search.initialStatus.isLoading == false) }
-
         await core.settle()
-        await core.run { $0.state.searchQuery = "r" }
+        await core.run { core in
+            #expect(core.state.search.initialStatus.isLoading == false)
+            core.state.searchQuery = "r"
+        }
         await core.settle()
 
         // Spinner asserted synchronously on listener entry, before the debounce.
@@ -292,9 +288,8 @@ struct AppCoreTests {
             search:    { _, _ in throw URLError(.cancelled) }
         )
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-
         await core.run { core in
+            await core.appCore.sendEvent(.refresh)
             #expect(core.state.feed.initialStatus.error == nil)
             #expect(core.state.feed.loadedHits == nil)
         }
@@ -356,14 +351,17 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-        let feedBefore = await core.run { $0.state.feedStories.map(\.id) }
+        let feedBefore = await core.run { core in
+            await core.appCore.sendEvent(.refresh)
+            return core.state.feedStories.map(\.id)
+        }
         let frontPageBefore = await calls.frontPageCalls.count
 
         await core.commitSearch("rust", clock: clock)
-        await core.run { #expect($0.state.searchResults.map(\.id) == ["100"]) }
-
-        await core.run { $0.state.searchQuery = "" }
+        await core.run { core in
+            #expect(core.state.searchResults.map(\.id) == ["100"])
+            core.state.searchQuery = ""
+        }
         await core.settle()
 
         await core.run { core in
@@ -388,8 +386,10 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-        let feedSnapshot = await core.run { $0.state.feedStories.map(\.id) }
+        let feedSnapshot = await core.run { core in
+            await core.appCore.sendEvent(.refresh)
+            return core.state.feedStories.map(\.id)
+        }
         #expect(feedSnapshot == ["100", "101"])
 
         await core.commitSearch("x", clock: clock)
@@ -491,9 +491,11 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-        await core.run { await $0.appCore.sendEvent(.toggleRead(id: storyA.id)) }
-        await core.run { #expect($0.state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true) }
+        await core.run { core in
+            await core.appCore.sendEvent(.refresh)
+            await core.appCore.sendEvent(.toggleRead(id: storyA.id))
+            #expect(core.state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
+        }
 
         await core.commitSearch("x", clock: clock)
 
@@ -512,15 +514,13 @@ struct AppCoreTests {
             }
         )
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }
         await core.run { core in
+            await core.appCore.sendEvent(.refresh)
             #expect(core.state.feed.loadedHits?.page == 0)
             #expect(core.state.feed.loadedHits?.hasMore == true)
             #expect(core.state.feedStories.map(\.id) == ["100", "101"])
-        }
 
-        await core.run { await $0.appCore.sendEvent(.loadMore) }
-        await core.run { core in
+            await core.appCore.sendEvent(.loadMore)
             #expect(core.state.feed.loadedHits?.page == 1)
             #expect(core.state.feed.loadedHits?.hasMore == true)  // page 1 of 3, page 2 still remains
             #expect(core.state.feedStories.map(\.id) == ["100", "101", "102"])
@@ -537,10 +537,11 @@ struct AppCoreTests {
             }
         )
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-        await core.run { #expect($0.state.feed.loadedHits?.hasMore == false) }
-
-        await core.run { await $0.appCore.sendEvent(.loadMore) }
+        await core.run { core in
+            await core.appCore.sendEvent(.refresh)
+            #expect(core.state.feed.loadedHits?.hasMore == false)
+            await core.appCore.sendEvent(.loadMore)
+        }
         let pages = await calls.frontPageCalls
         #expect(pages == [0])  // only the initial fetch
     }
@@ -576,8 +577,10 @@ struct AppCoreTests {
             clock: clock
         )
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }  // page 0 lands
-        await core.run { #expect($0.state.feed.loadedHits?.page == 0) }
+        await core.run { core in
+            await core.appCore.sendEvent(.refresh)  // page 0 lands
+            #expect(core.state.feed.loadedHits?.page == 0)
+        }
 
         let loadMore = Task { [core] in
             await core.run { await $0.appCore.sendEvent(.loadMore) }
@@ -608,12 +611,10 @@ struct AppCoreTests {
             }
         )
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-        let before = await core.run { $0.state.feedStories.map(\.id) }
-
-        await core.run { await $0.appCore.sendEvent(.loadMore) }
-
         await core.run { core in
+            await core.appCore.sendEvent(.refresh)
+            let before = core.state.feedStories.map(\.id)
+            await core.appCore.sendEvent(.loadMore)
             #expect(core.state.feedStories.map(\.id) == before)
             #expect(core.state.feed.initialStatus.error == nil)
             #expect(core.state.feed.loadMoreStatus.error != nil)
@@ -636,10 +637,8 @@ struct AppCoreTests {
         await core.run { core in
             #expect(core.state.searchResults.map(\.id) == ["100"])
             #expect(core.state.search.loadedHits?.hasMore == true)
-        }
 
-        await core.run { await $0.appCore.sendEvent(.loadMore) }
-        await core.run { core in
+            await core.appCore.sendEvent(.loadMore)
             #expect(core.state.searchResults.map(\.id) == ["100", "101"])
             #expect(core.state.search.loadedHits?.hasMore == false)
         }
@@ -693,11 +692,11 @@ struct AppCoreTests {
             now: dates.next
         )
 
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-        let initialLoadedAt = await core.run { $0.state.feed.loadedHits?.loadedAt }
-
-        await core.run { await $0.appCore.sendEvent(.loadMore) }
-
-        await core.run { #expect($0.state.feed.loadedHits?.loadedAt == initialLoadedAt) }
+        await core.run { core in
+            await core.appCore.sendEvent(.refresh)
+            let initialLoadedAt = core.state.feed.loadedHits?.loadedAt
+            await core.appCore.sendEvent(.loadMore)
+            #expect(core.state.feed.loadedHits?.loadedAt == initialLoadedAt)
+        }
     }
 }
