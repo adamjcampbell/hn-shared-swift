@@ -140,6 +140,24 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   Task body uses `try await clock.sleep(for: debounce)` and lets the
   throw propagate. Swallowing it would let cancelled tasks fall
   through to the client's fetch call.
+- **Batch into one `core.run` per test.** `TestCore.run` follows the
+  Point-Free `Actor.run` pattern (Video #362) — its purpose is to
+  group multiple reads and `sendEvent` calls into a single isolation
+  hop with a consistent snapshot. Default to one `core.run { core in
+  … }` block per test; only split when a real suspension boundary
+  forces it (`await core.settle()`, `await clock.advance(by:)`,
+  `await someTask.value`, `await iterator.next()`). `sendEvent`
+  returns with state already mutated, so adjacent reads inside the
+  same block see the new state.
+- **Park mocks with `clock.sleep(for: .seconds(Int.max))`.** Mocks
+  that must hang until the parent Task cancels them call `try await
+  clock.sleep(for: .seconds(Int.max))` on the injected `TestClock`.
+  The test never advances that clock, so the sleep is unbounded in
+  test time with no real-time fallback. Gotcha: `Duration.seconds(.
+  infinity)` and `.seconds(.greatestFiniteMagnitude)` compile but
+  trap at runtime (Double→Int128 conversion); `.seconds(Int.max)`
+  is the working "as large as Duration allows" spelling (~292
+  billion years).
 - **Networking on Android requires `import FoundationNetworking`**
   inside `#if canImport(FoundationNetworking)`. Without the
   conditional import, the cross-compile fails on `URLSession`.
