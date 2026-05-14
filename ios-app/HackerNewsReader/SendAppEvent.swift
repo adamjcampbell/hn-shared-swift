@@ -1,5 +1,5 @@
 import SwiftUI
-import AppCore
+import HackerNewsReader
 
 /// Capability-style action exposed via `@Environment(\.sendEvent)`. Mirrors
 /// the ergonomic of SwiftUI's `DismissAction`: child views call

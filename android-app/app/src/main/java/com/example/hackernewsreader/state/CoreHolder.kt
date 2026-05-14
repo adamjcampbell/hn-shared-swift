@@ -1,18 +1,18 @@
-package com.example.appcore.state
+package com.example.hackernewsreader.state
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import app.core.UICore
+import hacker.news.reader.UICore
 
 /**
  * Process-wide singleton UICore. SkipFuse intercepts the standard
  * `@Observable` macro's tracking calls and routes them through Compose's
- * snapshot system, so reading `appCore.state.searchQuery` inside a
+ * snapshot system, so reading `core.state.searchQuery` inside a
  * `@Composable` registers as a tracked read; mutating it from any thread
  * triggers recomposition. No SwiftState wrapper, no per-property
  * boilerplate.
  */
-private val sharedAppCore: UICore by lazy { UICore() }
+private val sharedCore: UICore by lazy { UICore() }
 
 @Composable
-fun rememberAppCore(): UICore = remember { sharedAppCore }
+fun rememberCore(): UICore = remember { sharedCore }

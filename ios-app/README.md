@@ -1,7 +1,7 @@
 # iOS app
 
-The Swift sources for the SwiftUI app live in `AppCoreBridgeExample/`.
-The Xcode project (`AppCoreBridgeExample.xcodeproj`) is **generated from
+The Swift sources for the SwiftUI app live in `HackerNewsReader/`.
+The Xcode project (`HackerNewsReader.xcodeproj`) is **generated from
 `project.yml`** by [`xcodegen`](https://github.com/yonaskolb/XcodeGen) — it's
 gitignored because it's a derived artefact.
 
@@ -13,8 +13,8 @@ cd ios-app
 xcodegen generate
 
 xcodebuild \
-  -project AppCoreBridgeExample.xcodeproj \
-  -scheme AppCoreBridgeExample \
+  -project HackerNewsReader.xcodeproj \
+  -scheme HackerNewsReader \
   -destination 'platform=iOS Simulator,name=iPhone 17' \
   -skipPackagePluginValidation \
   build
@@ -26,8 +26,8 @@ bridge for Android); Xcode prompts for plugin approval otherwise.
 
 ## What's wired
 
-- Deployment target: iOS 17 (matches `Package.swift` floor for `AppCore`).
-- Local SwiftPM dependency on `../AppCore`. The package now pulls in
+- Deployment target: iOS 17 (matches `Package.swift` floor for `HackerNewsReader`).
+- Local SwiftPM dependency on `../HackerNewsReader`. The package now pulls in
   `skip`, `skip-fuse`, and `skip-model` for the Android bridging plugin —
   these resolve cleanly on iOS too (the plugin is a no-op there).
 - Codesigning is disabled (`CODE_SIGNING_ALLOWED=NO`) so simulator builds
@@ -35,10 +35,12 @@ bridge for Android); Xcode prompts for plugin approval otherwise.
 
 ## Architecture
 
-Two source files in `AppCoreBridgeExample/`:
+Source files in `HackerNewsReader/`:
 
+- **`HackerNewsReaderApp.swift`** — the `@main` SwiftUI `App` struct.
+  Wraps `RootView` in a `WindowGroup`.
 - **`RootView.swift`** — the view tree. `RootView` owns the singleton
-  `AppModel` (as `@State`) and installs `\.sendEvent` on the
+  `UICore` (as `@State`) and installs `\.sendEvent` on the
   `NavigationStack`. `AppState` itself is the `@Observable final
   class`; descendants take it as a parameter and rely on per-property
   tracking for invalidation.
@@ -49,6 +51,8 @@ Two source files in `AppCoreBridgeExample/`:
   The `Equatable` conformance is load-bearing — raw closures in
   `EnvironmentValues` defeat SwiftUI's reflection diff and invalidate
   every descendant on each parent body re-eval.
+- **`SafariView.swift`** — `SFSafariViewController` wrapper for the
+  story-detail sheet.
 
 Performance corollaries reflected in the source:
 

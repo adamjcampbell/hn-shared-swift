@@ -13,11 +13,11 @@ kotlin {
 }
 
 android {
-    namespace = "com.example.appcore"
+    namespace = "com.example.hackernewsreader"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.appcore"
+        applicationId = "com.example.hackernewsreader"
         minSdk = 28
         targetSdk = 35
         versionCode = 1
@@ -45,12 +45,14 @@ android {
     }
 }
 
-// Re-export AppCore's Swift package as Android AARs into ../skip-libs
-// before each Gradle build, so editing Swift in AppCore/Sources and
-// running from Android Studio Just Works without a manual
-// `skip export` step. Gradle's up-to-date check (inputs = Swift
-// sources + Package.swift, output = AppCore-debug.aar) skips the
-// re-export when nothing changed, so incremental builds stay fast.
+// Re-export HackerNewsReader's Swift package as Android AARs into
+// ../skip-libs before each Gradle build, so editing Swift in
+// HackerNewsReader/Sources and running from Android Studio Just Works
+// without a manual `skip export` step. Gradle's up-to-date check
+// (inputs = Swift sources + Package.swift, output =
+// HackerNewsReader-debug.aar; the HackerNews dependency target is
+// transitively re-exported alongside) skips the re-export when nothing
+// changed, so incremental builds stay fast.
 //
 // This isn't a documented Skip workflow — the canonical loop is to
 // drive builds from Xcode, which orchestrates Gradle for the Android
@@ -80,33 +82,33 @@ val skipBinary: String = run {
 }
 
 val skipExport = tasks.register<Exec>("skipExport") {
-    description = "Re-export AppCore as an Android AAR via the skip CLI."
+    description = "Re-export HackerNewsReader as an Android AAR via the skip CLI."
     group = "build"
-    val appCoreDir = rootProject.layout.projectDirectory.dir("../AppCore")
+    val readerDir = rootProject.layout.projectDirectory.dir("../HackerNewsReader")
     val skipLibsDir = rootProject.layout.projectDirectory.dir("skip-libs")
-    workingDir = appCoreDir.asFile
+    workingDir = readerDir.asFile
     commandLine(
         skipBinary, "export",
         "--debug", "--no-ios",
-        "--module", "AppCore",
+        "--module", "HackerNewsReader",
         "-d", "../android-app/skip-libs",
     )
-    inputs.files(fileTree(appCoreDir.dir("Sources")) { include("**/*.swift") })
-        .withPropertyName("appCoreSources")
+    inputs.files(fileTree(readerDir.dir("Sources")) { include("**/*.swift") })
+        .withPropertyName("readerSources")
         .withPathSensitivity(PathSensitivity.RELATIVE)
-    inputs.file(appCoreDir.file("Package.swift"))
+    inputs.file(readerDir.file("Package.swift"))
         .withPropertyName("packageManifest")
-    outputs.file(skipLibsDir.file("AppCore-debug.aar"))
-        .withPropertyName("appCoreAar")
+    outputs.file(skipLibsDir.file("HackerNewsReader-debug.aar"))
+        .withPropertyName("readerAar")
 }
 
 tasks.named("preBuild") { dependsOn(skipExport) }
 
 dependencies {
-    // SkipFuse-bridged AppCore + Skip runtime libraries. Re-exported
-    // by the `skipExport` task above on each build; the canonical
-    // manual command is
-    // `cd ../AppCore && skip export --debug --no-ios --module AppCore -d ../android-app/skip-libs`.
+    // SkipFuse-bridged HackerNewsReader (and its HackerNews dependency)
+    // + Skip runtime libraries. Re-exported by the `skipExport` task
+    // above on each build; the canonical manual command is
+    // `cd ../HackerNewsReader && skip export --debug --no-ios --module HackerNewsReader -d ../android-app/skip-libs`.
     debugImplementation(fileTree(mapOf(
         "dir" to "../skip-libs",
         "include" to listOf("*.aar"),

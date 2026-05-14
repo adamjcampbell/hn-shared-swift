@@ -1,13 +1,13 @@
 import SwiftUI
-import AppCore
+import HackerNewsReader
 
 struct RootView: View {
-    @State private var appCore = UICore()
+    @State private var core = UICore()
     @State private var presented: IdentifiedURL?
 
     var body: some View {
-        NavigationStack { StoriesScreen(state: appCore.state) }
-            .environment(\.sendEvent, SendAppEvent(appCore))
+        NavigationStack { StoriesScreen(state: core.state) }
+            .environment(\.sendEvent, SendAppEvent(core))
             .sheet(item: $presented) { item in
                 SafariView(url: item.url)
                     .ignoresSafeArea()
@@ -16,7 +16,7 @@ struct RootView: View {
                 // Long-lived consumer of AppCommand. The sheet binding
                 // lives here in the SwiftUI tree; user-driven dismissal
                 // sets `presented = nil` without touching UICore.
-                for await command in appCore.commands {
+                for await command in core.commands {
                     switch command {
                     case .presentURL(let urlString):
                         presented = IdentifiedURL(urlString)
@@ -84,7 +84,7 @@ private struct SearchResults: View {
                 )
             }
             Section { StoryRows(stories: state.searchResults) }
-            if state.search.loadedHits?.hasMore == true {
+            if state.search.loadedStories?.hasMore == true {
                 Section {
                     LoadMoreRow(status: state.search.loadMoreStatus)
                 }
@@ -116,12 +116,12 @@ private struct StoriesList: View {
                 FeedHeaderCard(
                     storyCount: state.feedStories.count,
                     unreadCount: state.feedStories.lazy.filter { !$0.isRead }.count,
-                    lastRefreshedAt: state.feed.loadedHits?.loadedAt,
+                    lastRefreshedAt: state.feed.loadedStories?.loadedAt,
                     loadError: state.feed.initialStatus.error
                 )
             }
             Section { StoryRows(stories: state.feedStories) }
-            if state.feed.loadedHits?.hasMore == true {
+            if state.feed.loadedStories?.hasMore == true {
                 Section {
                     LoadMoreRow(status: state.feed.loadMoreStatus)
                 }
@@ -174,11 +174,11 @@ private struct LoadMoreRow: View {
 }
 
 private struct StoryRows: View {
-    let stories: [Story]
+    let stories: [StoryRow]
 
     var body: some View {
         ForEach(stories) { story in
-            StoryRow(story: story)
+            StoryRowView(story: story)
         }
     }
 }
@@ -247,8 +247,8 @@ private struct SearchHeader: View {
     }
 }
 
-private struct StoryRow: View {
-    let story: Story
+private struct StoryRowView: View {
+    let story: StoryRow
     @Environment(\.sendEvent) private var sendEvent
 
     var body: some View {
@@ -287,6 +287,6 @@ private struct StoryRow: View {
     private var metaLine: String {
         let host = URL(string: story.url ?? "")?.host ?? "news.ycombinator.com"
         let age = story.createdAt.formatted(.relative(presentation: .numeric))
-        return "by \(story.author) · \(story.points) pts · \(story.commentCount) comments · \(host) · \(age)"
+        return "by \(story.author) · \(story.score) pts · \(story.commentCount) comments · \(host) · \(age)"
     }
 }

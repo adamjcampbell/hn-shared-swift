@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct AppCoreBridgeExampleApp: App {
+struct HackerNewsReaderApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()

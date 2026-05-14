@@ -1,19 +1,19 @@
 # Android app
 
-Standard Android Gradle project. Consumes the SkipFuse-bridged AppCore
-as a set of `.aar` files in `skip-libs/` (gitignored). No Swift build
-step inside Gradle — the Swift cross-compile happens once via
-`skip export`, the result drops into `skip-libs/`, and Gradle just
-links them like any other AAR.
+Standard Android Gradle project. Consumes the SkipFuse-bridged
+`HackerNewsReader` (+ `HackerNews` SDK target) as a set of `.aar` files
+in `skip-libs/` (gitignored). No Swift build step inside Gradle — the
+Swift cross-compile happens once via `skip export`, the result drops
+into `skip-libs/`, and Gradle just links them like any other AAR.
 
 ## Modules
 
 - `app/` — the Android application. `MainActivity`, `StoryScreen`
-  (Compose UI reading `appModel.state` directly via SkipFuse-bridged
-  Kotlin types in `app.core.*`), `AppCoreApplication.onCreate`
-  (`skip.foundation.ProcessInfo.launch(...)` to bootstrap the Swift
-  runtime), `state/AppModelHolder.kt` (process-wide `AppModel`
-  singleton + a `rememberAppModel()` Composable).
+  (Compose UI reading `core.state` directly via SkipFuse-bridged
+  Kotlin types in `hacker.news.reader.*` and `hacker.news.*`),
+  `App.onCreate` (`skip.foundation.ProcessInfo.launch(...)` to
+  bootstrap the Swift runtime), `state/CoreHolder.kt` (process-wide
+  `UICore` singleton + a `rememberCore()` Composable).
 
 There is no `core-jni/` module any more — SkipFuse's `skip export`
 emits the bridge directly.
@@ -36,17 +36,18 @@ emits the bridge directly.
 sdk.dir=/Users/<you>/Library/Android/sdk
 ```
 
-## Build the AAR (one-time, and after Swift changes)
+## Build the AARs (one-time, and after Swift changes)
 
 ```sh
-cd ../AppCore
-skip export --debug --no-ios --module AppCore -d ../android-app/skip-libs
+cd ../HackerNewsReader
+skip export --debug --no-ios --module HackerNewsReader -d ../android-app/skip-libs
 ```
 
-This produces `skip-libs/AppCore-debug.aar` plus the Skip runtime
-AARs (`SkipFoundation-debug.aar`, `SkipModel-debug.aar`, etc.). Each
-AAR contains the natively-compiled Swift `.so` libraries for
-`arm64-v8a` plus the bridged Kotlin classes.
+This produces `skip-libs/HackerNewsReader-debug.aar` and
+`HackerNews-debug.aar` (transitively from the package's dependency
+graph), plus the Skip runtime AARs (`SkipFoundation-debug.aar`,
+`SkipModel-debug.aar`, etc.). Each AAR contains the natively-compiled
+Swift `.so` libraries for `arm64-v8a` plus the bridged Kotlin classes.
 
 ## Build & run the APK
 
@@ -59,7 +60,7 @@ adb wait-for-device
 
 ./gradlew :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n com.example.appcore/.ui.MainActivity
+adb shell am start -n com.example.hackernewsreader/.ui.MainActivity
 ```
 
 ## Caveats

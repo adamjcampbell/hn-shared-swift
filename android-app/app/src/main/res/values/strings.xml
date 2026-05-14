@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AppCore Bridge Example</string>
+    <string name="app_name">Hacker News Reader</string>
     <string name="app_title">Hacker News</string>
     <string name="search_placeholder">Search Hacker News</string>
     <string name="front_page_title">Front page</string>

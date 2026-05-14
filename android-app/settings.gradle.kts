@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "appcore-bridge-example"
+rootProject.name = "hackernewsreader"
 include(":app")

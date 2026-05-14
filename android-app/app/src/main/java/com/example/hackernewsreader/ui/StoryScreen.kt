@@ -1,4 +1,4 @@
-package com.example.appcore.ui
+package com.example.hackernewsreader.ui
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -59,33 +59,33 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import app.core.AppCommand
-import app.core.AppEvent
-import app.core.UICore
-import app.core.AppState
-import app.core.LoadStatus
-import app.core.Story
-import com.example.appcore.R
-import com.example.appcore.state.rememberAppCore
+import hacker.news.reader.AppCommand
+import hacker.news.reader.AppEvent
+import hacker.news.reader.UICore
+import hacker.news.reader.AppState
+import hacker.news.reader.LoadStatus
+import hacker.news.reader.StoryRow
+import com.example.hackernewsreader.R
+import com.example.hackernewsreader.state.rememberCore
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StoryScreen() {
-    val appCore = rememberAppCore()
+    val core = rememberCore()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
     // Initial fetch on first composition.
-    LaunchedEffect(appCore) {
-        appCore.sendEvent(AppEvent.refresh)
+    LaunchedEffect(core) {
+        core.sendEvent(AppEvent.refresh)
     }
 
     // One-shot commands from the core.
-    LaunchedEffect(appCore) {
-        appCore.commands.kotlin().collect { command ->
+    LaunchedEffect(core) {
+        core.commands.kotlin().collect { command ->
             when (command) {
                 is AppCommand.PresentURLCase -> context.launchCustomTab(command.value)
             }
@@ -105,11 +105,11 @@ fun StoryScreen() {
         },
     ) { innerPadding ->
         StoriesContent(
-            state = appCore.state,
-            onRefresh = { appCore.sendEvent(AppEvent.refresh) },
-            onLoadMore = { appCore.sendEvent(AppEvent.loadMore) },
-            onToggleRead = { id -> scope.launch { appCore.sendEvent(AppEvent.toggleRead(id)) } },
-            onOpenStory = { id -> scope.launch { appCore.sendEvent(AppEvent.openStory(id)) } },
+            state = core.state,
+            onRefresh = { core.sendEvent(AppEvent.refresh) },
+            onLoadMore = { core.sendEvent(AppEvent.loadMore) },
+            onToggleRead = { id -> scope.launch { core.sendEvent(AppEvent.toggleRead(id)) } },
+            onOpenStory = { id -> scope.launch { core.sendEvent(AppEvent.openStory(id)) } },
             modifier = Modifier
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
@@ -133,18 +133,18 @@ private fun StoriesContent(
     // for tracking and mutations from any thread trigger recomposition.
     val authoritativeSearchQuery = state.searchQuery
     @Suppress("UNCHECKED_CAST")
-    val feedStories = state.feedStories.kotlin() as List<Story>
+    val feedStories = state.feedStories.kotlin() as List<StoryRow>
     @Suppress("UNCHECKED_CAST")
-    val searchResults = state.searchResults.kotlin() as List<Story>
+    val searchResults = state.searchResults.kotlin() as List<StoryRow>
     val feed = state.feed
     val search = state.search
     val isFeedRefreshing = feed.initialStatus.isLoading
     val isSearchLoading = search.initialStatus.isLoading
-    val lastRefreshedAt = feed.loadedHits?.loadedAt
+    val lastRefreshedAt = feed.loadedStories?.loadedAt
     val feedLoadError = feed.initialStatus.error
     val searchLoadError = search.initialStatus.error
-    val feedHasMore = feed.loadedHits?.hasMore == true
-    val searchHasMore = search.loadedHits?.hasMore == true
+    val feedHasMore = feed.loadedStories?.hasMore == true
+    val searchHasMore = search.loadedStories?.hasMore == true
     val feedLoadMoreStatus = feed.loadMoreStatus
     val searchLoadMoreStatus = search.loadMoreStatus
 
@@ -152,7 +152,7 @@ private fun StoriesContent(
     val textFieldState = rememberTextFieldState(initialText = authoritativeSearchQuery)
     val scope = rememberCoroutineScope()
 
-    // User typing → AppCore. Direct property setter; Swift's @Observable
+    // User typing → core. Direct property setter; Swift's @Observable
     // willSet routes through SkipFuse to invalidate any composable reading
     // searchQuery (including the next StoriesContent recomposition).
     LaunchedEffect(state) {
@@ -160,7 +160,7 @@ private fun StoriesContent(
             .distinctUntilChanged()
             .collect { state.searchQuery = it }
     }
-    // Authoritative writes from AppCore (cold-start initial, programmatic
+    // Authoritative writes from core (cold-start initial, programmatic
     // clears) → TextFieldState.
     LaunchedEffect(authoritativeSearchQuery) {
         if (textFieldState.text.toString() != authoritativeSearchQuery) {
@@ -286,12 +286,12 @@ private fun StoriesContent(
 }
 
 private fun LazyListScope.storyRows(
-    stories: List<Story>,
+    stories: List<StoryRow>,
     onToggleRead: (String) -> Unit,
     onOpenStory: (String) -> Unit,
 ) {
     items(stories, key = { it.id }) { story ->
-        StoryRow(
+        StoryRowView(
             story = story,
             onToggle = { onToggleRead(story.id) },
             onOpen = { onOpenStory(story.id) },
@@ -388,8 +388,8 @@ private fun SearchHeader(
 }
 
 @Composable
-private fun StoryRow(
-    story: Story,
+private fun StoryRowView(
+    story: StoryRow,
     onToggle: () -> Unit,
     onOpen: () -> Unit,
 ) {
@@ -446,7 +446,7 @@ private fun StoryRow(
             headlineContent = { Text(story.title) },
             supportingContent = {
                 Text(
-                    text = "by ${story.author} · ${story.points} pts · ${story.commentCount} comments · $host",
+                    text = "by ${story.author} · ${story.score} pts · ${story.commentCount} comments · $host",
                     style = MaterialTheme.typography.bodySmall,
                 )
             },

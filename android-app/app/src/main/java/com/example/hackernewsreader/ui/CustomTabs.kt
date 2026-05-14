@@ -1,4 +1,4 @@
-package com.example.appcore.ui
+package com.example.hackernewsreader.ui
 
 import android.content.Context
 import androidx.core.net.toUri

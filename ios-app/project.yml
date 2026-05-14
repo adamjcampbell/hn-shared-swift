@@ -1,4 +1,4 @@
-name: AppCoreBridgeExample
+name: HackerNewsReader
 options:
   bundleIdPrefix: com.example
   deploymentTarget:
@@ -9,27 +9,27 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
 
-# Local SwiftPM dependency on the cross-platform AppCore package.
+# Local SwiftPM dependency on the cross-platform HackerNewsReader package.
 packages:
-  AppCore:
-    path: ../AppCore
+  HackerNewsReader:
+    path: ../HackerNewsReader
 
 targets:
-  AppCoreBridgeExample:
+  HackerNewsReader:
     type: application
     platform: iOS
     sources:
-      - path: AppCoreBridgeExample
+      - path: HackerNewsReader
     info:
-      path: AppCoreBridgeExample/Info.plist
+      path: HackerNewsReader/Info.plist
       properties:
         UILaunchScreen: {}
-        CFBundleDisplayName: AppCore Bridge
+        CFBundleDisplayName: Hacker News Reader
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.appcore.ios
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.hackernewsreader
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "6.0"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
@@ -40,5 +40,5 @@ targets:
         SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
         SWIFT_STRICT_CONCURRENCY: complete
     dependencies:
-      - package: AppCore
-        product: AppCore
+      - package: HackerNewsReader
+        product: HackerNewsReader
