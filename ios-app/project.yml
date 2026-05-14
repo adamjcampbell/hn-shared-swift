@@ -15,7 +15,15 @@ packages:
     path: ../HackerNewsReader
 
 targets:
-  HackerNewsReader:
+  # Target name differs from the SwiftPM product `HackerNewsReader` so
+  # the iOS app's Swift module doesn't collide with the package's at
+  # build time (Apple's WWDC sample convention: app target `Foo` +
+  # SwiftPM product `FooKit`). Here the product is the unsuffixed name
+  # the consumer wants, so the *target* takes the suffix instead.
+  # Project + scheme stay `HackerNewsReader` (via top-level `name` and
+  # `schemes:` below); the bundle on disk is `HackerNewsReaderApp.app`
+  # but users see `CFBundleDisplayName` ("Hacker News Reader").
+  HackerNewsReaderApp:
     type: application
     platform: iOS
     sources:
@@ -42,3 +50,19 @@ targets:
     dependencies:
       - package: HackerNewsReader
         product: HackerNewsReader
+
+schemes:
+  HackerNewsReader:
+    build:
+      targets:
+        HackerNewsReaderApp: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
