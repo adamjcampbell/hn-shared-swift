@@ -56,8 +56,10 @@ the `// SKIP @bridgeMembers` markers on the Swift sources.
   `HackerNewsReader` directly.
 - `android-app/` — standard Android Gradle project. Consumes
   `HackerNewsReader-debug.aar` + `HackerNews-debug.aar` + the Skip
-  runtime AARs from `android-app/skip-libs/` (gitignored, regenerated
-  by `skip export`).
+  runtime AARs from `android-app/skip-libs/` (gitignored). A
+  `skipExport` Gradle task wired into `preBuild` re-runs `skip export`
+  whenever Swift sources change, so `./gradlew :app:assembleDebug`
+  (or hitting Run in Android Studio) rebuilds the bridge transparently.
 - `docs/skip-fuse-adoption.md` — why we adopted SkipFuse and the
   gotchas we hit during the migration.
 - `docs/historical/` — design docs for the previous hand-written JNI

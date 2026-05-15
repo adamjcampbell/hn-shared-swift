@@ -79,12 +79,12 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 - **Adding a new `@Observable` property: add the field on `AppState`.**
   The class already carries `// SKIP @bridgeMembers`, so every new
   public member bridges automatically — no per-field marker, no thunk,
-  no Kotlin holder, no `*OnChange` SAM. After Swift changes,
-  regenerate the Android AARs with
-  `cd HackerNewsReader && skip export --debug --no-ios --module
-  HackerNewsReader -d ../android-app/skip-libs`. The export
-  transitively produces both `HackerNewsReader-debug.aar` and
-  `HackerNews-debug.aar`.
+  no Kotlin holder, no `*OnChange` SAM. The Android side picks the
+  change up on the next `./gradlew :app:assembleDebug` (or Android
+  Studio Run): the `skipExport` task in `android-app/app/build.gradle.kts`
+  is wired into `preBuild` and re-runs `skip export` when Swift sources
+  or `Package.swift` change. The export transitively produces both
+  `HackerNewsReader-debug.aar` and `HackerNews-debug.aar`.
 - **`// SKIP @bridgeMembers` (type-level) vs `// SKIP @bridge`
   (per-member).** Bridged structs/classes here use `@bridgeMembers`,
   which bridges every public member of the type with one annotation.
@@ -279,12 +279,11 @@ cd ios-app && \
     -destination 'platform=iOS Simulator,name=iPhone 17' \
     -skipPackagePluginValidation build
 
-# Android: rebuild the AARs after Swift changes, then build the APK.
-# `skip export` transitively produces both HackerNewsReader-debug.aar
-# and HackerNews-debug.aar from one invocation.
-cd HackerNewsReader && \
-  skip export --debug --no-ios --module HackerNewsReader -d ../android-app/skip-libs
-cd ../android-app && \
+# Android: assemble the APK. The `skipExport` Gradle task re-runs
+# `skip export` automatically when Swift sources change and is a no-op
+# otherwise; one invocation transitively produces both
+# HackerNewsReader-debug.aar and HackerNews-debug.aar in skip-libs/.
+cd android-app && \
   JAVA_HOME=/Applications/Android\ Studio.app/Contents/jbr/Contents/Home \
   ./gradlew :app:assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk

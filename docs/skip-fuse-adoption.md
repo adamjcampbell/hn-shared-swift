@@ -282,20 +282,26 @@ The empirical run:
 ## How the build runs
 
 ```sh
-# Build the HackerNewsReader .aar bundle (regenerate after Swift changes).
-# Skip transitively packages the HackerNews dependency target into a
+# Build the APK. The `skipExport` Gradle task in
+# android-app/app/build.gradle.kts is a `preBuild` dependency that
+# re-runs `skip export` whenever Swift sources or Package.swift change;
+# Gradle's up-to-date check skips it otherwise. One invocation
+# transitively packages the HackerNews dependency target into a
 # separate AAR alongside the HackerNewsReader one.
-cd HackerNewsReader
-skip export --debug --no-ios --module HackerNewsReader -d ../android-app/skip-libs
-
-# Build the APK consuming the .aar.
-cd ../android-app
+cd android-app
 ./gradlew :app:assembleDebug
 ```
 
 `skip-libs/` is gitignored — it's a build artefact regenerated from
 the Swift sources. The APK packages the `.aar` files directly via
 `debugImplementation(fileTree(...))`.
+
+To trigger the export without a full Gradle build:
+
+```sh
+cd HackerNewsReader
+skip export --debug --no-ios --module HackerNewsReader -d ../android-app/skip-libs
+```
 
 ## Ergonomic shape compared
 
