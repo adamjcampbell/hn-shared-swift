@@ -153,8 +153,9 @@ private fun StoriesContent(
     val scope = rememberCoroutineScope()
 
     // User typing → core. Direct property setter; Swift's @Observable
-    // willSet routes through SkipFuse to invalidate any composable reading
-    // searchQuery (including the next StoriesContent recomposition).
+    // setter routes through SkipFuse's Compose snapshot integration, so any
+    // composable that read `searchQuery` is invalidated and the next
+    // StoriesContent recomposition picks up the new value.
     LaunchedEffect(state) {
         snapshotFlow { textFieldState.text.toString() }
             .distinctUntilChanged()
