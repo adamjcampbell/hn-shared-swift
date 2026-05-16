@@ -43,25 +43,54 @@ final class AppCore {
         self.client = client
         self.clock = clock
         self.now = now
-
         // Listener for `state.searchQuery` writes (iOS @Bindable,
         // Android textFieldState collector). Empty → clear the search
         // surface and cancel anything in flight. Non-empty → schedule
         // a debounced fetch fire-and-forget: the body must return to
         // `for await` before the network call completes so the *next*
         // keystroke can cancel-and-replace the parked task.
-        tasks[.searchListener] = isolatedTask { [self] in
-            for await query in state.searchQueryChanges {
+        tasks[.searchListener] = spawnTask { core in
+            for await query in core.state.searchQueryChanges {
                 if query.isEmpty {
-                    tasks[.search] = nil
-                    tasks[.searchCommit] = nil
-                    tasks[.searchMore] = nil
-                    state.search = LoadableStories()
+                    core.tasks[.search] = nil
+                    core.tasks[.searchCommit] = nil
+                    core.tasks[.searchMore] = nil
+                    core.state.search = LoadableStories()
                 } else {
-                    scheduleSearchFetch(query: query)
+                    core.scheduleSearchFetch(query: query)
                 }
             }
         }
+    }
+
+    /// Spawn a Task whose body runs on the caller's actor isolation,
+    /// receiving `self` as the `core` parameter.
+    ///
+    /// On iOS / macOS the body inherits caller isolation through
+    /// `isolatedTask`'s `@isolated(any)`. On Android the Swift
+    /// Concurrency runtime drops that token and lands the body on the
+    /// global executor — racing main-thread Compose reads of
+    /// `state.*` and crashing in `_NativeDictionary.lookup`. The
+    /// Android branch sidesteps this with an explicit
+    /// `Task { @MainActor in … }`, which the runtime *does* route to
+    /// the main looper. See `skip-spike/REPRO.md`.
+    fileprivate func spawnTask(
+        _ body: sending @escaping (AppCore) async -> Void
+    ) -> Task<Void, Never> {
+        // Strict concurrency can't statically prove the non-Sendable
+        // `self` and `sending body` are safe to forward into the
+        // Task; both are invoked exactly once on the target actor.
+        nonisolated(unsafe) let selfRef = self
+        nonisolated(unsafe) let bodyRef = body
+#if canImport(Android)
+        return Task { @MainActor in
+            await bodyRef(selfRef)
+        }
+#else
+        return isolatedTask {
+            await bodyRef(selfRef)
+        }
+#endif
     }
 
     /// Fire-and-forget debounced search. Parks the network call in
@@ -96,17 +125,16 @@ final class AppCore {
         }
         tasks[.search] = task
 
-        tasks[.searchCommit] = isolatedTask { [self] in
+        tasks[.searchCommit] = spawnTask { core in
             do {
                 let page = try await task.value
                 try Task.checkCancellation()
-                for story in page.stories { state.stories[story.id] = story }
+                for story in page.stories { core.state.stories[story.id] = story }
                 let ids = page.stories.map(\.id)
-                state.search.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: now())
+                core.state.search.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: core.now())
             } catch is CancellationError {
-                // Newer keystroke (or clearSearch) cancelled us.
             } catch {
-                state.search.initialStatus.finishFailure(error.localizedDescription)
+                core.state.search.initialStatus.finishFailure(error.localizedDescription)
             }
         }
     }
@@ -257,6 +285,9 @@ final class AppCore {
 /// isolation. `sending @isolated(any)` carries that isolation through
 /// the inner `Task`'s `@Sendable` boundary so the closure can capture
 /// non-Sendable values (e.g. `self` on `AppCore`).
+///
+/// On Android this propagation is broken at runtime — see
+/// `AppCore.spawnTask` for the workaround.
 func isolatedTask(
     isolation: isolated (any Actor)? = #isolation,
     _ body: sending @escaping @isolated(any) () async -> Void
