@@ -5,21 +5,18 @@ import HackerNews
 import FoundationNetworking
 #endif
 
-/// Workhorse for `UICore`. **Actor** that borrows the host's executor
-/// (SE-0392) so AppCore's methods and Tasks physically execute on the
-/// same serial executor as the host — MainActor in production via
-/// UICore, the per-test executor under TestCore.
+/// Workhorse for `UICore`. An `actor` whose `unownedExecutor`
+/// borrows the host's (SE-0392), so all AppCore methods and Tasks
+/// execute on the same serial executor as `UICore` (`MainActor` in
+/// production) or `TestCore` (a per-test executor).
 ///
-/// `state` is held as a regular actor-isolated property. The single
-/// escape hatch for forwarding `AppState` from UICore into AppCore is
-/// a **transient** `nonisolated(unsafe) let` at the call site in
-/// `UICore.init` / `TestCore.init` — nothing inside AppCore uses
-/// `nonisolated(unsafe)`.
-///
-/// Tasks spawned inside AppCore methods inherit AppCore's isolation
-/// via `Task.init`'s built-in `@_inheritActorContext` — bodies have
-/// direct access to `state`, `self.tasks`, and actor methods, no
-/// `[self] in _ = self` ritual needed.
+/// Forwarding `AppState` from the host across this actor boundary
+/// uses one transient `nonisolated(unsafe) let` at the host's init
+/// call site — nothing inside AppCore uses `nonisolated(unsafe)`.
+/// Tasks spawned inside AppCore methods inherit this actor via the
+/// implicit `self` references in their bodies (Task.init's built-in
+/// `@_inheritActorContext`), so the listener / commit Tasks read
+/// and write `state` directly.
 ///
 /// Not bridged to Kotlin; `UICore` re-exposes the public surface.
 actor AppCore {
@@ -62,14 +59,12 @@ actor AppCore {
         self.borrowed = isolation
     }
 
-    /// Start the long-running search-query listener. The host calls
-    /// this once after construction — can't be done in `init` because
-    /// Swift forbids reassigning an actor stored property from the
+    /// Start the long-running search-query listener. Called by the
+    /// host once after construction; can't go in `init` because
+    /// Swift forbids reassigning an actor stored property from a
     /// sync init body.
     func startListener() {
         tasks[.searchListener] = Task {
-            // Implicit `self.state` reference makes Task inherit
-            // this actor's isolation via @_inheritActorContext.
             for await query in state.searchQueryChanges {
                 if query.isEmpty {
                     tasks[.search] = nil

@@ -3,23 +3,16 @@ import Foundation
 @testable import HackerNewsReader
 import HackerNews
 
-/// Per-test isolation shell. Each `TestCore` is its own actor —
-/// different instances run on different executors, so tests parallelise.
-/// All access flows through `core.run { … }`, which gives the closure
-/// a single consistent snapshot for grouped reads.
+/// Per-test isolation shell. Each `TestCore` runs on its own
+/// `DispatchSerialQueue` (SE-0392 `unownedExecutor`) so tests
+/// parallelise across instances and `await core.settle()` gives a
+/// FIFO-deterministic drain (Point-Free Video #362 pattern).
 ///
-/// `unownedExecutor` is overridden to a private `DispatchSerialQueue`
-/// (SE-0392) so tests can call `await core.settle()` for a FIFO-
-/// deterministic drain instead of `Task.megaYield()`. The pattern is
-/// straight from Point-Free Video #362; the FIFO trade-off (real
-/// actors honour task priority) is acceptable because test code has
-/// no priority diversity.
-///
-/// `AppCore` is an actor that borrows TestCore's executor — both run
-/// on the same `DispatchSerialQueue`. The `BorrowedExecutor` sibling
-/// is needed because `AppCore.init` takes the borrowing actor as a
-/// parameter, and `TestCore.init` can't pass `self` until all stored
-/// props (including `appCore`) are set.
+/// `AppCore` is constructed with `borrowing: executor` (not `self`),
+/// dodging the chicken-and-egg of passing TestCore.self to an init
+/// before `self.appCore` is set. Both `TestCore` and `AppCore`
+/// borrow the same `BorrowedExecutor` queue, so they share one
+/// physical serial executor.
 public actor TestCore {
     public let state: AppState
     public nonisolated let commands: AsyncStream<AppCommand>
@@ -41,7 +34,8 @@ public actor TestCore {
         self.executor = executor
         self.state = state
         self.commands = stream
-        // The single escape hatch — transient, scoped to this init.
+        // Same transient escape hatch as in `UICore.init` — see there
+        // for the rationale.
         nonisolated(unsafe) let forAppCore = state
         let appCore = AppCore(
             state: forAppCore,
@@ -82,11 +76,10 @@ public actor TestCore {
     }
 }
 
-/// Owns the `DispatchSerialQueue` borrowed by both `TestCore` and
-/// `AppCore`. Constructed first as a plain local value so we can pass
-/// it to `AppCore.init`'s `borrowing:` parameter without the
-/// self-reference chicken-and-egg that would otherwise block passing
-/// `self` from `TestCore.init`.
+/// Sibling actor that owns the `DispatchSerialQueue` shared by
+/// `TestCore` and `AppCore`. Both borrow its `unownedExecutor` —
+/// dodges the chicken-and-egg of passing `TestCore.self` to
+/// `AppCore.init` from within `TestCore.init`.
 actor BorrowedExecutor {
     nonisolated let queue: DispatchSerialQueue
 

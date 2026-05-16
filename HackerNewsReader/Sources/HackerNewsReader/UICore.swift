@@ -4,9 +4,8 @@ import HackerNews
 
 /// `@MainActor` UI-facing shell. Bridged to Kotlin via Skip; SwiftUI
 /// and Compose both consume this type. Owns `AppState` and the
-/// commands stream; `AppCore` is an actor that borrows MainActor's
-/// executor so its methods physically run on the same serial
-/// executor as UICore's reads.
+/// commands stream; `AppCore` borrows MainActor's executor so its
+/// methods and Tasks share this serial queue.
 // SKIP @bridgeMembers
 @MainActor
 public struct UICore {
@@ -19,10 +18,10 @@ public struct UICore {
         let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
         self.state = state
         self.commands = stream
-        // The single escape hatch: a transient local that lets us
-        // share the `AppState` reference with AppCore (an actor)
-        // without `@unchecked Sendable` on the type. After this
-        // statement nothing else uses `nonisolated(unsafe)`.
+        // The only `nonisolated(unsafe)` in the codebase. Lets the
+        // non-Sendable `state` reference cross into `AppCore` (a
+        // different actor type, same executor) without lying via
+        // `@unchecked Sendable` on the AppState class itself.
         nonisolated(unsafe) let forAppCore = state
         let appCore = AppCore(
             state: forAppCore,
@@ -34,9 +33,6 @@ public struct UICore {
             borrowing: MainActor.shared
         )
         self.appCore = appCore
-        // Listener Task — created on MainActor, runs on AppCore's
-        // (= MainActor's) executor. The await hop is a runtime no-op
-        // because executors match.
         Task { await appCore.startListener() }
     }
 
