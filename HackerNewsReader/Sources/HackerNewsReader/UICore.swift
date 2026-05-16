@@ -24,7 +24,8 @@ public struct UICore {
             commandsContinuation: continuation,
             client: Client(),
             clock: ContinuousClock(),
-            now: Date.init
+            now: Date.init,
+            borrowing: MainActor.shared
         )
     }
 

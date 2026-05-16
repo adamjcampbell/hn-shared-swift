@@ -5,10 +5,22 @@ import HackerNews
 import FoundationNetworking
 #endif
 
-/// Workhorse for `UICore`. Non-`Sendable` `final class`; async and
-/// Task-spawning methods take `isolation: isolated (any Actor)? =
-/// #isolation` (SE-0420) so they inherit the caller's isolation
-/// statically.
+/// Workhorse for `UICore`. Non-`Sendable` `final class`.
+///
+/// `init` takes a `borrowing isolation: any Actor` parameter — caller
+/// passes whichever actor's executor the long-running Tasks should run
+/// on (MainActor in production via UICore; a `BorrowedExecutor` actor
+/// under TestCore). Internally, an `IsolationSpawner` actor is built
+/// whose `unownedExecutor` returns that actor's executor (SE-0392),
+/// and every `spawnTask { … }` call routes its body through
+/// `spawner.run { … }`. The actor-method-call hop reliably lands on
+/// the borrowed executor, closing the SE-0420 propagation gap that
+/// breaks `@isolated(any)`-based inheritance through `Task` literals.
+/// See `skip-spike/REPRO.md`.
+///
+/// Async event-handling methods (`sendEvent`, `scheduleSearchFetch`)
+/// still take `isolation: isolated (any Actor)? = #isolation` so calls
+/// from the borrowed executor stay on it without an extra hop.
 ///
 /// Not bridged to Kotlin; `UICore` re-exposes the public surface.
 final class AppCore {
@@ -19,6 +31,7 @@ final class AppCore {
     private let client: Client
     private let clock: any Clock<Duration>
     private let now: @Sendable () -> Date
+    private let spawner: IsolationSpawner
 
     enum TaskID { case feed, feedMore, search, searchCommit, searchMore, searchListener }
     private var tasks = TaskRegistry<TaskID>()
@@ -35,7 +48,7 @@ final class AppCore {
         client: Client,
         clock: any Clock<Duration>,
         now: @escaping @Sendable () -> Date = Date.init,
-        isolation: isolated (any Actor)? = #isolation
+        borrowing isolation: any Actor
     ) {
         self.state = state
         self.commands = commands
@@ -43,6 +56,9 @@ final class AppCore {
         self.client = client
         self.clock = clock
         self.now = now
+        let spawner = IsolationSpawner(borrowing: isolation)
+        self.spawner = spawner
+
         // Listener for `state.searchQuery` writes (iOS @Bindable,
         // Android textFieldState collector). Empty → clear the search
         // surface and cancel anything in flight. Non-empty → schedule
@@ -63,34 +79,25 @@ final class AppCore {
         }
     }
 
-    /// Spawn a Task whose body runs on the caller's actor isolation,
-    /// receiving `self` as the `core` parameter.
-    ///
-    /// On iOS / macOS the body inherits caller isolation through
-    /// `isolatedTask`'s `@isolated(any)`. On Android the Swift
-    /// Concurrency runtime drops that token and lands the body on the
-    /// global executor — racing main-thread Compose reads of
-    /// `state.*` and crashing in `_NativeDictionary.lookup`. The
-    /// Android branch sidesteps this with an explicit
-    /// `Task { @MainActor in … }`, which the runtime *does* route to
-    /// the main looper. See `skip-spike/REPRO.md`.
+    /// Spawn a Task whose body runs on the borrowed executor (=
+    /// caller's actor at AppCore construction time). `body` receives
+    /// `self` as the `core` parameter so call sites don't need an
+    /// implicit `self` capture in the closure.
     fileprivate func spawnTask(
         _ body: sending @escaping (AppCore) async -> Void
     ) -> Task<Void, Never> {
-        // Strict concurrency can't statically prove the non-Sendable
-        // `self` and `sending body` are safe to forward into the
-        // Task; both are invoked exactly once on the target actor.
+        // `nonisolated(unsafe)` lets us forward the non-Sendable
+        // `self` and the `sending` `body` into the Task closure.
+        // Both are invoked exactly once, inside `spawner.run`, on
+        // the borrowed executor.
         nonisolated(unsafe) let selfRef = self
         nonisolated(unsafe) let bodyRef = body
-#if canImport(Android)
-        return Task { @MainActor in
-            await bodyRef(selfRef)
+        let spawner = self.spawner
+        return Task {
+            await spawner.run { _ in
+                await bodyRef(selfRef)
+            }
         }
-#else
-        return isolatedTask {
-            await bodyRef(selfRef)
-        }
-#endif
     }
 
     /// Fire-and-forget debounced search. Parks the network call in
@@ -281,16 +288,33 @@ final class AppCore {
     }
 }
 
-/// Spawn an unstructured `Task` whose body runs on the caller's
-/// isolation. `sending @isolated(any)` carries that isolation through
-/// the inner `Task`'s `@Sendable` boundary so the closure can capture
-/// non-Sendable values (e.g. `self` on `AppCore`).
+/// Actor that borrows another actor's serial executor via SE-0392.
+/// Calling `await spawner.run { _ in … }` from a nonisolated context
+/// hops to the borrowed executor and runs the body there — the
+/// runtime resolves the hop via `unownedExecutor` at call time, no
+/// static type info required.
 ///
-/// On Android this propagation is broken at runtime — see
-/// `AppCore.spawnTask` for the workaround.
-func isolatedTask(
-    isolation: isolated (any Actor)? = #isolation,
-    _ body: sending @escaping @isolated(any) () async -> Void
-) -> Task<Void, Never> {
-    Task { await body() }
+/// This sidesteps the SE-0420 → `@isolated(any)` propagation gap:
+/// closure literals don't statically inherit SE-0420 dynamic isolation
+/// (so `Task { await body() }` lands the body off-actor), but a
+/// method call on `IsolationSpawner` is a regular cross-actor call
+/// that does hop. See `skip-spike/REPRO.md` for the full picture.
+private actor IsolationSpawner {
+    /// Strong reference — keeps the borrowed actor (and thus its
+    /// executor) alive for as long as this spawner exists.
+    nonisolated let borrowed: any Actor
+
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+        borrowed.unownedExecutor
+    }
+
+    init(borrowing isolation: any Actor) {
+        self.borrowed = isolation
+    }
+
+    func run<R: Sendable>(
+        _ body: sending @Sendable (isolated IsolationSpawner) async -> R
+    ) async -> R {
+        await body(self)
+    }
 }

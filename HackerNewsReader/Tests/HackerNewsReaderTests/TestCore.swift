@@ -8,20 +8,39 @@ import HackerNews
 /// All access flows through `core.run { … }`, which gives the closure
 /// a single consistent snapshot for grouped reads.
 ///
-/// `unownedExecutor` is overridden to a private `DispatchSerialQueue`
-/// (SE-0392) so tests can call `await core.settle()` for a FIFO-
-/// deterministic drain instead of `Task.megaYield()`. The pattern is
-/// straight from Point-Free Video #362; the FIFO trade-off (real
+/// Both `TestCore` and `AppCore.spawner` borrow their executor from
+/// `BorrowedExecutor` below (SE-0392) so they share a single
+/// `DispatchSerialQueue`. `await core.settle()` does a FIFO-
+/// deterministic drain on that queue, replacing `Task.megaYield()`.
+/// Pattern from Point-Free Video #362; the FIFO trade-off (real
 /// actors honour task priority) is acceptable because test code has
 /// no priority diversity.
+
+/// Owns the `DispatchSerialQueue` borrowed by both `TestCore` and
+/// `AppCore.spawner`. Constructed first as a plain local value so we
+/// can pass it to `AppCore.init`'s `borrowing:` parameter without
+/// the self-reference chicken-and-egg that would otherwise block
+/// passing `self` from `TestCore.init`.
+actor BorrowedExecutor {
+    nonisolated let queue: DispatchSerialQueue
+
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+        queue.asUnownedSerialExecutor()
+    }
+
+    init(label: String) {
+        self.queue = DispatchSerialQueue(label: label)
+    }
+}
+
 public actor TestCore {
     public let state: AppState
     public nonisolated let commands: AsyncStream<AppCommand>
-    private nonisolated let executorQueue = DispatchSerialQueue(label: "TestCore.executor")
+    private nonisolated let executor: BorrowedExecutor
     let appCore: AppCore
 
     public nonisolated var unownedExecutor: UnownedSerialExecutor {
-        executorQueue.asUnownedSerialExecutor()
+        executor.unownedExecutor
     }
 
     public init(
@@ -29,8 +48,10 @@ public actor TestCore {
         clock: any Clock<Duration> = ContinuousClock(),
         now: @escaping @Sendable () -> Date = Date.init
     ) {
+        let executor = BorrowedExecutor(label: "TestCore.executor")
         let state = AppState()
         let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
+        self.executor = executor
         self.state = state
         self.commands = stream
         self.appCore = AppCore(
@@ -39,7 +60,8 @@ public actor TestCore {
             commandsContinuation: continuation,
             client: client,
             clock: clock,
-            now: now
+            now: now,
+            borrowing: executor
         )
     }
 
@@ -57,14 +79,14 @@ public actor TestCore {
     /// moment of call has finished, plus any jobs those jobs
     /// synchronously enqueue. Replaces `Task.megaYield()` with a
     /// FIFO-deterministic drain: the continuation-resume below sits at
-    /// the back of `executorQueue`, so awaiting it returns only after
+    /// the back of `executor.queue`, so awaiting it returns only after
     /// the queue has settled past this point.
     ///
     /// Tasks suspended on `clock.sleep` aren't re-enqueued until the
     /// clock advances — same boundary as megaYield.
     public nonisolated func settle() async {
         await withCheckedContinuation { continuation in
-            executorQueue.async { continuation.resume() }
+            executor.queue.async { continuation.resume() }
         }
     }
 }
