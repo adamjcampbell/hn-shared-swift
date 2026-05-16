@@ -43,8 +43,8 @@ private func makeCore(
     search: @escaping @Sendable (String, Int) async throws -> Page = { _, _ in Page(stories: [], totalPages: 0) },
     clock: any Clock<Duration> = ContinuousClock(),
     now: @escaping @Sendable () -> Date = Date.init
-) -> TestCore {
-    TestCore(
+) async -> TestCore {
+    await TestCore(
         client: Client(frontPage: frontPage, search: search),
         clock: clock,
         now: now
@@ -89,7 +89,7 @@ struct AppCoreTests {
 
     @Test("refresh populates feed stories and timestamp")
     func refresh_populatesStoriesAndTimestamp() async {
-        let core = makeCore(frontPage: { _ in page([storyA, storyB]) })
+        let core = await makeCore(frontPage: { _ in page([storyA, storyB]) })
 
         await core.run { core in
             #expect(core.state.feedStories.isEmpty)
@@ -107,7 +107,7 @@ struct AppCoreTests {
     @Test("refresh records initialStatus.error on failure")
     func refresh_recordsErrorOnFailure() async {
         struct Boom: Error {}
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { _ in throw Boom() },
             search: { _, _ in throw Boom() }
         )
@@ -121,7 +121,7 @@ struct AppCoreTests {
 
     @Test("toggleRead adds and removes")
     func toggleRead_addsAndRemoves() async {
-        let core = makeCore(frontPage: { _ in page([storyA]) })
+        let core = await makeCore(frontPage: { _ in page([storyA]) })
         await core.run { core in
             await core.appCore.sendEvent(.refresh)
             #expect(core.state.feedStories.first?.isRead == false)
@@ -138,7 +138,7 @@ struct AppCoreTests {
 
     @Test("openStory marks read and emits presentURL command")
     func openStory_marksReadAndEmitsPresentURL() async {
-        let core = makeCore(frontPage: { _ in page([storyA, storyB]) })
+        let core = await makeCore(frontPage: { _ in page([storyA, storyB]) })
         await core.run { await $0.appCore.sendEvent(.refresh) }
 
         var iterator = core.commands.makeAsyncIterator()
@@ -152,7 +152,7 @@ struct AppCoreTests {
 
     @Test("openStory on a story without a URL marks read but emits nothing")
     func openStory_withoutURL_marksReadOnly() async {
-        let core = makeCore(frontPage: { _ in page([storyA, storyB]) })
+        let core = await makeCore(frontPage: { _ in page([storyA, storyB]) })
         await core.run { await $0.appCore.sendEvent(.refresh) }
 
         // Open storyB (no URL) then storyA (has URL). The first emission
@@ -169,7 +169,7 @@ struct AppCoreTests {
 
     @Test("openStory with unknown id is a no-op")
     func openStory_unknownId_isNoop() async {
-        let core = makeCore(frontPage: { _ in page([storyA]) })
+        let core = await makeCore(frontPage: { _ in page([storyA]) })
         var iterator = core.commands.makeAsyncIterator()
         await core.run { core in
             await core.appCore.sendEvent(.refresh)
@@ -184,7 +184,7 @@ struct AppCoreTests {
 
     @Test("read state survives a refresh")
     func toggleRead_survivesRefresh() async {
-        let core = makeCore(frontPage: { _ in page([storyA, storyB]) })
+        let core = await makeCore(frontPage: { _ in page([storyA, storyB]) })
         await core.run { core in
             // Toggle before any stories are loaded — readIds is the canonical
             // record; the projection has nothing to map onto yet.
@@ -203,7 +203,7 @@ struct AppCoreTests {
     func listener_debouncesAndFires() async {
         let calls = CallRecorder()
         let clock = TestClock()
-        let core = makeCore(
+        let core = await makeCore(
             search: { query, p in
                 await calls.recordSearch(query, page: p)
                 return page([storyA])
@@ -225,7 +225,7 @@ struct AppCoreTests {
     @Test("initialStatus.isLoading activates on first keystroke, before debounce elapses")
     func isSearchLoading_activatesOnFirstKeystroke() async {
         let clock = TestClock()
-        let core = makeCore(search: { _, _ in page([storyA]) }, clock: clock)
+        let core = await makeCore(search: { _, _ in page([storyA]) }, clock: clock)
 
         await core.settle()
         await core.run { core in
@@ -247,7 +247,7 @@ struct AppCoreTests {
     func refresh_whileSearching_reRunsSearch() async {
         let calls = CallRecorder()
         let clock = TestClock()
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { p in
                 await calls.recordFrontPage(page: p)
                 return page([storyA, storyB])
@@ -284,7 +284,7 @@ struct AppCoreTests {
         // not Swift's CancellationError. Without the in-Task
         // normalisation, the sendEvent arm's generic `catch` would write
         // `feed.initialStatus.error = "cancelled"`.
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { _ in throw URLError(.cancelled) },
             search:    { _, _ in throw URLError(.cancelled) }
         )
@@ -303,7 +303,7 @@ struct AppCoreTests {
         // `search.initialStatus.error = "cancelled"` until the new
         // fetch settled.
         let clock = TestClock()
-        let core = makeCore(
+        let core = await makeCore(
             search: { query, _ in
                 if query == "ru" {
                     // Park until cancelled; surface URLError(.cancelled) so
@@ -340,7 +340,7 @@ struct AppCoreTests {
     func clearingSearchQuery_cancelsAndClearsResults() async {
         let calls = CallRecorder()
         let clock = TestClock()
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { p in
                 await calls.recordFrontPage(page: p)
                 return page([storyA, storyB])
@@ -381,7 +381,7 @@ struct AppCoreTests {
     @Test("feed survives an active search")
     func feedSurvivesActiveSearch() async {
         let clock = TestClock()
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { _ in page([storyA, storyB]) },
             search: { _, _ in page([storyA]) },
             clock: clock
@@ -411,7 +411,7 @@ struct AppCoreTests {
         // network call fires — so zero recorded calls.
         let calls = CallRecorder()
         let clock = TestClock()
-        let core = makeCore(
+        let core = await makeCore(
             search: { query, p in
                 await calls.recordSearch(query, page: p)
                 return page([storyA])
@@ -456,7 +456,7 @@ struct AppCoreTests {
         // debounce sleep — only "rust" reaches the network.
         let calls = CallRecorder()
         let clock = TestClock()
-        let core = makeCore(
+        let core = await makeCore(
             search: { query, p in
                 await calls.recordSearch(query, page: p)
                 return page([storyA])
@@ -486,7 +486,7 @@ struct AppCoreTests {
     @Test("a story present in both feed and search shares its read state across projections")
     func storyInBothFeedAndSearch_sharesReadState() async {
         let clock = TestClock()
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { _ in page([storyA, storyB]) },
             search: { _, _ in page([storyA]) },
             clock: clock
@@ -507,7 +507,7 @@ struct AppCoreTests {
 
     @Test("loadMore appends page-1 ids to the snapshot and bumps the cursor")
     func loadMore_appendsAndBumpsCursor() async {
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { p in
                 if p == 0 { return page([storyA, storyB], totalPages: 3) }
                 if p == 1 { return page([storyC], totalPages: 3) }
@@ -531,7 +531,7 @@ struct AppCoreTests {
     @Test("loadMore on the last page is a no-op")
     func loadMore_onLastPage_isNoop() async {
         let calls = CallRecorder()
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { p in
                 await calls.recordFrontPage(page: p)
                 return page([storyA], totalPages: 1)
@@ -550,7 +550,7 @@ struct AppCoreTests {
     @Test("loadMore before any initial fetch is a no-op")
     func loadMore_withoutInitial_isNoop() async {
         let calls = CallRecorder()
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { p in
                 await calls.recordFrontPage(page: p)
                 return page([storyA])
@@ -566,7 +566,7 @@ struct AppCoreTests {
     func refresh_duringLoadMore_cancelsLoadMore() async {
         let calls = CallRecorder()
         let clock = TestClock()
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { p in
                 await calls.recordFrontPage(page: p)
                 if p == 1 {
@@ -605,7 +605,7 @@ struct AppCoreTests {
     @Test("loadMore failure leaves the snapshot and initial status untouched")
     func loadMore_failure_isolatedToLoadMoreStatus() async {
         struct Boom: Error {}
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { p in
                 if p == 0 { return page([storyA, storyB], totalPages: 5) }
                 throw Boom()
@@ -625,7 +625,7 @@ struct AppCoreTests {
     @Test("search paginates symmetrically with feed")
     func search_paginates() async {
         let clock = TestClock()
-        let core = makeCore(
+        let core = await makeCore(
             search: { _, p in
                 if p == 0 { return page([storyA], totalPages: 2) }
                 if p == 1 { return page([storyB], totalPages: 2) }
@@ -648,7 +648,7 @@ struct AppCoreTests {
     @Test("clearing search cancels in-flight search load-more")
     func clearSearch_cancelsLoadMore() async {
         let clock = TestClock()
-        let core = makeCore(
+        let core = await makeCore(
             search: { _, p in
                 if p == 0 { return page([storyA], totalPages: 5) }
                 // Park until cancelled.
@@ -685,7 +685,7 @@ struct AppCoreTests {
         // `receiveInitialPage`, its `loadedAt` would deterministically
         // differ from the refresh's — no Date()-resolution sleep needed.
         let dates = MonotonicDates()
-        let core = makeCore(
+        let core = await makeCore(
             frontPage: { p in
                 if p == 0 { return page([storyA], totalPages: 2) }
                 return page([storyB], totalPages: 2)

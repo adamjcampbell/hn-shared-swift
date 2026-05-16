@@ -18,19 +18,41 @@ public struct UICore {
         let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
         self.state = state
         self.commands = stream
-        self.appCore = AppCore(
+        let appCore = AppCore(
             state: state,
             commands: stream,
             commandsContinuation: continuation,
             client: Client(),
             clock: ContinuousClock(),
-            now: Date.init,
-            borrowing: MainActor.shared
+            now: Date.init
         )
+        self.appCore = appCore
+        // Install the hop-to-host closure. The closure literal is
+        // created in this `@MainActor` init body, so
+        // `@_inheritActorContext` (on `setMutate`) captures
+        // `@MainActor` as the closure's static isolation, and
+        // `@isolated(any)` carries that as the runtime hop target.
+        // The sync call to `applyMutation` is what forces the
+        // actor-isolation inference.
+        appCore.setMutate { body in
+            applyOnMainActor(body)
+        }
     }
 
     /// Single entry point for every user-driven mutation.
     public func sendEvent(_ event: AppEvent) async {
         await appCore.sendEvent(event)
     }
+}
+
+/// Free `@MainActor` function used by `UICore.init` as the sync call
+/// inside the `mutate` closure body. The sync call to a `@MainActor`
+/// function forces the closure to be `@MainActor`-isolated, which
+/// `@_inheritActorContext` on `AppCore.setMutate` then captures into
+/// `@isolated(any)`'s runtime token. A free function (instead of a
+/// method on `UICore`) avoids the "escaping closure captures
+/// mutating self" error a struct hits in its init.
+@MainActor
+private func applyOnMainActor(_ body: () -> Void) {
+    body()
 }

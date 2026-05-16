@@ -8,62 +8,62 @@ import HackerNews
 /// All access flows through `core.run { … }`, which gives the closure
 /// a single consistent snapshot for grouped reads.
 ///
-/// Both `TestCore` and `AppCore.spawner` borrow their executor from
-/// `BorrowedExecutor` below (SE-0392) so they share a single
-/// `DispatchSerialQueue`. `await core.settle()` does a FIFO-
-/// deterministic drain on that queue, replacing `Task.megaYield()`.
-/// Pattern from Point-Free Video #362; the FIFO trade-off (real
+/// `unownedExecutor` is overridden to a private `DispatchSerialQueue`
+/// (SE-0392) so tests can call `await core.settle()` for a FIFO-
+/// deterministic drain instead of `Task.megaYield()`. The pattern is
+/// straight from Point-Free Video #362; the FIFO trade-off (real
 /// actors honour task priority) is acceptable because test code has
 /// no priority diversity.
-
-/// Owns the `DispatchSerialQueue` borrowed by both `TestCore` and
-/// `AppCore.spawner`. Constructed first as a plain local value so we
-/// can pass it to `AppCore.init`'s `borrowing:` parameter without
-/// the self-reference chicken-and-egg that would otherwise block
-/// passing `self` from `TestCore.init`.
-actor BorrowedExecutor {
-    nonisolated let queue: DispatchSerialQueue
-
-    nonisolated var unownedExecutor: UnownedSerialExecutor {
-        queue.asUnownedSerialExecutor()
-    }
-
-    init(label: String) {
-        self.queue = DispatchSerialQueue(label: label)
-    }
-}
-
+///
+/// Wires the `AppCore.mutate` closure to `applyMutation` so the
+/// AppCore listener / search-commit Tasks hop to this actor's
+/// executor — same machinery as `UICore` but rooted in a per-test
+/// actor instead of `MainActor`.
 public actor TestCore {
     public let state: AppState
     public nonisolated let commands: AsyncStream<AppCommand>
-    private nonisolated let executor: BorrowedExecutor
+    private nonisolated let executorQueue = DispatchSerialQueue(label: "TestCore.executor")
     let appCore: AppCore
 
     public nonisolated var unownedExecutor: UnownedSerialExecutor {
-        executor.unownedExecutor
+        executorQueue.asUnownedSerialExecutor()
     }
 
+    /// Async init so the implicit suspension at the start makes the
+    /// init body actor-isolated to `self`. That's the context
+    /// `@_inheritActorContext` on `AppCore.setMutate` needs to
+    /// correctly capture this actor's isolation into the mutate
+    /// closure.
     public init(
         client: Client = Client(),
         clock: any Clock<Duration> = ContinuousClock(),
         now: @escaping @Sendable () -> Date = Date.init
-    ) {
-        let executor = BorrowedExecutor(label: "TestCore.executor")
+    ) async {
         let state = AppState()
         let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
-        self.executor = executor
         self.state = state
         self.commands = stream
-        self.appCore = AppCore(
+        let appCore = AppCore(
             state: state,
             commands: stream,
             commandsContinuation: continuation,
             client: client,
             clock: clock,
-            now: now,
-            borrowing: executor
+            now: now
         )
+        self.appCore = appCore
+        appCore.setMutate { body in
+            self.applyMutation(body)
+        }
     }
+
+    /// Sync actor-isolated method — runs `body` on this actor's
+    /// executor. Called from the `mutate` closure to hop AppCore's
+    /// listener / search-commit Task bodies onto this actor.
+    func applyMutation(_ body: () -> Void) {
+        body()
+    }
+
 
     public static let searchDebounce: Duration = AppCore.searchDebounce
 
@@ -79,14 +79,14 @@ public actor TestCore {
     /// moment of call has finished, plus any jobs those jobs
     /// synchronously enqueue. Replaces `Task.megaYield()` with a
     /// FIFO-deterministic drain: the continuation-resume below sits at
-    /// the back of `executor.queue`, so awaiting it returns only after
+    /// the back of `executorQueue`, so awaiting it returns only after
     /// the queue has settled past this point.
     ///
     /// Tasks suspended on `clock.sleep` aren't re-enqueued until the
     /// clock advances — same boundary as megaYield.
     public nonisolated func settle() async {
         await withCheckedContinuation { continuation in
-            executor.queue.async { continuation.resume() }
+            executorQueue.async { continuation.resume() }
         }
     }
 }
