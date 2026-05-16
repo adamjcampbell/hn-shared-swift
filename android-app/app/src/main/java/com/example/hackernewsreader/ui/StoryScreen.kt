@@ -61,10 +61,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import hacker.news.reader.AppCommand
 import hacker.news.reader.AppEvent
-import hacker.news.reader.UICore
 import hacker.news.reader.AppState
 import hacker.news.reader.LoadStatus
 import hacker.news.reader.StoryRow
+import hacker.news.reader.UICore
 import com.example.hackernewsreader.R
 import com.example.hackernewsreader.state.rememberCore
 import kotlinx.coroutines.flow.distinctUntilChanged
