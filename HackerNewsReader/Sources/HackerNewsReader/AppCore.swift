@@ -5,37 +5,36 @@ import HackerNews
 import FoundationNetworking
 #endif
 
-/// Workhorse for `UICore`. Non-`Sendable` `final class`.
+/// Workhorse for `UICore`. **Actor** that borrows the host's executor
+/// (SE-0392) so AppCore's methods and Tasks physically execute on the
+/// same serial executor as the host — MainActor in production via
+/// UICore, the per-test executor under TestCore.
 ///
-/// The host (`UICore` `@MainActor` struct in production, `TestCore`
-/// actor in tests) supplies a `mutate` closure post-construction.
-/// Long-running Tasks (the `searchQuery` listener, the post-fetch
-/// search-commit) call `await self.mutate?({ … })` to hop to the
-/// host's actor before touching `state` / `tasks`. Direct `sendEvent`
-/// calls stay on the caller's actor via SE-0420 `isolation:` parameter.
+/// `state` is held as a regular actor-isolated property. The single
+/// escape hatch for forwarding `AppState` from UICore into AppCore is
+/// a **transient** `nonisolated(unsafe) let` at the call site in
+/// `UICore.init` / `TestCore.init` — nothing inside AppCore uses
+/// `nonisolated(unsafe)`.
 ///
-/// `Mutate` is `@isolated(any)` so it can carry whichever actor's
-/// isolation the host has (`@MainActor` or a custom test actor). The
-/// `@_inheritActorContext` attribute on `setMutate(_:)` is what makes
-/// the closure literal at the call site inherit the host's actor
-/// isolation, and the closure body must include a sync-actor-method
-/// call (`self.applyMutation(body)`) to force the inference. See
-/// `skip-spike/REPRO.md` for the full picture.
+/// Tasks spawned inside AppCore methods inherit AppCore's isolation
+/// via `Task.init`'s built-in `@_inheritActorContext` — bodies have
+/// direct access to `state`, `self.tasks`, and actor methods, no
+/// `[self] in _ = self` ritual needed.
 ///
 /// Not bridged to Kotlin; `UICore` re-exposes the public surface.
-final class AppCore {
+actor AppCore {
     let state: AppState
 
     private let commandsContinuation: AsyncStream<AppCommand>.Continuation
-    let commands: AsyncStream<AppCommand>
+    nonisolated let commands: AsyncStream<AppCommand>
     private let client: Client
     private let clock: any Clock<Duration>
     private let now: @Sendable () -> Date
+    private nonisolated let borrowed: any Actor
 
-    /// Closure that hops onto the host's actor and runs `body` there.
-    /// `nil` until the host calls `setMutate(_:)`.
-    typealias Mutate = @isolated(any) @Sendable (sending @escaping () -> Void) async -> Void
-    private var mutate: Mutate?
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+        borrowed.unownedExecutor
+    }
 
     enum TaskID { case feed, feedMore, search, searchCommit, searchMore, searchListener }
     private var tasks = TaskRegistry<TaskID>()
@@ -51,7 +50,8 @@ final class AppCore {
         commandsContinuation: AsyncStream<AppCommand>.Continuation,
         client: Client,
         clock: any Clock<Duration>,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        borrowing isolation: any Actor
     ) {
         self.state = state
         self.commands = commands
@@ -59,40 +59,26 @@ final class AppCore {
         self.client = client
         self.clock = clock
         self.now = now
+        self.borrowed = isolation
     }
 
-    /// Host calls this once after construction to install the
-    /// hop-to-host closure. `@_inheritActorContext` makes the closure
-    /// literal at the call site inherit the host's actor; the
-    /// recommended body shape is `{ body in self.applyMutation(body) }`
-    /// where `applyMutation` is a sync actor-isolated method — the
-    /// sync call forces actor-isolation inference, which
-    /// `@isolated(any)` then captures as the runtime hop target.
-    /// Installs the listener Task at the same time, so the host
-    /// doesn't need a separate "start" call.
-    func setMutate(@_inheritActorContext _ body: @escaping Mutate) {
-        self.mutate = body
-        startListener()
-    }
-
-    private func startListener() {
-        // Listener Task itself is non-isolated; its `for await` on the
-        // AsyncStream is nonisolated-friendly. Each yielded query is
-        // handled via `mutate`, which hops to the host actor so
-        // `tasks` / `state` mutations are serialised with `sendEvent`.
-        nonisolated(unsafe) let selfRef = self
+    /// Start the long-running search-query listener. The host calls
+    /// this once after construction — can't be done in `init` because
+    /// Swift forbids reassigning an actor stored property from the
+    /// sync init body.
+    func startListener() {
         tasks[.searchListener] = Task {
-            for await query in selfRef.state.searchQueryChanges {
-                await selfRef.mutate?({
-                    if query.isEmpty {
-                        selfRef.tasks[.search] = nil
-                        selfRef.tasks[.searchCommit] = nil
-                        selfRef.tasks[.searchMore] = nil
-                        selfRef.state.search = LoadableStories()
-                    } else {
-                        selfRef.scheduleSearchFetch(query: query)
-                    }
-                })
+            // Implicit `self.state` reference makes Task inherit
+            // this actor's isolation via @_inheritActorContext.
+            for await query in state.searchQueryChanges {
+                if query.isEmpty {
+                    tasks[.search] = nil
+                    tasks[.searchCommit] = nil
+                    tasks[.searchMore] = nil
+                    state.search = LoadableStories()
+                } else {
+                    scheduleSearchFetch(query: query)
+                }
             }
         }
     }
@@ -104,14 +90,7 @@ final class AppCore {
     /// where a clearSearch lands between `task.value` resolving and
     /// the state write — cancelling `[.searchCommit]` drops the
     /// commit before it repopulates cleared state.
-    ///
-    /// Called only from the listener body (already on host actor) and
-    /// from `sendEvent` (`#isolation` puts us on the caller's actor),
-    /// so all the synchronous mutations here are on the host actor.
-    private func scheduleSearchFetch(
-        query: String,
-        isolation: isolated (any Actor)? = #isolation
-    ) {
+    private func scheduleSearchFetch(query: String) {
         tasks[.searchMore] = nil
         // Skip no-op writes during keystroke bursts — re-firing
         // @Observable notifications would trigger SwiftUI / Compose
@@ -128,23 +107,16 @@ final class AppCore {
         }
         tasks[.search] = task
 
-        // Commit Task: starts non-isolated, awaits the network call,
-        // then hops back via `mutate` to apply state mutations on host.
-        nonisolated(unsafe) let selfRef = self
         tasks[.searchCommit] = Task {
             do {
                 let page = try await task.value
                 try Task.checkCancellation()
-                await selfRef.mutate?({
-                    for story in page.stories { selfRef.state.stories[story.id] = story }
-                    let ids = page.stories.map(\.id)
-                    selfRef.state.search.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: selfRef.now())
-                })
+                for story in page.stories { state.stories[story.id] = story }
+                let ids = page.stories.map(\.id)
+                state.search.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: now())
             } catch is CancellationError {
             } catch {
-                await selfRef.mutate?({
-                    selfRef.state.search.initialStatus.finishFailure(error.localizedDescription)
-                })
+                state.search.initialStatus.finishFailure(error.localizedDescription)
             }
         }
     }
@@ -153,7 +125,7 @@ final class AppCore {
     /// holds the entire flow for its event — the explicit
     /// feed/search and refresh/loadMore duplication is the point:
     /// each path reads top-to-bottom without jumping between helpers.
-    func sendEvent(_ event: AppEvent, isolation: isolated (any Actor)? = #isolation) async {
+    func sendEvent(_ event: AppEvent) async {
         switch event {
 
         case .toggleRead(let id):
@@ -253,10 +225,9 @@ final class AppCore {
         }
     }
 
-    /// Test-only teardown — production `UICore` is app-lifetime. The
-    /// listener captures `[self]`, so without this the
-    /// TaskRegistry → listener-Task → self cycle keeps the core
-    /// alive past test scope.
+    /// Test-only teardown — production `UICore` is app-lifetime.
+    /// Without this, the TaskRegistry → listener-Task → self cycle
+    /// keeps the actor alive past test scope.
     func shutdown() {
         tasks.cancelAll()
     }

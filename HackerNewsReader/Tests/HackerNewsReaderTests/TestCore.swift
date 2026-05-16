@@ -15,55 +15,46 @@ import HackerNews
 /// actors honour task priority) is acceptable because test code has
 /// no priority diversity.
 ///
-/// Wires the `AppCore.mutate` closure to `applyMutation` so the
-/// AppCore listener / search-commit Tasks hop to this actor's
-/// executor — same machinery as `UICore` but rooted in a per-test
-/// actor instead of `MainActor`.
+/// `AppCore` is an actor that borrows TestCore's executor — both run
+/// on the same `DispatchSerialQueue`. The `BorrowedExecutor` sibling
+/// is needed because `AppCore.init` takes the borrowing actor as a
+/// parameter, and `TestCore.init` can't pass `self` until all stored
+/// props (including `appCore`) are set.
 public actor TestCore {
     public let state: AppState
     public nonisolated let commands: AsyncStream<AppCommand>
-    private nonisolated let executorQueue = DispatchSerialQueue(label: "TestCore.executor")
+    private nonisolated let executor: BorrowedExecutor
     let appCore: AppCore
 
     public nonisolated var unownedExecutor: UnownedSerialExecutor {
-        executorQueue.asUnownedSerialExecutor()
+        executor.unownedExecutor
     }
 
-    /// Async init so the implicit suspension at the start makes the
-    /// init body actor-isolated to `self`. That's the context
-    /// `@_inheritActorContext` on `AppCore.setMutate` needs to
-    /// correctly capture this actor's isolation into the mutate
-    /// closure.
     public init(
         client: Client = Client(),
         clock: any Clock<Duration> = ContinuousClock(),
         now: @escaping @Sendable () -> Date = Date.init
     ) async {
+        let executor = BorrowedExecutor(label: "TestCore.executor")
         let state = AppState()
         let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
+        self.executor = executor
         self.state = state
         self.commands = stream
+        // The single escape hatch — transient, scoped to this init.
+        nonisolated(unsafe) let forAppCore = state
         let appCore = AppCore(
-            state: state,
+            state: forAppCore,
             commands: stream,
             commandsContinuation: continuation,
             client: client,
             clock: clock,
-            now: now
+            now: now,
+            borrowing: executor
         )
         self.appCore = appCore
-        appCore.setMutate { body in
-            self.applyMutation(body)
-        }
+        await appCore.startListener()
     }
-
-    /// Sync actor-isolated method — runs `body` on this actor's
-    /// executor. Called from the `mutate` closure to hop AppCore's
-    /// listener / search-commit Task bodies onto this actor.
-    func applyMutation(_ body: () -> Void) {
-        body()
-    }
-
 
     public static let searchDebounce: Duration = AppCore.searchDebounce
 
@@ -72,22 +63,39 @@ public actor TestCore {
     /// doesn't need this; tests churn TestCores and would leak the
     /// listener task without it. Requires SE-0371 (Swift 6.2).
     isolated deinit {
-        appCore.shutdown()
+        Task { [appCore] in await appCore.shutdown() }
     }
 
     /// Wait until every job queued on this actor's executor at the
     /// moment of call has finished, plus any jobs those jobs
     /// synchronously enqueue. Replaces `Task.megaYield()` with a
     /// FIFO-deterministic drain: the continuation-resume below sits at
-    /// the back of `executorQueue`, so awaiting it returns only after
+    /// the back of `executor.queue`, so awaiting it returns only after
     /// the queue has settled past this point.
     ///
     /// Tasks suspended on `clock.sleep` aren't re-enqueued until the
     /// clock advances — same boundary as megaYield.
     public nonisolated func settle() async {
         await withCheckedContinuation { continuation in
-            executorQueue.async { continuation.resume() }
+            executor.queue.async { continuation.resume() }
         }
+    }
+}
+
+/// Owns the `DispatchSerialQueue` borrowed by both `TestCore` and
+/// `AppCore`. Constructed first as a plain local value so we can pass
+/// it to `AppCore.init`'s `borrowing:` parameter without the
+/// self-reference chicken-and-egg that would otherwise block passing
+/// `self` from `TestCore.init`.
+actor BorrowedExecutor {
+    nonisolated let queue: DispatchSerialQueue
+
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+        queue.asUnownedSerialExecutor()
+    }
+
+    init(label: String) {
+        self.queue = DispatchSerialQueue(label: label)
     }
 }
 
