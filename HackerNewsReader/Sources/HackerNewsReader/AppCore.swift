@@ -16,8 +16,9 @@ import FoundationNetworking
 /// (SE-0414), so nothing inside AppCore needs `nonisolated(unsafe)`.
 /// Tasks spawned inside AppCore methods inherit this actor via the
 /// implicit `self` references in their bodies (Task.init's built-in
-/// `@_inheritActorContext`), so the commit / fetch Tasks read and
-/// write `state` directly.
+/// `@_inheritActorContext`), so each fetch Task reads and writes
+/// `state` directly — one Task per fetch carries the whole flow
+/// (debounced sleep → network → commit / error).
 ///
 /// The long-running search-query listener is bootstrapped from
 /// `init` via a `(isolated AppCore) -> Void` closure — Task spawned
@@ -45,7 +46,7 @@ actor AppCore {
         isolation.unownedExecutor
     }
 
-    enum TaskID { case feed, feedMore, search, searchCommit, searchMore, searchListener }
+    enum TaskID { case feed, feedMore, search, searchMore, searchListener }
     private var tasks = TaskRegistry<TaskID>()
 
     /// Debounce window between a `state.searchQuery` write and the
@@ -79,7 +80,6 @@ actor AppCore {
                 for await query in state.searchQueryChanges {
                     if query.isEmpty {
                         tasks[.search] = nil
-                        tasks[.searchCommit] = nil
                         tasks[.searchMore] = nil
                         state.searchLoaded = nil
                         state.searchInitialStatus = LoadStatus()
@@ -87,14 +87,14 @@ actor AppCore {
                         continue
                     }
 
-                    // Fire-and-forget debounced search. Parks the network
-                    // call in `tasks[.search]` (cancellable by a newer
-                    // keystroke or by the empty-query path above) and the
-                    // post-await commit in `tasks[.searchCommit]`. The
-                    // split slot closes the race where a clearSearch
-                    // lands between `task.value` resolving and the state
-                    // write — cancelling `[.searchCommit]` drops the
-                    // commit before it repopulates cleared state.
+                    // Fire-and-forget debounced search. The Task carries
+                    // the whole flow — sleep, fetch, commit — so a
+                    // newer keystroke (or clearSearch) cancelling the
+                    // slot drops both the network call and the post-
+                    // await commit. The `try Task.checkCancellation()`
+                    // after the await closes the race where the fetch
+                    // returns successfully but a cancellation lands
+                    // before the commit runs.
                     tasks[.searchMore] = nil
                     // Skip no-op writes during keystroke bursts —
                     // re-firing @Observable notifications would trigger
@@ -106,14 +106,11 @@ actor AppCore {
                         state.searchInitialStatus.startLoading()
                     }
 
-                    let task = core.makeFetchTask(debounce: Self.searchDebounce) { client in
-                        try await client.search(query, 0)
-                    }
-                    tasks[.search] = task
-
-                    tasks[.searchCommit] = Task {
+                    tasks[.search] = Task {
                         do {
-                            let page = try await task.value
+                            let page = try await core.fetch(debounce: Self.searchDebounce) {
+                                try await $0.search(query, 0)
+                            }
                             try Task.checkCancellation()
                             for story in page.stories { state.stories[story.id] = story }
                             let ids = page.stories.map(\.id)
@@ -135,8 +132,11 @@ actor AppCore {
 
     /// Single entry point for every user-driven mutation. Each arm
     /// holds the entire flow for its event — the explicit
-    /// feed/search and refresh/loadMore duplication is the point:
-    /// each path reads top-to-bottom without jumping between helpers.
+    /// refresh/loadMore duplication is the point: each path reads
+    /// top-to-bottom without jumping between helpers. Fetch arms
+    /// spawn one Task that does the network call + commit, register
+    /// it in the slot for cancellation, and await its completion so
+    /// `.refreshable` consumers see the spinner hold.
     func sendEvent(_ event: AppEvent) async {
         switch event {
 
@@ -166,21 +166,24 @@ actor AppCore {
             state.feedLoadMoreStatus = LoadStatus()
             state.feedInitialStatus.startLoading()
 
-            let task = makeFetchTask(debounce: nil) { try await $0.frontPage(0) }
-            tasks[.feed] = task
-            do {
-                let page = try await task.value
-                for story in page.stories { state.stories[story.id] = story }
-                let ids = page.stories.map(\.id)
-                state.feedLoaded = LoadedStories(
-                    ids: ids, page: 0, totalPages: page.totalPages, loadedAt: now()
-                )
-                state.feedInitialStatus.finishSuccess()
-            } catch is CancellationError {
-                // Newer fetch will clear loading when it commits.
-            } catch {
-                state.feedInitialStatus.finishFailure(error.localizedDescription)
+            let task = Task {
+                do {
+                    let page = try await fetch(debounce: nil) { try await $0.frontPage(0) }
+                    try Task.checkCancellation()
+                    for story in page.stories { state.stories[story.id] = story }
+                    let ids = page.stories.map(\.id)
+                    state.feedLoaded = LoadedStories(
+                        ids: ids, page: 0, totalPages: page.totalPages, loadedAt: now()
+                    )
+                    state.feedInitialStatus.finishSuccess()
+                } catch is CancellationError {
+                    // Newer fetch will clear loading when it commits.
+                } catch {
+                    state.feedInitialStatus.finishFailure(error.localizedDescription)
+                }
             }
+            tasks[.feed] = task
+            await task.value
 
         case .loadMore where state.searchQuery.isEmpty:
             guard let loaded = state.feedLoaded, loaded.hasMore,
@@ -188,18 +191,21 @@ actor AppCore {
             let next = loaded.nextPage
             state.feedLoadMoreStatus.startLoading()
 
-            let task = makeFetchTask(debounce: nil) { try await $0.frontPage(next) }
-            tasks[.feedMore] = task
-            do {
-                let page = try await task.value
-                for story in page.stories { state.stories[story.id] = story }
-                let ids = page.stories.map(\.id)
-                state.feedLoaded?.appendPage(ids, totalPages: page.totalPages)
-                state.feedLoadMoreStatus.finishSuccess()
-            } catch is CancellationError {
-            } catch {
-                state.feedLoadMoreStatus.finishFailure(error.localizedDescription)
+            let task = Task {
+                do {
+                    let page = try await fetch(debounce: nil) { try await $0.frontPage(next) }
+                    try Task.checkCancellation()
+                    for story in page.stories { state.stories[story.id] = story }
+                    let ids = page.stories.map(\.id)
+                    state.feedLoaded?.appendPage(ids, totalPages: page.totalPages)
+                    state.feedLoadMoreStatus.finishSuccess()
+                } catch is CancellationError {
+                } catch {
+                    state.feedLoadMoreStatus.finishFailure(error.localizedDescription)
+                }
             }
+            tasks[.feedMore] = task
+            await task.value
 
         case .loadMore:
             guard let loaded = state.searchLoaded, loaded.hasMore,
@@ -208,18 +214,21 @@ actor AppCore {
             let next = loaded.nextPage
             state.searchLoadMoreStatus.startLoading()
 
-            let task = makeFetchTask(debounce: nil) { try await $0.search(query, next) }
-            tasks[.searchMore] = task
-            do {
-                let page = try await task.value
-                for story in page.stories { state.stories[story.id] = story }
-                let ids = page.stories.map(\.id)
-                state.searchLoaded?.appendPage(ids, totalPages: page.totalPages)
-                state.searchLoadMoreStatus.finishSuccess()
-            } catch is CancellationError {
-            } catch {
-                state.searchLoadMoreStatus.finishFailure(error.localizedDescription)
+            let task = Task {
+                do {
+                    let page = try await fetch(debounce: nil) { try await $0.search(query, next) }
+                    try Task.checkCancellation()
+                    for story in page.stories { state.stories[story.id] = story }
+                    let ids = page.stories.map(\.id)
+                    state.searchLoaded?.appendPage(ids, totalPages: page.totalPages)
+                    state.searchLoadMoreStatus.finishSuccess()
+                } catch is CancellationError {
+                } catch {
+                    state.searchLoadMoreStatus.finishFailure(error.localizedDescription)
+                }
             }
+            tasks[.searchMore] = task
+            await task.value
         }
     }
 
@@ -231,8 +240,8 @@ actor AppCore {
         tasks.cancelAll()
     }
 
-    /// Build a fetch task that sleeps for `debounce` (if set), then
-    /// runs `body`. Captures only Sendable values (`client`, `clock`).
+    /// Sleep for `debounce` (if set), then run `body`. Captures only
+    /// Sendable values via the actor's `client` and `clock` lets.
     ///
     /// **`try` on the sleep is load-bearing.** A test-mock that
     /// doesn't honor cancellation would otherwise fall through to the
@@ -243,20 +252,18 @@ actor AppCore {
     /// surfaces task cancellation as `URLError.cancelled`, which would
     /// otherwise be reported as a transient error rather than a silent
     /// supersede.
-    private func makeFetchTask(
+    private func fetch(
         debounce: Duration?,
-        body: @Sendable @escaping (Client) async throws -> Page
-    ) -> Task<Page, Error> {
-        Task { [client, clock] in
-            if let debounce {
-                try await clock.sleep(for: debounce)
-            }
-            try Task.checkCancellation()
-            do {
-                return try await body(client)
-            } catch let urlError as URLError where urlError.code == .cancelled {
-                throw CancellationError()
-            }
+        body: @Sendable (Client) async throws -> Page
+    ) async throws -> Page {
+        if let debounce {
+            try await clock.sleep(for: debounce)
+        }
+        try Task.checkCancellation()
+        do {
+            return try await body(client)
+        } catch let urlError as URLError where urlError.code == .cancelled {
+            throw CancellationError()
         }
     }
 }
