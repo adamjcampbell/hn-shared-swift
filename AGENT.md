@@ -15,9 +15,9 @@ API](https://github.com/HackerNews/API)), search via the Algolia HN API
 The Swift package splits into two targets:
 - `HackerNews` — API client + entity types (`Client`, `Story`, `Page`).
 - `HackerNewsReader` — reducer + state (`AppCore`, `AppState`,
-  `StoryRow`, `LoadableStories`) and the bridged module surface in
-  `Core.swift` (module-level `appState`, `commands`, `sendEvent`,
-  `sendEventAsync`). Depends on `HackerNews`.
+  `StoryRow`, `LoadStatus`, `LoadedStories`) and the bridged module
+  surface in `Core.swift` (module-level `appState`, `commands`,
+  `sendEvent`, `sendEventAsync`). Depends on `HackerNews`.
 
 The migration away from a hand-written `swift-java jextract` bridge is
 documented in [`docs/skip-fuse-adoption.md`](docs/skip-fuse-adoption.md).

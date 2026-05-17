@@ -25,7 +25,9 @@ Both UIs render the same Swift `AppState` instance:
 // bridged via // SKIP @bridgeMembers
 @Observable public final class AppState {
     public var searchQuery: String = ""
-    public var feed: LoadableStories = LoadableStories()
+    public var feedLoaded: LoadedStories? = nil
+    public var feedInitialStatus: LoadStatus = LoadStatus()
+    public var feedLoadMoreStatus: LoadStatus = LoadStatus()
     public var feedStories: [StoryRow] { ... }
 }
 ```
@@ -48,11 +50,11 @@ the `// SKIP @bridgeMembers` markers on the Swift sources.
   - `HackerNews` — API client + entity types (`Client`, `Story`,
     `Page`). Self-contained Hacker News SDK; no app-level state.
   - `HackerNewsReader` — reducer + state (`AppCore`, `AppState`,
-    `StoryRow`, `LoadableStories`) and the bridged module surface
-    in `Core.swift` (module-level `appState`, `commands`, `sendEvent`,
-    `sendEventAsync`). Depends on `HackerNews`. Public product
-    consumed by iOS; Skip transitively packages `HackerNews` into the
-    AAR set.
+    `StoryRow`, `LoadStatus`, `LoadedStories`) and the bridged module
+    surface in `Core.swift` (module-level `appState`, `commands`,
+    `sendEvent`, `sendEventAsync`). Depends on `HackerNews`. Public
+    product consumed by iOS; Skip transitively packages `HackerNews`
+    into the AAR set.
 - `ios-app/` — SwiftUI app generated from `project.yml` via
   [`xcodegen`](https://github.com/yonaskolb/XcodeGen). Imports
   `HackerNewsReader` directly.
