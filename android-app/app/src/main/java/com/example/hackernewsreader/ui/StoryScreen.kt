@@ -136,17 +136,15 @@ private fun StoriesContent(
     val feedStories = state.feedStories.kotlin() as List<StoryRow>
     @Suppress("UNCHECKED_CAST")
     val searchResults = state.searchResults.kotlin() as List<StoryRow>
-    val feed = state.feed
-    val search = state.search
-    val isFeedRefreshing = feed.initialStatus.isLoading
-    val isSearchLoading = search.initialStatus.isLoading
-    val lastRefreshedAt = feed.loadedStories?.loadedAt
-    val feedLoadError = feed.initialStatus.error
-    val searchLoadError = search.initialStatus.error
-    val feedHasMore = feed.loadedStories?.hasMore == true
-    val searchHasMore = search.loadedStories?.hasMore == true
-    val feedLoadMoreStatus = feed.loadMoreStatus
-    val searchLoadMoreStatus = search.loadMoreStatus
+    val isFeedRefreshing = state.feedInitialStatus.isLoading
+    val isSearchLoading = state.searchInitialStatus.isLoading
+    val lastRefreshedAt = state.feedLoaded?.loadedAt
+    val feedLoadError = state.feedInitialStatus.error
+    val searchLoadError = state.searchInitialStatus.error
+    val feedHasMore = state.feedLoaded?.hasMore == true
+    val searchHasMore = state.searchLoaded?.hasMore == true
+    val feedLoadMoreStatus = state.feedLoadMoreStatus
+    val searchLoadMoreStatus = state.searchLoadMoreStatus
 
     val searchBarState = rememberSearchBarState()
     val textFieldState = rememberTextFieldState(initialText = authoritativeSearchQuery)
