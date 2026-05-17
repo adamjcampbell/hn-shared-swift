@@ -76,14 +76,14 @@ private struct SearchResults: View {
             Section {
                 SearchHeader(
                     query: state.searchQuery,
-                    isLoading: state.search.initialStatus.isLoading,
-                    error: state.search.initialStatus.error
+                    isLoading: state.searchInitialStatus.isLoading,
+                    error: state.searchInitialStatus.error
                 )
             }
             Section { StoryRows(stories: state.searchResults) }
-            if state.search.loadedStories?.hasMore == true {
+            if state.searchLoaded?.hasMore == true {
                 Section {
-                    LoadMoreRow(status: state.search.loadMoreStatus)
+                    LoadMoreRow(status: state.searchLoadMoreStatus)
                 }
             }
         }
@@ -94,7 +94,7 @@ private struct SearchResults: View {
             // suppresses the brief window during a debounced query
             // change where searchResults are stale-empty before the
             // new fetch lands.
-            if !state.search.initialStatus.isLoading
+            if !state.searchInitialStatus.isLoading
                 && state.searchResults.isEmpty
                 && !state.searchQuery.isEmpty {
                 EmptyResultsOverlay(query: state.searchQuery)
@@ -112,14 +112,14 @@ private struct StoriesList: View {
                 FeedHeaderCard(
                     storyCount: state.feedStories.count,
                     unreadCount: state.feedStories.lazy.filter { !$0.isRead }.count,
-                    lastRefreshedAt: state.feed.loadedStories?.loadedAt,
-                    loadError: state.feed.initialStatus.error
+                    lastRefreshedAt: state.feedLoaded?.loadedAt,
+                    loadError: state.feedInitialStatus.error
                 )
             }
             Section { StoryRows(stories: state.feedStories) }
-            if state.feed.loadedStories?.hasMore == true {
+            if state.feedLoaded?.hasMore == true {
                 Section {
-                    LoadMoreRow(status: state.feed.loadMoreStatus)
+                    LoadMoreRow(status: state.feedLoadMoreStatus)
                 }
             }
         }
