@@ -2,12 +2,10 @@ import SwiftUI
 import HackerNewsReader
 
 struct RootView: View {
-    @State private var core = UICore()
     @State private var presented: IdentifiedURL?
 
     var body: some View {
-        NavigationStack { StoriesScreen(state: core.state) }
-            .environment(\.sendEvent, SendAppEvent(core))
+        NavigationStack { StoriesScreen(state: appState) }
             .sheet(item: $presented) { item in
                 SafariView(url: item.url)
                     .ignoresSafeArea()
@@ -15,8 +13,8 @@ struct RootView: View {
             .task {
                 // Long-lived consumer of AppCommand. The sheet binding
                 // lives here in the SwiftUI tree; user-driven dismissal
-                // sets `presented = nil` without touching UICore.
-                for await command in core.commands {
+                // sets `presented = nil` without touching the core.
+                for await command in commands {
                     switch command {
                     case .presentURL(let urlString):
                         presented = IdentifiedURL(urlString)
@@ -28,23 +26,22 @@ struct RootView: View {
 
 private struct StoriesScreen: View {
     @Bindable var state: AppState
-    @Environment(\.sendEvent) private var sendEvent
 
     var body: some View {
         StoriesContent(state: state)
             // Direct two-way binding into the @Observable state. Writes
             // through `$state.searchQuery` go through `AppState`'s
-            // synthesized setter; `RootView`'s watcher Task observes the
-            // willSet and fires a debounced fetch. No closure-shim
-            // Binding(get:set:) — that pattern destroys the Hashable
-            // identity SwiftUI's animation/transaction tracking relies
-            // on (Point-Free #289).
+            // synthesized setter; the listener Task inside `AppCore`
+            // observes the willSet and fires a debounced fetch. No
+            // closure-shim Binding(get:set:) — that pattern destroys
+            // the Hashable identity SwiftUI's animation/transaction
+            // tracking relies on (Point-Free #289).
             .searchable(text: $state.searchQuery, prompt: "Search Hacker News")
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .task {
                 // One-shot first-appear fetch.
-                await sendEvent.run(.refresh)
+                await sendEventAsync(.refresh)
             }
             .navigationTitle("Hacker News")
     }
@@ -108,7 +105,6 @@ private struct SearchResults: View {
 
 private struct StoriesList: View {
     let state: AppState
-    @Environment(\.sendEvent) private var sendEvent
 
     var body: some View {
         List {
@@ -128,13 +124,12 @@ private struct StoriesList: View {
             }
         }
         .listStyle(.insetGrouped)
-        .refreshable { await sendEvent.run(.refresh) }
+        .refreshable { await sendEventAsync(.refresh) }
     }
 }
 
 private struct LoadMoreRow: View {
     let status: LoadStatus
-    @Environment(\.sendEvent) private var sendEvent
 
     // Forces a fresh `ProgressView` instance on every row appearance.
     // SwiftUI's `ProgressView` wraps `UIActivityIndicatorView`, which
@@ -249,7 +244,6 @@ private struct SearchHeader: View {
 
 private struct StoryRowView: View {
     let story: StoryRow
-    @Environment(\.sendEvent) private var sendEvent
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {

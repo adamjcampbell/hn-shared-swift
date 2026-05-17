@@ -39,18 +39,12 @@ Source files in `HackerNewsReader/`:
 
 - **`HackerNewsReaderApp.swift`** — the `@main` SwiftUI `App` struct.
   Wraps `RootView` in a `WindowGroup`.
-- **`RootView.swift`** — the view tree. `RootView` owns the singleton
-  `UICore` (as `@State`) and installs `\.sendEvent` on the
-  `NavigationStack`. `AppState` itself is the `@Observable final
-  class`; descendants take it as a parameter and rely on per-property
-  tracking for invalidation.
-- **`SendAppEvent.swift`** — the `\.sendEvent` capability action.
-  An `Equatable` callable struct mirroring SwiftUI's `DismissAction`:
-  child views call `sendEvent(.toggleRead(id:))` (sync, fire-and-forget)
-  or `await sendEvent.run(.refresh)` (awaitable, for `.refreshable`).
-  The `Equatable` conformance is load-bearing — raw closures in
-  `EnvironmentValues` defeat SwiftUI's reflection diff and invalidate
-  every descendant on each parent body re-eval.
+- **`RootView.swift`** — the view tree. Descendants read the module-
+  level `appState` directly from `HackerNewsReader` and call the
+  bridged `sendEvent(_:)` (sync, fire-and-forget) or
+  `await sendEventAsync(_:)` (awaitable, for `.refreshable`). `AppState`
+  is the `@Observable final class`; descendants take it as a parameter
+  and rely on per-property tracking for invalidation.
 - **`SafariView.swift`** — `SFSafariViewController` wrapper for the
   story-detail sheet.
 
