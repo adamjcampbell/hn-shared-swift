@@ -1,9 +1,10 @@
 import Foundation
 
 /// All user-driven mutations flow through this enum. Both platforms
-/// call `core.sendEvent(.toggleRead(id: ...))` directly — iOS as a
-/// SwiftUI Button action, Android from a Composable launching a
-/// coroutine on the bridged `suspend fun sendEvent`.
+/// call `sendEvent(.toggleRead(id: ...))` directly (the bridged
+/// module-level function in `Core.swift`) — iOS as a SwiftUI Button
+/// action, Android from a Composable calling the SkipFuse-emitted
+/// `fun sendEvent(event: AppEvent): Unit` at package scope.
 ///
 /// `searchQuery` is intentionally *not* an event case. Both platforms
 /// drive `state.searchQuery` directly — iOS via `@Bindable` +

@@ -8,11 +8,10 @@ import HackerNews
 /// parallelise across instances and `await core.settle()` gives a
 /// FIFO-deterministic drain (Point-Free Video #362 pattern).
 ///
-/// `AppCore` is constructed with `borrowing: executor` (not `self`),
-/// dodging the chicken-and-egg of passing TestCore.self to an init
-/// before `self.appCore` is set. Both `TestCore` and `AppCore`
-/// borrow the same `BorrowedExecutor` queue, so they share one
-/// physical serial executor.
+/// `AppCore` borrows the same `BorrowedExecutor` this TestCore
+/// borrows, so both stay in one isolation region — the
+/// chicken-and-egg of passing `TestCore.self` to AppCore's init
+/// before `self.appCore` is set never arises.
 public actor TestCore {
     public let state: AppState
     public nonisolated let commands: AsyncStream<AppCommand>
@@ -34,28 +33,27 @@ public actor TestCore {
         self.executor = executor
         self.state = state
         self.commands = stream
-        // Same transient escape hatch as in `UICore.init` — see there
-        // for the rationale.
-        nonisolated(unsafe) let forAppCore = state
+        // Transient rebind so the non-Sendable AppState can reach
+        // AppCore. Both references stay in the same isolation region
+        // (SE-0414), so the rebinding is sound.
+        nonisolated(unsafe) let unsafeAppState = state
         let appCore = AppCore(
-            state: forAppCore,
-            commands: stream,
+            state: unsafeAppState,
             commandsContinuation: continuation,
             client: client,
             clock: clock,
             now: now,
-            borrowing: executor
+            isolation: executor
         )
         self.appCore = appCore
-        await appCore.startListener()
     }
 
     public static let searchDebounce: Duration = AppCore.searchDebounce
 
     /// Break the `TaskRegistry → listener-Task → AppCore` cycle when
-    /// the test scope exits. Production `UICore` is app-lifetime so it
-    /// doesn't need this; tests churn TestCores and would leak the
-    /// listener task without it. Requires SE-0371 (Swift 6.2).
+    /// the test scope exits. The production `appCore` is app-lifetime
+    /// so it doesn't need this; tests churn TestCores and would leak
+    /// the listener task without it. Requires SE-0371 (Swift 6.2).
     isolated deinit {
         Task { [appCore] in await appCore.shutdown() }
     }

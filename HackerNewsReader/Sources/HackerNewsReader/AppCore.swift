@@ -5,32 +5,40 @@ import HackerNews
 import FoundationNetworking
 #endif
 
-/// Workhorse for `UICore`. An `actor` whose `unownedExecutor`
+/// Event-handling workhorse. An `actor` whose `unownedExecutor`
 /// borrows the host's (SE-0392), so all AppCore methods and Tasks
-/// execute on the same serial executor as `UICore` (`MainActor` in
-/// production) or `TestCore` (a per-test executor).
+/// run isolated to the same actor as the host — MainActor in
+/// production (`Core.swift`) or a per-test executor in `TestCore`.
 ///
-/// Forwarding `AppState` from the host across this actor boundary
-/// uses one transient `nonisolated(unsafe) let` at the host's init
-/// call site — nothing inside AppCore uses `nonisolated(unsafe)`.
+/// Forwarding `AppState` from the host into this actor uses one
+/// transient `nonisolated(unsafe) let` at the host's init call
+/// site — both references stay in the same isolation region
+/// (SE-0414), so nothing inside AppCore needs `nonisolated(unsafe)`.
 /// Tasks spawned inside AppCore methods inherit this actor via the
 /// implicit `self` references in their bodies (Task.init's built-in
-/// `@_inheritActorContext`), so the listener / commit Tasks read
-/// and write `state` directly.
+/// `@_inheritActorContext`), so the commit / fetch Tasks read and
+/// write `state` directly.
 ///
-/// Not bridged to Kotlin; `UICore` re-exposes the public surface.
+/// The long-running search-query listener is bootstrapped from
+/// `init` via a `(isolated AppCore) -> Void` closure — Task spawned
+/// in a sync init body doesn't inherit actor isolation, so the
+/// isolated-parameter closure is the route that lets the listener
+/// reach `state` and `tasks` without going through `await`.
+///
+/// Not bridged to Kotlin; the module-level `sendEvent` /
+/// `sendEventAsync` / `commands` in `Core.swift` are the bridged
+/// surface.
 actor AppCore {
     let state: AppState
 
     private let commandsContinuation: AsyncStream<AppCommand>.Continuation
-    nonisolated let commands: AsyncStream<AppCommand>
     private let client: Client
     private let clock: any Clock<Duration>
     private let now: @Sendable () -> Date
-    private nonisolated let borrowed: any Actor
+    private nonisolated let isolation: any Actor
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
-        borrowed.unownedExecutor
+        isolation.unownedExecutor
     }
 
     enum TaskID { case feed, feedMore, search, searchCommit, searchMore, searchListener }
@@ -43,39 +51,41 @@ actor AppCore {
 
     init(
         state: AppState,
-        commands: AsyncStream<AppCommand>,
         commandsContinuation: AsyncStream<AppCommand>.Continuation,
         client: Client,
         clock: any Clock<Duration>,
         now: @escaping @Sendable () -> Date = Date.init,
-        borrowing isolation: any Actor
+        isolation: any Actor
     ) {
         self.state = state
-        self.commands = commands
         self.commandsContinuation = commandsContinuation
         self.client = client
         self.clock = clock
         self.now = now
-        self.borrowed = isolation
-    }
+        self.isolation = isolation
 
-    /// Start the long-running search-query listener. Called by the
-    /// host once after construction; can't go in `init` because
-    /// Swift forbids reassigning an actor stored property from a
-    /// sync init body.
-    func startListener() {
-        tasks[.searchListener] = Task {
-            for await query in state.searchQueryChanges {
-                if query.isEmpty {
-                    tasks[.search] = nil
-                    tasks[.searchCommit] = nil
-                    tasks[.searchMore] = nil
-                    state.search = LoadableStories()
-                } else {
-                    scheduleSearchFetch(query: query)
+        let asyncSetup: @Sendable (isolated AppCore) -> Void = { core in
+            let state = core.state
+            var tasks: TaskRegistry<TaskID> {
+                get { core.tasks }
+                set { core.tasks = newValue }
+            }
+
+            tasks[.searchListener] = Task {
+                for await query in state.searchQueryChanges {
+                    if query.isEmpty {
+                        tasks[.search] = nil
+                        tasks[.searchCommit] = nil
+                        tasks[.searchMore] = nil
+                        state.search = LoadableStories()
+                    } else {
+                        core.scheduleSearchFetch(query: query)
+                    }
                 }
             }
         }
+
+        Task { await asyncSetup(self) }
     }
 
     /// Fire-and-forget debounced search. Parks the network call in
@@ -220,9 +230,10 @@ actor AppCore {
         }
     }
 
-    /// Test-only teardown — production `UICore` is app-lifetime.
-    /// Without this, the TaskRegistry → listener-Task → self cycle
-    /// keeps the actor alive past test scope.
+    /// Test-only teardown — the production `appCore` is app-lifetime
+    /// (constructed lazily in `Core.swift`). Without this, the
+    /// TaskRegistry → listener-Task → self cycle keeps the actor
+    /// alive past test scope.
     func shutdown() {
         tasks.cancelAll()
     }
