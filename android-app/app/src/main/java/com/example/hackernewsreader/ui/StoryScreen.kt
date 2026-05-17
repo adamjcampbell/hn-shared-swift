@@ -64,28 +64,28 @@ import hacker.news.reader.AppEvent
 import hacker.news.reader.AppState
 import hacker.news.reader.LoadStatus
 import hacker.news.reader.StoryRow
-import hacker.news.reader.UICore
+import hacker.news.reader.appState
+import hacker.news.reader.commands
+import hacker.news.reader.sendEvent
+import hacker.news.reader.sendEventAsync
 import com.example.hackernewsreader.R
-import com.example.hackernewsreader.state.rememberCore
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StoryScreen() {
-    val core = rememberCore()
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
     // Initial fetch on first composition.
-    LaunchedEffect(core) {
-        core.sendEvent(AppEvent.refresh)
+    LaunchedEffect(Unit) {
+        sendEvent(AppEvent.refresh)
     }
 
     // One-shot commands from the core.
-    LaunchedEffect(core) {
-        core.commands.kotlin().collect { command ->
+    LaunchedEffect(Unit) {
+        commands.kotlin().collect { command ->
             when (command) {
                 is AppCommand.PresentURLCase -> context.launchCustomTab(command.value)
             }
@@ -105,11 +105,11 @@ fun StoryScreen() {
         },
     ) { innerPadding ->
         StoriesContent(
-            state = core.state,
-            onRefresh = { core.sendEvent(AppEvent.refresh) },
-            onLoadMore = { core.sendEvent(AppEvent.loadMore) },
-            onToggleRead = { id -> scope.launch { core.sendEvent(AppEvent.toggleRead(id)) } },
-            onOpenStory = { id -> scope.launch { core.sendEvent(AppEvent.openStory(id)) } },
+            state = appState,
+            onRefresh = { sendEventAsync(AppEvent.refresh) },
+            onLoadMore = { sendEventAsync(AppEvent.loadMore) },
+            onToggleRead = { id -> sendEvent(AppEvent.toggleRead(id)) },
+            onOpenStory = { id -> sendEvent(AppEvent.openStory(id)) },
             modifier = Modifier
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)

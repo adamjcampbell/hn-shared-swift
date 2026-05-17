@@ -14,11 +14,11 @@ Swift then hitting Run from Android Studio Just Works.
 ## Modules
 
 - `app/` — the Android application. `MainActivity`, `StoryScreen`
-  (Compose UI reading `core.state` directly via SkipFuse-bridged
-  Kotlin types in `hacker.news.reader.*` and `hacker.news.*`),
-  `App.onCreate` (`skip.foundation.ProcessInfo.launch(...)` to
-  bootstrap the Swift runtime), `state/CoreHolder.kt` (process-wide
-  `UICore` singleton + a `rememberCore()` Composable).
+  (Compose UI reading the module-level `appState`, `commands`, and
+  `sendEvent` / `sendEventAsync` from `hacker.news.reader.*` —
+  SkipFuse bridges Swift free functions and globals into the Kotlin
+  package), `App.onCreate` (`skip.foundation.ProcessInfo.launch(...)`
+  to bootstrap the Swift runtime).
 
 There is no `core-jni/` module any more — SkipFuse's `skip export`
 emits the bridge directly.
