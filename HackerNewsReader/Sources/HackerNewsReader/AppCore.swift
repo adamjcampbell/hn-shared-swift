@@ -154,11 +154,14 @@ actor AppCore {
                 commandsContinuation.yield(.presentURL(value: url))
             }
 
-        case .refresh where state.searchQuery.isEmpty:
-            // Feed refresh — page 0. Supersedes any in-flight
-            // load-more (otherwise its appended page would land on
-            // the snapshot we're about to replace) and resets its
-            // status.
+        case .refresh:
+            // Feed refresh — page 0. Always refreshes the feed; the
+            // only UI surface that fires `.refresh` is the feed's
+            // pull-to-refresh (`.refreshable` on iOS, `PullToRefreshBox`
+            // on Android), neither of which is reachable while a search
+            // is active. Supersedes any in-flight feed load-more
+            // (otherwise its appended page would land on the snapshot
+            // we're about to replace) and resets its status.
             tasks[.feedMore] = nil
             state.feedLoadMoreStatus = LoadStatus()
             state.feedInitialStatus.startLoading()
@@ -177,31 +180,6 @@ actor AppCore {
                 // Newer fetch will clear loading when it commits.
             } catch {
                 state.feedInitialStatus.finishFailure(error.localizedDescription)
-            }
-
-        case .refresh:
-            // Search refresh — page 0 with the current query. Cancels
-            // the listener's commit wrapper too so the registry slot
-            // doesn't keep pointing at a stale task.
-            let query = state.searchQuery
-            tasks[.searchMore] = nil
-            tasks[.searchCommit] = nil
-            state.searchLoadMoreStatus = LoadStatus()
-            state.searchInitialStatus.startLoading()
-
-            let task = makeFetchTask(debounce: nil) { try await $0.search(query, 0) }
-            tasks[.search] = task
-            do {
-                let page = try await task.value
-                for story in page.stories { state.stories[story.id] = story }
-                let ids = page.stories.map(\.id)
-                state.searchLoaded = LoadedStories(
-                    ids: ids, page: 0, totalPages: page.totalPages, loadedAt: now()
-                )
-                state.searchInitialStatus.finishSuccess()
-            } catch is CancellationError {
-            } catch {
-                state.searchInitialStatus.finishFailure(error.localizedDescription)
             }
 
         case .loadMore where state.searchQuery.isEmpty:

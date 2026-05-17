@@ -243,41 +243,6 @@ struct AppCoreTests {
         await core.run { #expect($0.state.searchInitialStatus.isLoading == false) }
     }
 
-    @Test("refresh while a search is in flight re-runs the current search, not the feed")
-    func refresh_whileSearching_reRunsSearch() async {
-        let calls = CallRecorder()
-        let clock = TestClock()
-        let core = await makeCore(
-            frontPage: { p in
-                await calls.recordFrontPage(page: p)
-                return page([storyA, storyB])
-            },
-            search: { query, p in
-                await calls.recordSearch(query, page: p)
-                return page([storyA])
-            },
-            clock: clock
-        )
-
-        await core.settle()
-        await core.run { $0.state.searchQuery = "rust" }
-        await core.settle()
-        // Listener has spawned a debounced fetch parked in clock.sleep.
-
-        // .refresh with non-empty searchQuery re-runs the search; the
-        // pending listener fetch is cancelled before its sleep elapses.
-        await core.run { await $0.appCore.sendEvent(.refresh) }
-        await clock.advance(by: TestCore.searchDebounce)
-        await core.settle()
-
-        let frontPageCalls = await calls.frontPageCalls
-        let searchCalls = await calls.searchCalls
-        #expect(frontPageCalls.isEmpty)
-        #expect(searchCalls.map(\.0) == ["rust"])
-        await core.run { #expect($0.state.searchResults.map(\.id) == ["100"]) }
-    }
-
-
     @Test("URLError(.cancelled) from a cancelled feed fetch is treated as cancellation")
     func cancelledURLError_doesNotSurfaceAsFeedLoadError() async {
         // URLSession surfaces task cancellation as URLError.cancelled,
