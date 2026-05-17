@@ -72,12 +72,17 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 - **`HackerNewsReader` owns the reducer and presentation lifecycle.**
   `AppCore` (workhorse `actor`), `Core.swift` (the bridged module
   surface — `appState`, `commands`, `sendEvent`, `sendEventAsync`),
-  `AppState` (`@Observable`), `StoryRow` (UI row = `Story + isRead`),
-  and `LoadableStories` / `LoadStatus` (pagination + UI lifecycle).
-  The pagination logic stays here on purpose — `LoadStatus.error:
-  String` is presentation-shape, and the cursor (`LoadedStories`) is
-  only meaningful alongside it. `HackerNewsReader` is the only public
-  product in `Package.swift`; iOS and Android consume one product.
+  `AppState` (`@Observable` flat mega-struct bag), `StoryRow` (UI row
+  = `Story + isRead`), and the two surviving small value types
+  `LoadStatus` + `LoadedStories`. `AppState` carries six flat
+  per-axis fields (`feedLoaded`/`feedInitialStatus`/`feedLoadMoreStatus`
+  and the search mirror) — the former `LoadableStories` wrapper was
+  dissolved because it was a medium-sized helper with three different
+  reader cadences and no operations of its own. `LoadStatus` and
+  `LoadedStories` earn their keep (operation repetition + temporal
+  access coupling + Carmack-lightweight). Mutators live on `AppCore`,
+  not on `AppState`. `HackerNewsReader` is the only public product in
+  `Package.swift`; iOS and Android consume one product.
 
 ### Bridge
 
@@ -106,10 +111,11 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `any Clock<Duration>` existential) don't bridge, and it's
   unmarked.
 - **`AppCore` (workhorse actor) is intentionally not bridged.**
-  It's internal coordination — `sendEvent`, `scheduleSearchFetch`,
-  `makeFetchTask`, the listener Task spawned from init. The bridged
-  surface lives at module scope in `Core.swift`: `appState`,
-  `commands`, `sendEvent`, and `sendEventAsync`.
+  It's internal coordination — `sendEvent`, `makeFetchTask`, the
+  listener Task spawned from init with the debounced search-fetch
+  flow inlined into its loop. The bridged surface lives at module
+  scope in `Core.swift`: `appState`, `commands`, `sendEvent`, and
+  `sendEventAsync`.
 
 ### iOS view layer
 
@@ -246,9 +252,13 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   search load-more) plus `toggleRead` / `openStory` live inline as
   switch arms in `AppCore.sendEvent(_:)`. The intentional duplication
   is the point — each arm reads top-to-bottom for its event with
-  no helper jumps. The one method that survives outside `sendEvent`
-  is `scheduleSearchFetch`, kept private because the listener Task
-  invokes it on every keystroke.
+  no helper jumps. The debounced search-fetch flow triggered by
+  every keystroke is similarly inlined into the listener Task's
+  `for await` loop in `init`. `makeFetchTask` is the one shared
+  helper — five callers (the listener + four `sendEvent` arms)
+  use it for the cancellation-aware Task build (try-sleep, post-sleep
+  `Task.checkCancellation()`, and `URLError(.cancelled)` →
+  `CancellationError` normalisation).
 - **Tests substitute `TestCore` (per-instance `actor`).**
   Different `TestCore`s run on different executors so tests
   parallelise. `TestCore.run { ... }` is the Point-Free actor-run

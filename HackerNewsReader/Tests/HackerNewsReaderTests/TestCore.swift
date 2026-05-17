@@ -99,7 +99,7 @@ actor BorrowedExecutor {
 /// await core.run { await $0.appCore.sendEvent(.refresh) }
 /// await core.run { core in
 ///     #expect(core.state.feedStories.count == 2)
-///     #expect(core.state.feed.loadedStories?.loadedAt != nil)
+///     #expect(core.state.feedLoaded?.loadedAt != nil)
 /// }
 /// ```
 extension TestCore {

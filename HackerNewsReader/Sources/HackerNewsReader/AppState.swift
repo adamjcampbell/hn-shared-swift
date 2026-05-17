@@ -3,7 +3,15 @@ import Observation
 import HackerNews
 import SkipFuse
 
-/// The single source of truth for the example app.
+/// The single source of truth for the example app — a flat "mega
+/// struct" bag of state. Two small value types survive the flattening
+/// (`LoadStatus`, `LoadedStories`) because they pass the operation-
+/// repetition + temporal-access-coupling + Carmack-lightweight tests;
+/// the `LoadableStories` wrapper that used to compose them was a
+/// medium-sized helper with no shared operations of its own and three
+/// different reader cadences, so it was dissolved into flat per-axis
+/// fields on `AppState`. Mutators live on `AppCore` (the procedure-
+/// owner), not here.
 ///
 /// `AppState` is an `@Observable final class` so SwiftUI's fine-grained
 /// invalidation tracks property reads directly on iOS. On Android, SkipFuse
@@ -20,7 +28,7 @@ import SkipFuse
 @Observable
 public final class AppState {
 
-    // MARK: Stored sources of truth (public, bridged)
+    // MARK: Search input
 
     /// `@Observable` drives reads-to-recompose (SwiftUI / Compose);
     /// `searchQueryChanges` drives the writes-to-fetch listener in
@@ -32,14 +40,23 @@ public final class AppState {
         didSet { searchQueryEvents.yield(searchQuery) }
     }
 
-    public var feed: LoadableStories = LoadableStories()
-    public var search: LoadableStories = LoadableStories()
+    // MARK: Feed surface — three flat axes
 
-    // MARK: Stored sources of truth (internal)
+    public var feedLoaded: LoadedStories? = nil
+    public var feedInitialStatus: LoadStatus = LoadStatus()
+    public var feedLoadMoreStatus: LoadStatus = LoadStatus()
 
-    /// Entity store. Every fetch upserts the stories it returned — feed
-    /// and search never clobber each other's entries. ~80 entries per
-    /// session (front page + one search), so no pruning.
+    // MARK: Search surface — mirrored
+
+    public var searchLoaded: LoadedStories? = nil
+    public var searchInitialStatus: LoadStatus = LoadStatus()
+    public var searchLoadMoreStatus: LoadStatus = LoadStatus()
+
+    // MARK: Entity store (internal)
+
+    /// Every fetch upserts the stories it returned — feed and search
+    /// never clobber each other's entries. ~80 entries per session
+    /// (front page + one search), so no pruning.
     var stories: [String: Story] = [:]
     var readIds: Set<String> = []
 
@@ -59,13 +76,13 @@ public final class AppState {
     /// commits stories to the store before assigning ids on the same
     /// actor, so the lookup is total.
     public var feedStories: [StoryRow] {
-        (feed.loadedStories?.ids ?? []).compactMap { id in
+        (feedLoaded?.ids ?? []).compactMap { id in
             stories[id].map { StoryRow(story: $0, isRead: readIds.contains(id)) }
         }
     }
 
     public var searchResults: [StoryRow] {
-        (search.loadedStories?.ids ?? []).compactMap { id in
+        (searchLoaded?.ids ?? []).compactMap { id in
             stories[id].map { StoryRow(story: $0, isRead: readIds.contains(id)) }
         }
     }

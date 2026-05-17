@@ -93,14 +93,14 @@ struct AppCoreTests {
 
         await core.run { core in
             #expect(core.state.feedStories.isEmpty)
-            #expect(core.state.feed.loadedStories == nil)
+            #expect(core.state.feedLoaded == nil)
 
             await core.appCore.sendEvent(.refresh)
 
             #expect(core.state.feedStories.count == 2)
             #expect(core.state.feedStories.first?.title == "Top story")
-            #expect(core.state.feed.loadedStories?.loadedAt != nil)
-            #expect(core.state.feed.initialStatus.error == nil)
+            #expect(core.state.feedLoaded?.loadedAt != nil)
+            #expect(core.state.feedInitialStatus.error == nil)
         }
     }
 
@@ -115,7 +115,7 @@ struct AppCoreTests {
         await core.run { core in
             await core.appCore.sendEvent(.refresh)
             #expect(core.state.feedStories.isEmpty)
-            #expect(core.state.feed.initialStatus.error != nil)
+            #expect(core.state.feedInitialStatus.error != nil)
         }
     }
 
@@ -229,18 +229,18 @@ struct AppCoreTests {
 
         await core.settle()
         await core.run { core in
-            #expect(core.state.search.initialStatus.isLoading == false)
+            #expect(core.state.searchInitialStatus.isLoading == false)
             core.state.searchQuery = "r"
         }
         await core.settle()
 
         // Spinner asserted synchronously on listener entry, before the debounce.
-        await core.run { #expect($0.state.search.initialStatus.isLoading == true) }
+        await core.run { #expect($0.state.searchInitialStatus.isLoading == true) }
 
         await clock.advance(by: TestCore.searchDebounce)
         await core.settle()
 
-        await core.run { #expect($0.state.search.initialStatus.isLoading == false) }
+        await core.run { #expect($0.state.searchInitialStatus.isLoading == false) }
     }
 
     @Test("refresh while a search is in flight re-runs the current search, not the feed")
@@ -291,8 +291,8 @@ struct AppCoreTests {
 
         await core.run { core in
             await core.appCore.sendEvent(.refresh)
-            #expect(core.state.feed.initialStatus.error == nil)
-            #expect(core.state.feed.loadedStories == nil)
+            #expect(core.state.feedInitialStatus.error == nil)
+            #expect(core.state.feedLoaded == nil)
         }
     }
 
@@ -330,7 +330,7 @@ struct AppCoreTests {
         await core.settle()
 
         await core.run { core in
-            #expect(core.state.search.initialStatus.error == nil)
+            #expect(core.state.searchInitialStatus.error == nil)
             #expect(core.state.searchQuery == "rust")
             #expect(core.state.searchResults.map(\.id) == ["100"])
         }
@@ -367,9 +367,9 @@ struct AppCoreTests {
 
         await core.run { core in
             #expect(core.state.searchResults.isEmpty)
-            #expect(core.state.search.initialStatus.error == nil)
-            #expect(core.state.search.initialStatus.isLoading == false)
-            #expect(core.state.search.loadedStories == nil)
+            #expect(core.state.searchInitialStatus.error == nil)
+            #expect(core.state.searchInitialStatus.isLoading == false)
+            #expect(core.state.searchLoaded == nil)
             #expect(core.state.feedStories.map(\.id) == feedBefore)
         }
         let frontPageAfter = await calls.frontPageCalls.count
@@ -439,8 +439,8 @@ struct AppCoreTests {
 
         await core.run { core in
             #expect(core.state.searchResults.isEmpty)
-            #expect(core.state.search.initialStatus.error == nil)
-            #expect(core.state.search.initialStatus.isLoading == false)
+            #expect(core.state.searchInitialStatus.error == nil)
+            #expect(core.state.searchInitialStatus.isLoading == false)
         }
         let recorded = await calls.searchCalls
         #expect(recorded.map(\.0) == [])
@@ -517,13 +517,13 @@ struct AppCoreTests {
 
         await core.run { core in
             await core.appCore.sendEvent(.refresh)
-            #expect(core.state.feed.loadedStories?.page == 0)
-            #expect(core.state.feed.loadedStories?.hasMore == true)
+            #expect(core.state.feedLoaded?.page == 0)
+            #expect(core.state.feedLoaded?.hasMore == true)
             #expect(core.state.feedStories.map(\.id) == ["100", "101"])
 
             await core.appCore.sendEvent(.loadMore)
-            #expect(core.state.feed.loadedStories?.page == 1)
-            #expect(core.state.feed.loadedStories?.hasMore == true)  // page 1 of 3, page 2 still remains
+            #expect(core.state.feedLoaded?.page == 1)
+            #expect(core.state.feedLoaded?.hasMore == true)  // page 1 of 3, page 2 still remains
             #expect(core.state.feedStories.map(\.id) == ["100", "101", "102"])
         }
     }
@@ -540,7 +540,7 @@ struct AppCoreTests {
 
         await core.run { core in
             await core.appCore.sendEvent(.refresh)
-            #expect(core.state.feed.loadedStories?.hasMore == false)
+            #expect(core.state.feedLoaded?.hasMore == false)
             await core.appCore.sendEvent(.loadMore)
         }
         let pages = await calls.frontPageCalls
@@ -580,14 +580,14 @@ struct AppCoreTests {
 
         await core.run { core in
             await core.appCore.sendEvent(.refresh)  // page 0 lands
-            #expect(core.state.feed.loadedStories?.page == 0)
+            #expect(core.state.feedLoaded?.page == 0)
         }
 
         let loadMore = Task { [core] in
             await core.run { await $0.appCore.sendEvent(.loadMore) }
         }
         await core.settle()
-        await core.run { #expect($0.state.feed.loadMoreStatus.isLoading == true) }
+        await core.run { #expect($0.state.feedLoadMoreStatus.isLoading == true) }
 
         // Refresh while page-1 is parked. Refresh's first action is
         // `tasks[.feedMore] = nil`, which cancels the parked task.
@@ -596,9 +596,9 @@ struct AppCoreTests {
 
         // page resets to 0 after refresh; loadMore status cleared.
         await core.run { core in
-            #expect(core.state.feed.loadedStories?.page == 0)
-            #expect(core.state.feed.loadMoreStatus.isLoading == false)
-            #expect(core.state.feed.loadMoreStatus.error == nil)
+            #expect(core.state.feedLoaded?.page == 0)
+            #expect(core.state.feedLoadMoreStatus.isLoading == false)
+            #expect(core.state.feedLoadMoreStatus.error == nil)
         }
     }
 
@@ -617,8 +617,8 @@ struct AppCoreTests {
             let before = core.state.feedStories.map(\.id)
             await core.appCore.sendEvent(.loadMore)
             #expect(core.state.feedStories.map(\.id) == before)
-            #expect(core.state.feed.initialStatus.error == nil)
-            #expect(core.state.feed.loadMoreStatus.error != nil)
+            #expect(core.state.feedInitialStatus.error == nil)
+            #expect(core.state.feedLoadMoreStatus.error != nil)
         }
     }
 
@@ -637,11 +637,11 @@ struct AppCoreTests {
         await core.commitSearch("x", clock: clock)
         await core.run { core in
             #expect(core.state.searchResults.map(\.id) == ["100"])
-            #expect(core.state.search.loadedStories?.hasMore == true)
+            #expect(core.state.searchLoaded?.hasMore == true)
 
             await core.appCore.sendEvent(.loadMore)
             #expect(core.state.searchResults.map(\.id) == ["100", "101"])
-            #expect(core.state.search.loadedStories?.hasMore == false)
+            #expect(core.state.searchLoaded?.hasMore == false)
         }
     }
 
@@ -659,13 +659,13 @@ struct AppCoreTests {
         )
 
         await core.commitSearch("x", clock: clock)
-        await core.run { #expect($0.state.search.loadedStories?.hasMore == true) }
+        await core.run { #expect($0.state.searchLoaded?.hasMore == true) }
 
         let loadMore = Task { [core] in
             await core.run { await $0.appCore.sendEvent(.loadMore) }
         }
         await core.settle()
-        await core.run { #expect($0.state.search.loadMoreStatus.isLoading == true) }
+        await core.run { #expect($0.state.searchLoadMoreStatus.isLoading == true) }
 
         // Clear the search via the listener's empty-query path.
         await core.run { $0.state.searchQuery = "" }
@@ -673,9 +673,9 @@ struct AppCoreTests {
         await core.settle()
 
         await core.run { core in
-            #expect(core.state.search.loadedStories == nil)
-            #expect(core.state.search.loadMoreStatus.isLoading == false)
-            #expect(core.state.search.loadMoreStatus.error == nil)
+            #expect(core.state.searchLoaded == nil)
+            #expect(core.state.searchLoadMoreStatus.isLoading == false)
+            #expect(core.state.searchLoadMoreStatus.error == nil)
         }
     }
 
@@ -695,9 +695,9 @@ struct AppCoreTests {
 
         await core.run { core in
             await core.appCore.sendEvent(.refresh)
-            let initialLoadedAt = core.state.feed.loadedStories?.loadedAt
+            let initialLoadedAt = core.state.feedLoaded?.loadedAt
             await core.appCore.sendEvent(.loadMore)
-            #expect(core.state.feed.loadedStories?.loadedAt == initialLoadedAt)
+            #expect(core.state.feedLoaded?.loadedAt == initialLoadedAt)
         }
     }
 }

@@ -23,7 +23,11 @@ import FoundationNetworking
 /// `init` via a `(isolated AppCore) -> Void` closure — Task spawned
 /// in a sync init body doesn't inherit actor isolation, so the
 /// isolated-parameter closure is the route that lets the listener
-/// reach `state` and `tasks` without going through `await`.
+/// reach `state` and `tasks` without going through `await`. The
+/// debounced search-fetch flow lives inline inside that listener;
+/// an earlier `final class` topology factored it out as
+/// `scheduleSearchFetch` to work around an SE-0461 region-isolation
+/// hole that no longer applies under the actor model.
 ///
 /// Not bridged to Kotlin; the module-level `sendEvent` /
 /// `sendEventAsync` / `commands` in `Core.swift` are the bridged
@@ -77,53 +81,56 @@ actor AppCore {
                         tasks[.search] = nil
                         tasks[.searchCommit] = nil
                         tasks[.searchMore] = nil
-                        state.search = LoadableStories()
-                    } else {
-                        core.scheduleSearchFetch(query: query)
+                        state.searchLoaded = nil
+                        state.searchInitialStatus = LoadStatus()
+                        state.searchLoadMoreStatus = LoadStatus()
+                        continue
+                    }
+
+                    // Fire-and-forget debounced search. Parks the network
+                    // call in `tasks[.search]` (cancellable by a newer
+                    // keystroke or by the empty-query path above) and the
+                    // post-await commit in `tasks[.searchCommit]`. The
+                    // split slot closes the race where a clearSearch
+                    // lands between `task.value` resolving and the state
+                    // write — cancelling `[.searchCommit]` drops the
+                    // commit before it repopulates cleared state.
+                    tasks[.searchMore] = nil
+                    // Skip no-op writes during keystroke bursts —
+                    // re-firing @Observable notifications would trigger
+                    // SwiftUI / Compose recomposition per character.
+                    if state.searchLoadMoreStatus != LoadStatus() {
+                        state.searchLoadMoreStatus = LoadStatus()
+                    }
+                    if !state.searchInitialStatus.isLoading {
+                        state.searchInitialStatus.startLoading()
+                    }
+
+                    let task = core.makeFetchTask(debounce: Self.searchDebounce) { client in
+                        try await client.search(query, 0)
+                    }
+                    tasks[.search] = task
+
+                    tasks[.searchCommit] = Task {
+                        do {
+                            let page = try await task.value
+                            try Task.checkCancellation()
+                            for story in page.stories { state.stories[story.id] = story }
+                            let ids = page.stories.map(\.id)
+                            state.searchLoaded = LoadedStories(
+                                ids: ids, page: 0, totalPages: page.totalPages, loadedAt: core.now()
+                            )
+                            state.searchInitialStatus.finishSuccess()
+                        } catch is CancellationError {
+                        } catch {
+                            state.searchInitialStatus.finishFailure(error.localizedDescription)
+                        }
                     }
                 }
             }
         }
 
         Task { await asyncSetup(self) }
-    }
-
-    /// Fire-and-forget debounced search. Parks the network call in
-    /// `tasks[.search]` (cancellable by a newer keystroke or by the
-    /// listener's empty-query path) and the post-await commit in
-    /// `tasks[.searchCommit]`. The split slot is what closes the race
-    /// where a clearSearch lands between `task.value` resolving and
-    /// the state write — cancelling `[.searchCommit]` drops the
-    /// commit before it repopulates cleared state.
-    private func scheduleSearchFetch(query: String) {
-        tasks[.searchMore] = nil
-        // Skip no-op writes during keystroke bursts — re-firing
-        // @Observable notifications would trigger SwiftUI / Compose
-        // recomposition per character.
-        if state.search.loadMoreStatus != LoadStatus() {
-            state.search.loadMoreStatus = LoadStatus()
-        }
-        if !state.search.initialStatus.isLoading {
-            state.search.initialStatus.startLoading()
-        }
-
-        let task = makeFetchTask(debounce: Self.searchDebounce) { client in
-            try await client.search(query, 0)
-        }
-        tasks[.search] = task
-
-        tasks[.searchCommit] = Task {
-            do {
-                let page = try await task.value
-                try Task.checkCancellation()
-                for story in page.stories { state.stories[story.id] = story }
-                let ids = page.stories.map(\.id)
-                state.search.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: now())
-            } catch is CancellationError {
-            } catch {
-                state.search.initialStatus.finishFailure(error.localizedDescription)
-            }
-        }
     }
 
     /// Single entry point for every user-driven mutation. Each arm
@@ -153,8 +160,8 @@ actor AppCore {
             // the snapshot we're about to replace) and resets its
             // status.
             tasks[.feedMore] = nil
-            state.feed.loadMoreStatus = LoadStatus()
-            state.feed.initialStatus.startLoading()
+            state.feedLoadMoreStatus = LoadStatus()
+            state.feedInitialStatus.startLoading()
 
             let task = makeFetchTask(debounce: nil) { try await $0.frontPage(0) }
             tasks[.feed] = task
@@ -162,11 +169,14 @@ actor AppCore {
                 let page = try await task.value
                 for story in page.stories { state.stories[story.id] = story }
                 let ids = page.stories.map(\.id)
-                state.feed.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: now())
+                state.feedLoaded = LoadedStories(
+                    ids: ids, page: 0, totalPages: page.totalPages, loadedAt: now()
+                )
+                state.feedInitialStatus.finishSuccess()
             } catch is CancellationError {
                 // Newer fetch will clear loading when it commits.
             } catch {
-                state.feed.initialStatus.finishFailure(error.localizedDescription)
+                state.feedInitialStatus.finishFailure(error.localizedDescription)
             }
 
         case .refresh:
@@ -176,8 +186,8 @@ actor AppCore {
             let query = state.searchQuery
             tasks[.searchMore] = nil
             tasks[.searchCommit] = nil
-            state.search.loadMoreStatus = LoadStatus()
-            state.search.initialStatus.startLoading()
+            state.searchLoadMoreStatus = LoadStatus()
+            state.searchInitialStatus.startLoading()
 
             let task = makeFetchTask(debounce: nil) { try await $0.search(query, 0) }
             tasks[.search] = task
@@ -185,17 +195,20 @@ actor AppCore {
                 let page = try await task.value
                 for story in page.stories { state.stories[story.id] = story }
                 let ids = page.stories.map(\.id)
-                state.search.receiveInitialPage(ids, totalPages: page.totalPages, loadedAt: now())
+                state.searchLoaded = LoadedStories(
+                    ids: ids, page: 0, totalPages: page.totalPages, loadedAt: now()
+                )
+                state.searchInitialStatus.finishSuccess()
             } catch is CancellationError {
             } catch {
-                state.search.initialStatus.finishFailure(error.localizedDescription)
+                state.searchInitialStatus.finishFailure(error.localizedDescription)
             }
 
         case .loadMore where state.searchQuery.isEmpty:
-            guard let loaded = state.feed.loadedStories, loaded.hasMore,
-                  !state.feed.loadMoreStatus.isLoading else { return }
+            guard let loaded = state.feedLoaded, loaded.hasMore,
+                  !state.feedLoadMoreStatus.isLoading else { return }
             let next = loaded.nextPage
-            state.feed.loadMoreStatus.startLoading()
+            state.feedLoadMoreStatus.startLoading()
 
             let task = makeFetchTask(debounce: nil) { try await $0.frontPage(next) }
             tasks[.feedMore] = task
@@ -203,18 +216,19 @@ actor AppCore {
                 let page = try await task.value
                 for story in page.stories { state.stories[story.id] = story }
                 let ids = page.stories.map(\.id)
-                state.feed.receiveLoadMorePage(ids, totalPages: page.totalPages)
+                state.feedLoaded?.appendPage(ids, totalPages: page.totalPages)
+                state.feedLoadMoreStatus.finishSuccess()
             } catch is CancellationError {
             } catch {
-                state.feed.loadMoreStatus.finishFailure(error.localizedDescription)
+                state.feedLoadMoreStatus.finishFailure(error.localizedDescription)
             }
 
         case .loadMore:
-            guard let loaded = state.search.loadedStories, loaded.hasMore,
-                  !state.search.loadMoreStatus.isLoading else { return }
+            guard let loaded = state.searchLoaded, loaded.hasMore,
+                  !state.searchLoadMoreStatus.isLoading else { return }
             let query = state.searchQuery
             let next = loaded.nextPage
-            state.search.loadMoreStatus.startLoading()
+            state.searchLoadMoreStatus.startLoading()
 
             let task = makeFetchTask(debounce: nil) { try await $0.search(query, next) }
             tasks[.searchMore] = task
@@ -222,10 +236,11 @@ actor AppCore {
                 let page = try await task.value
                 for story in page.stories { state.stories[story.id] = story }
                 let ids = page.stories.map(\.id)
-                state.search.receiveLoadMorePage(ids, totalPages: page.totalPages)
+                state.searchLoaded?.appendPage(ids, totalPages: page.totalPages)
+                state.searchLoadMoreStatus.finishSuccess()
             } catch is CancellationError {
             } catch {
-                state.search.loadMoreStatus.finishFailure(error.localizedDescription)
+                state.searchLoadMoreStatus.finishFailure(error.localizedDescription)
             }
         }
     }
