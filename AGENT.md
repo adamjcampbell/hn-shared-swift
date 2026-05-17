@@ -14,8 +14,10 @@ API](https://github.com/HackerNews/API)), search via the Algolia HN API
 
 The Swift package splits into two targets:
 - `HackerNews` — API client + entity types (`Client`, `Story`, `Page`).
-- `HackerNewsReader` — reducer + state (`AppCore`, `UICore`, `AppState`,
-  `StoryRow`, `LoadableStories`). Depends on `HackerNews`.
+- `HackerNewsReader` — reducer + state (`AppCore`, `AppState`,
+  `StoryRow`, `LoadableStories`) and the bridged module surface in
+  `Core.swift` (module-level `appState`, `commands`, `sendEvent`,
+  `sendEventAsync`). Depends on `HackerNews`.
 
 The migration away from a hand-written `swift-java jextract` bridge is
 documented in [`docs/skip-fuse-adoption.md`](docs/skip-fuse-adoption.md).
@@ -27,15 +29,17 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   drives both platforms; one `AppEvent` enum carries every user-driven
   mutation.
 - iOS: direct `@Observable` + SwiftUI; no bridge in the iOS path.
-  `RootView` owns the singleton `UICore` and installs a
-  `SendAppEvent` action via `\.sendEvent`. Descendants take
-  `AppState` (the `@Observable final class`) as a parameter.
-- Android: bridged via SkipFuse. The Compose UI reads `appCore.state`
+  `RootView` reads the module-level `appState` and `commands` from
+  `HackerNewsReader` directly. Descendants take `AppState` (the
+  `@Observable final class`) as a parameter and call the bridged
+  `sendEvent(_:)` / `sendEventAsync(_:)` free functions.
+- Android: bridged via SkipFuse. The Compose UI reads `appState`
   directly — the bridging plugin emits a Kotlin `class AppState` whose
   property getters JNI-call into the Swift `@Observable`'s
   ObservationRegistrar, which SkipFuse routes through Compose's
   `MutableStateBacking` so reads register with the snapshot system and
-  mutations recompose.
+  mutations recompose. Events go back through the bridged
+  `sendEvent` / `sendEventAsync` package-scope functions.
 - Networking lives in the `HackerNews` target. `Client` is a `Sendable`
   struct with two `@Sendable` closure properties (`frontPage`,
   `search`). Tests inject closures directly. Production callers use
@@ -66,13 +70,14 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   loading lifecycle. Reusable in isolation; the test target
   `HackerNewsTests` exercises it without touching the reader.
 - **`HackerNewsReader` owns the reducer and presentation lifecycle.**
-  `AppCore` (workhorse class), `UICore` (bridged shell), `AppState`
-  (`@Observable`), `StoryRow` (UI row = `Story + isRead`), and
-  `LoadableStories` / `LoadStatus` (pagination + UI lifecycle). The
-  pagination logic stays here on purpose — `LoadStatus.error: String`
-  is presentation-shape, and the cursor (`LoadedStories`) is only
-  meaningful alongside it. `HackerNewsReader` is the only public product
-  in `Package.swift`; iOS and Android consume one product.
+  `AppCore` (workhorse `actor`), `Core.swift` (the bridged module
+  surface — `appState`, `commands`, `sendEvent`, `sendEventAsync`),
+  `AppState` (`@Observable`), `StoryRow` (UI row = `Story + isRead`),
+  and `LoadableStories` / `LoadStatus` (pagination + UI lifecycle).
+  The pagination logic stays here on purpose — `LoadStatus.error:
+  String` is presentation-shape, and the cursor (`LoadedStories`) is
+  only meaningful alongside it. `HackerNewsReader` is the only public
+  product in `Package.swift`; iOS and Android consume one product.
 
 ### Bridge
 
@@ -100,29 +105,23 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   is a test seam — its parameter types (`Client` closure-bag,
   `any Clock<Duration>` existential) don't bridge, and it's
   unmarked.
-- **`AppCore` (workhorse class) is intentionally not bridged.**
+- **`AppCore` (workhorse actor) is intentionally not bridged.**
   It's internal coordination — `sendEvent`, `scheduleSearchFetch`,
-  `makeFetchTask`, the listener Task. `UICore` re-exposes the only
-  surface bridging needs (`sendEvent`, `state`, `commands`).
+  `makeFetchTask`, the listener Task spawned from init. The bridged
+  surface lives at module scope in `Core.swift`: `appState`,
+  `commands`, `sendEvent`, and `sendEventAsync`.
 
 ### iOS view layer
 
-(Enforced by `ios-app/HackerNewsReader/RootView.swift` +
-`SendAppEvent.swift`.)
+(Enforced by `ios-app/HackerNewsReader/RootView.swift`.)
 
-- `UICore` is held only by `RootView`. Below the root, views accept
-  `AppState` (the `@Observable final class`) as a parameter; never
-  `UICore` itself.
-- Events flow back via `@Environment(\.sendEvent)`, a
-  `SendAppEvent` callable struct. The struct is **`Equatable`**
-  via nil-parity on the held optional `UICore`, leaning on the
-  invariant that `RootView` constructs exactly one `UICore` for the
-  app's lifetime — "both non-nil" uniquely identifies the installed
-  sender and "both nil" is the default env value. Without that
-  conformance, SwiftUI's reflection-based environment diff cannot
-  compare a closure-holding value, marks the env entry as changed on
-  every parent body re-eval, and invalidates every descendant reading
-  the key.
+- Views accept `AppState` (the `@Observable final class`) as a
+  parameter; they never own the core itself. The root view passes
+  `appState` (imported from `HackerNewsReader`) into the tree.
+- Events flow back by calling `sendEvent(_:)` (sync, fire-and-forget)
+  or `await sendEventAsync(_:)` (awaitable, for `.refreshable`)
+  directly — both are module-level functions on the
+  `HackerNewsReader` import, no `@Environment` plumbing.
 - Don't write `private var foo: some View` on a View. SwiftUI can't
   diff computed properties — they inline into the parent body and
   lose per-section skip behaviour. Extract into a private
@@ -174,8 +173,9 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   SE-0392 + Point-Free Video #362 pattern. The `nonisolated func
   settle() async` enqueues a continuation-resume at the back of the
   queue, so awaiting it drains every pending job (listener-Task
-  resumption, `isolatedTask` spawns, post-`clock.sleep` fetch
-  continuations) deterministically. Replaces `Task.megaYield()`,
+  resumption, fetch / commit Tasks spawned by `sendEvent`,
+  post-`clock.sleep` continuations) deterministically. Replaces
+  `Task.megaYield()`,
   which was probabilistic. Caveat: the queue is strict FIFO, while
   real actors honour task priority — fine because test code has no
   `Task(priority: …)` diversity.
@@ -229,31 +229,26 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   Android too. `skipstone` wraps cdecl thunks for `@MainActor`-
   isolated members in `SkipBridge.assumeMainActorUnchecked { ... }`
   (which is `MainActor.assumeIsolated`).
-- **Architecture: `UICore` shell + `AppCore` workhorse class.**
-  `UICore` (production, `@MainActor public struct`) owns `AppState`
-  and is the bridged public surface; copying the struct shares the
-  underlying `AppState` and `AppCore` references, so `@State` in
-  `RootView` is still the single owning location. `AppCore` is a
-  non-`Sendable` `final class` — explicitly *not* an actor. Its
-  async methods carry `isolation: isolated (any Actor)? = #isolation`
-  (SE-0420) and inherit the caller's isolation statically; when
-  called from `UICore` they run on `MainActor` and access the
-  non-`Sendable` `state` directly via property access (no shim).
-  The long-lived `searchQuery` listener Task is spawned via
-  `isolatedTask` (a free helper using `sending @isolated(any)`,
-  SE-0431 + SE-0430), the only construction that can capture
-  non-`Sendable` `self` into an unstructured Task while preserving
-  the caller's actor.
+- **Architecture: module-level globals + `AppCore` workhorse actor.**
+  `Core.swift` declares `@MainActor public let appState`, `commands`,
+  and the `sendEvent` / `sendEventAsync` free functions — Swift's
+  thread-safe one-time init guarantees a single instance per process.
+  `AppCore` is an `actor` whose `unownedExecutor` borrows MainActor's
+  (SE-0392), so it stays in MainActor's isolation region; the
+  non-Sendable `AppState` reaches the actor via one transient
+  `nonisolated(unsafe)` rebind at construction (SE-0414 region
+  isolation makes this sound). The long-lived `searchQuery` listener
+  Task is spawned from `AppCore`'s sync init body — Task.init's
+  `@_inheritActorContext` keeps the body in the actor's isolation
+  region.
 - **`sendEvent` is the single orchestration entry.** All four
   fetch flows (feed refresh / feed load-more / search refresh /
   search load-more) plus `toggleRead` / `openStory` live inline as
   switch arms in `AppCore.sendEvent(_:)`. The intentional duplication
   is the point — each arm reads top-to-bottom for its event with
   no helper jumps. The one method that survives outside `sendEvent`
-  is `scheduleSearchFetch`, kept private because nesting
-  `isolatedTask` inside the listener's `@isolated(any)` body trips
-  SE-0461 region isolation; the method-level isolation parameter
-  is the load-bearing escape hatch.
+  is `scheduleSearchFetch`, kept private because the listener Task
+  invokes it on every keystroke.
 - **Tests substitute `TestCore` (per-instance `actor`).**
   Different `TestCore`s run on different executors so tests
   parallelise. `TestCore.run { ... }` is the Point-Free actor-run
@@ -261,8 +256,8 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   deinit` (SE-0371, Swift 6.2) that calls `appCore.shutdown()` —
   this breaks the `TaskRegistry → listener-Task → self` cycle when
   each test releases. (Requires macOS 15.4 floor for SE-0371;
-  iOS floor stays at 17 because production `UICore` is app-lifetime
-  and never deinits.)
+  iOS floor stays at 17 because the production `appCore` is
+  app-lifetime and never deinits.)
 
 ## Build & test
 

@@ -32,9 +32,9 @@ Both UIs render the same Swift `AppState` instance:
 
 ```kotlin
 // android-app — Compose reads the bridged class directly.
-val state = rememberCore().state
-TextField(value = state.searchQuery, onValueChange = { state.searchQuery = it })
-LazyColumn { items(state.feedStories.kotlin() as List<StoryRow>) { StoryRowView(it) } }
+import hacker.news.reader.appState
+TextField(value = appState.searchQuery, onValueChange = { appState.searchQuery = it })
+LazyColumn { items(appState.feedStories.kotlin() as List<StoryRow>) { StoryRowView(it) } }
 ```
 
 There is no hand-written JNI glue, no per-property thunk, no
@@ -47,10 +47,12 @@ the `// SKIP @bridgeMembers` markers on the Swift sources.
   Kotlin via the `skipstone` build plugin.
   - `HackerNews` — API client + entity types (`Client`, `Story`,
     `Page`). Self-contained Hacker News SDK; no app-level state.
-  - `HackerNewsReader` — reducer + state (`AppCore`, `UICore`,
-    `AppState`, `StoryRow`, `LoadableStories`). Depends on
-    `HackerNews`. Public product consumed by iOS; Skip transitively
-    packages `HackerNews` into the AAR set.
+  - `HackerNewsReader` — reducer + state (`AppCore`, `AppState`,
+    `StoryRow`, `LoadableStories`) and the bridged module surface
+    in `Core.swift` (module-level `appState`, `commands`, `sendEvent`,
+    `sendEventAsync`). Depends on `HackerNews`. Public product
+    consumed by iOS; Skip transitively packages `HackerNews` into the
+    AAR set.
 - `ios-app/` — SwiftUI app generated from `project.yml` via
   [`xcodegen`](https://github.com/yonaskolb/XcodeGen). Imports
   `HackerNewsReader` directly.
