@@ -10,25 +10,15 @@ import FoundationNetworking
 /// run isolated to the same actor as the host — MainActor in
 /// production (`Core.swift`) or a per-test executor in `TestCore`.
 ///
-/// Forwarding `AppState` from the host into this actor uses one
-/// transient `nonisolated(unsafe) let` at the host's init call
-/// site — both references stay in the same isolation region
-/// (SE-0414), so nothing inside AppCore needs `nonisolated(unsafe)`.
-/// Tasks spawned inside AppCore methods inherit this actor via the
-/// implicit `self` references in their bodies (Task.init's built-in
-/// `@_inheritActorContext`), so each fetch Task reads and writes
-/// `state` directly — one Task per fetch carries the whole flow
-/// (debounced sleep → network → commit / error).
+/// AppState is handed in via one transient `nonisolated(unsafe) let`
+/// at the host's init site; SE-0414 region isolation keeps both
+/// references in the same region. Tasks spawned inside methods
+/// inherit isolation via `@_inheritActorContext` on `Task.init`.
 ///
-/// The long-running search-query listener is bootstrapped from
-/// `init` via a `(isolated AppCore) -> Void` closure — Task spawned
-/// in a sync init body doesn't inherit actor isolation, so the
-/// isolated-parameter closure is the route that lets the listener
-/// reach `state` and `tasks` without going through `await`. The
-/// debounced search-fetch flow lives inline inside that listener;
-/// an earlier `final class` topology factored it out as
-/// `scheduleSearchFetch` to work around an SE-0461 region-isolation
-/// hole that no longer applies under the actor model.
+/// The search-query listener is bootstrapped from `init` via an
+/// isolated-parameter local function — a Task spawned in a sync
+/// init body doesn't inherit actor isolation, so the isolated
+/// parameter is what re-establishes it.
 ///
 /// Not bridged to Kotlin; the module-level `sendEvent` /
 /// `sendEventAsync` / `commands` in `Core.swift` are the bridged
@@ -87,18 +77,10 @@ actor AppCore {
                         continue
                     }
 
-                    // Fire-and-forget debounced search. The Task carries
-                    // the whole flow — sleep, fetch, commit — so a
-                    // newer keystroke (or clearSearch) cancelling the
-                    // slot drops both the network call and the post-
-                    // await commit. The `try Task.checkCancellation()`
-                    // after the await closes the race where the fetch
-                    // returns successfully but a cancellation lands
-                    // before the commit runs.
                     tasks[.searchMore] = nil
-                    // Skip no-op writes during keystroke bursts —
-                    // re-firing @Observable notifications would trigger
-                    // SwiftUI / Compose recomposition per character.
+                    // @Observable re-fires notifications on equal writes;
+                    // skip the no-op writes to avoid per-character
+                    // recomposition during keystroke bursts.
                     if state.searchLoadMoreStatus != LoadStatus() {
                         state.searchLoadMoreStatus = LoadStatus()
                     }
@@ -129,12 +111,9 @@ actor AppCore {
     }
 
     /// Single entry point for every user-driven mutation. Each arm
-    /// holds the entire flow for its event — the explicit
-    /// refresh/loadMore duplication is the point: each path reads
-    /// top-to-bottom without jumping between helpers. Fetch arms
-    /// spawn one Task that does the network call + commit, register
-    /// it in the slot for cancellation, and await its completion so
-    /// `.refreshable` consumers see the spinner hold.
+    /// inlines its full flow rather than sharing helpers — explicit
+    /// duplication beats jumping between branches. Fetch arms await
+    /// `task.value` so `.refreshable` holds the spinner.
     func sendEvent(_ event: AppEvent) async {
         switch event {
 
@@ -153,13 +132,9 @@ actor AppCore {
             }
 
         case .refresh:
-            // Feed refresh — page 0. Always refreshes the feed; the
-            // only UI surface that fires `.refresh` is the feed's
-            // pull-to-refresh (`.refreshable` on iOS, `PullToRefreshBox`
-            // on Android), neither of which is reachable while a search
-            // is active. Supersedes any in-flight feed load-more
-            // (otherwise its appended page would land on the snapshot
-            // we're about to replace) and resets its status.
+            // Pull-to-refresh only; not reachable while search is active.
+            // Cancel any in-flight load-more so its appended page doesn't
+            // land on the snapshot we're about to replace.
             tasks[.feedMore] = nil
             state.feedLoadMoreStatus = LoadStatus()
             state.feedInitialStatus.startLoading()
@@ -238,18 +213,15 @@ actor AppCore {
         tasks.cancelAll()
     }
 
-    /// Sleep for `debounce` (if set), then run `body`. Captures only
-    /// Sendable values via the actor's `client` and `clock` lets.
+    /// Sleep for `debounce` (if set), then run `body`.
     ///
-    /// **`try` on the sleep is load-bearing.** A test-mock that
-    /// doesn't honor cancellation would otherwise fall through to the
-    /// network call and commit stale data; the throw propagating is
-    /// what makes cancel-and-replace robust against any client impl.
+    /// `try` on the sleep is load-bearing — a test-mock that doesn't
+    /// honor cancellation would otherwise fall through and commit
+    /// stale data.
     ///
-    /// **`URLError(.cancelled)` → `CancellationError`.** `URLSession`
-    /// surfaces task cancellation as `URLError.cancelled`, which would
-    /// otherwise be reported as a transient error rather than a silent
-    /// supersede.
+    /// `URLSession` surfaces task cancellation as `URLError.cancelled`;
+    /// the `catch` rethrows it as `CancellationError` so callers match
+    /// it the same way as in-Swift cancellation.
     private func fetch(
         debounce: Duration?,
         body: @Sendable (Client) async throws -> Page
