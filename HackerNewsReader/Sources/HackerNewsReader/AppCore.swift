@@ -47,7 +47,8 @@ actor AppCore {
     }
 
     enum TaskID { case feed, feedMore, search, searchMore, searchListener }
-    private var tasks = TaskRegistry<TaskID>()
+    typealias Tasks = TaskRegistry<TaskID>
+    private var tasks = Tasks()
 
     /// Debounce window between a `state.searchQuery` write and the
     /// resulting fetch. Static so tests can name the same duration
@@ -69,12 +70,11 @@ actor AppCore {
         self.now = now
         self.isolation = isolation
 
-        let asyncSetup: @Sendable (isolated AppCore) -> Void = { core in
+        Task { await setupListeners(self) }
+
+        @Sendable func setupListeners(_ core: isolated AppCore) async {
             let state = core.state
-            var tasks: TaskRegistry<TaskID> {
-                get { core.tasks }
-                set { core.tasks = newValue }
-            }
+            var tasks: Tasks { get { core.tasks } set { core.tasks = newValue } }
 
             tasks[.searchListener] = Task {
                 for await query in state.searchQueryChanges {
@@ -126,8 +126,6 @@ actor AppCore {
                 }
             }
         }
-
-        Task { await asyncSetup(self) }
     }
 
     /// Single entry point for every user-driven mutation. Each arm
