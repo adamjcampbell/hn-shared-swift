@@ -8,7 +8,8 @@ import FoundationNetworking
 /// Event-handling workhorse. An `actor` whose `unownedExecutor`
 /// borrows the host's (SE-0392), so all AppCore methods and Tasks
 /// run isolated to the same actor as the host — MainActor in
-/// production (`Core.swift`) or a per-test executor in `TestCore`.
+/// production (constructed by `makeAppCore()`) or a per-test executor
+/// in `TestCore`.
 ///
 /// AppState is handed in via one transient `nonisolated(unsafe) let`
 /// at the host's init site; SE-0414 region isolation keeps both
@@ -20,9 +21,8 @@ import FoundationNetworking
 /// init body doesn't inherit actor isolation, so the isolated
 /// parameter is what re-establishes it.
 ///
-/// Not bridged to Kotlin; the module-level `sendEvent` /
-/// `sendEventAsync` / `commands` in `Core.swift` are the bridged
-/// surface.
+/// Internal: not bridged, not exposed. See `Core.swift` for the
+/// public surface.
 actor AppCore {
     let state: AppState
 
@@ -205,10 +205,10 @@ actor AppCore {
         }
     }
 
-    /// Test-only teardown — the production `appCore` is app-lifetime
-    /// (constructed lazily in `Core.swift`). Without this, the
-    /// TaskRegistry → listener-Task → self cycle keeps the actor
-    /// alive past test scope.
+    /// Test-only teardown — the production `AppCore` is app-lifetime
+    /// (held by the `SendAppEvent` inside `AppCoreHandle`). Without
+    /// this, the TaskRegistry → listener-Task → self cycle keeps the
+    /// actor alive past test scope.
     func shutdown() {
         tasks.cancelAll()
     }

@@ -7,12 +7,12 @@ import Foundation
 /// sheet on iOS, a Chrome Custom Tab on Android) and whose lifetime is
 /// not state we want to model in `AppState`.
 ///
-/// Delivered through the module-level
-/// `commands: AsyncStream<AppCommand>` (see `Core.swift`). iOS consumes
-/// it with `for await` from a `.task` modifier on a long-lived view. On
-/// Android, SkipFuse bridges `AsyncStream<T>` to
-/// `kotlinx.coroutines.flow.Flow<T>` via `KotlinConverting`, so a
-/// Composable can `commands.kotlin().collect { ... }`.
+/// Delivered through `AppCoreHandle.commands` (returned by
+/// `makeAppCore()`). iOS consumes it with `for await` from a `.task`
+/// modifier on a long-lived view. On Android, SkipFuse bridges
+/// `AsyncStream<T>` to `kotlinx.coroutines.flow.Flow<T>` via
+/// `KotlinConverting`, so a Composable can
+/// `core.commands.kotlin().collect { ... }`.
 ///
 /// **Why not call this an `Effect`?** TCA-style architectures reserve
 /// "Effect" for reducer-spawned async work that produces more actions,
