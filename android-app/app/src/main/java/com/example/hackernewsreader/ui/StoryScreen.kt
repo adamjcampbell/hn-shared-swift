@@ -404,14 +404,15 @@ private fun StoryRowView(
         if (story.isRead) R.string.mark_unread_action else R.string.mark_read_action,
     )
     val currentOnToggle by rememberUpdatedState(onToggle)
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
+    val dismissState = rememberSwipeToDismissBoxState()
+    LaunchedEffect(dismissState) {
+        snapshotFlow { dismissState.currentValue }.collect { value ->
             if (value == SwipeToDismissBoxValue.StartToEnd) {
                 currentOnToggle()
+                dismissState.reset()
             }
-            false
-        },
-    )
+        }
+    }
 
     SwipeToDismissBox(
         state = dismissState,
