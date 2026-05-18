@@ -2,10 +2,13 @@ import SwiftUI
 import HackerNewsReader
 
 struct RootView: View {
+    let core: AppCoreHandle
     @State private var presented: IdentifiedURL?
 
     var body: some View {
-        NavigationStack { StoriesScreen(state: appState) }
+        NavigationStack { StoriesScreen() }
+            .environment(core.state)
+            .environment(\.sendEvent, core.sendEvent)
             .sheet(item: $presented) { item in
                 SafariView(url: item.url)
                     .ignoresSafeArea()
@@ -14,7 +17,7 @@ struct RootView: View {
                 // Long-lived consumer of AppCommand. The sheet binding
                 // lives here in the SwiftUI tree; user-driven dismissal
                 // sets `presented = nil` without touching the core.
-                for await command in commands {
+                for await command in core.commands {
                     switch command {
                     case .presentURL(let urlString):
                         presented = IdentifiedURL(urlString)
@@ -25,34 +28,31 @@ struct RootView: View {
 }
 
 private struct StoriesScreen: View {
-    @Bindable var state: AppState
+    @Environment(AppState.self) private var state
+    @Environment(\.sendEvent) private var sendEvent
 
     var body: some View {
-        StoriesContent(state: state)
-            // Direct two-way binding into the @Observable state. Writes
-            // through `$state.searchQuery` go through `AppState`'s
-            // synthesized setter; the listener Task inside `AppCore`
-            // observes the willSet and fires a debounced fetch. No
-            // closure-shim Binding(get:set:) — that pattern destroys
-            // the Hashable identity SwiftUI's animation/transaction
-            // tracking relies on (Point-Free #289).
+        @Bindable var state = state
+        StoriesContent()
+            // Writes flow through AppState's synthesized setter; the
+            // listener Task inside AppCore observes the willSet and
+            // fires a debounced fetch.
             .searchable(text: $state.searchQuery, prompt: "Search Hacker News")
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .task {
                 // One-shot first-appear fetch.
-                await sendEventAsync(.refresh)
+                await sendEvent.run(.refresh)
             }
             .navigationTitle("Hacker News")
     }
 }
 
 private struct StoriesContent: View {
-    let state: AppState
     @Environment(\.isSearching) private var isSearching
 
     var body: some View {
-        StoriesList(state: state)
+        StoriesList()
             .overlay {
                 // While the search field is active, occlude the front-page
                 // surface (HeaderCard + full list) with the search
@@ -61,7 +61,7 @@ private struct StoriesContent: View {
                 // cycle — and `state.feedStories` survives untouched
                 // because the search fetch writes to its own searchIds.
                 if isSearching {
-                    SearchResults(state: state)
+                    SearchResults()
                 }
             }
             .scrollDismissesKeyboard(.immediately)
@@ -69,7 +69,7 @@ private struct StoriesContent: View {
 }
 
 private struct SearchResults: View {
-    let state: AppState
+    @Environment(AppState.self) private var state
 
     var body: some View {
         List {
@@ -104,7 +104,8 @@ private struct SearchResults: View {
 }
 
 private struct StoriesList: View {
-    let state: AppState
+    @Environment(AppState.self) private var state
+    @Environment(\.sendEvent) private var sendEvent
 
     var body: some View {
         List {
@@ -124,12 +125,13 @@ private struct StoriesList: View {
             }
         }
         .listStyle(.insetGrouped)
-        .refreshable { await sendEventAsync(.refresh) }
+        .refreshable { await sendEvent.run(.refresh) }
     }
 }
 
 private struct LoadMoreRow: View {
     let status: LoadStatus
+    @Environment(\.sendEvent) private var sendEvent
 
     // Forces a fresh `ProgressView` instance on every row appearance.
     // SwiftUI's `ProgressView` wraps `UIActivityIndicatorView`, which
@@ -244,6 +246,7 @@ private struct SearchHeader: View {
 
 private struct StoryRowView: View {
     let story: StoryRow
+    @Environment(\.sendEvent) private var sendEvent
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {

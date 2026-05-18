@@ -1,10 +1,13 @@
 import SwiftUI
+import HackerNewsReader
 
 @main
 struct HackerNewsReaderApp: App {
+    @State private var core = makeAppCore()
+
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView(core: core)
         }
     }
 }
