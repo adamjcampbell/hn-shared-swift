@@ -38,13 +38,19 @@ bridge for Android); Xcode prompts for plugin approval otherwise.
 Source files in `HackerNewsReader/`:
 
 - **`HackerNewsReaderApp.swift`** — the `@main` SwiftUI `App` struct.
-  Wraps `RootView` in a `WindowGroup`.
-- **`RootView.swift`** — the view tree. Descendants read the module-
-  level `appState` directly from `HackerNewsReader` and call the
-  bridged `sendEvent(_:)` (sync, fire-and-forget) or
-  `await sendEventAsync(_:)` (awaitable, for `.refreshable`). `AppState`
-  is the `@Observable final class`; descendants take it as a parameter
-  and rely on per-property tracking for invalidation.
+  Calls `makeAppCore()` once via `@State` and hands the resulting
+  `AppCoreHandle` to `RootView`.
+- **`RootView.swift`** — the view tree. Installs `AppState` and the
+  `\.sendEvent` capability action into the SwiftUI environment;
+  descendants read state via `@Environment(AppState.self)` and call
+  events via `@Environment(\.sendEvent)` — `sendEvent(.foo)` for
+  fire-and-forget (SwiftUI `DismissAction`-style `callAsFunction`),
+  `await sendEvent.run(.foo)` for awaitable (`.refreshable`,
+  one-shot `.task`).
+- **`EnvironmentExtensions.swift`** — the `@Entry var sendEvent`
+  environment key. `SendAppEvent` is the bridged Equatable capability
+  struct from `HackerNewsReader`; the default instance holds a `nil`
+  `AppCore`, so calls are no-ops in previews.
 - **`SafariView.swift`** — `SFSafariViewController` wrapper for the
   story-detail sheet.
 
@@ -56,8 +62,10 @@ Performance corollaries reflected in the source:
   per-section skip behaviour. Each subview is a real `struct … : View`.
 - With `AppState` as `@Observable`, the macro instruments each property
   accessor — a body that reads `state.searchQuery` only re-runs when
-  `searchQuery` changes. Pass `state: AppState` and let SwiftUI track
-  per property; reserve narrow value-type inputs for leaves.
+  `searchQuery` changes. The class itself lives in the SwiftUI
+  environment; views pull it via `@Environment(AppState.self)` and let
+  per-property tracking handle invalidation. Reserve narrow value-type
+  inputs (e.g. `let status: LoadStatus`) for leaves.
 - Two-state surfaces use `.overlay { if cond { … } }`, not top-level
   `if/else`, so the underlying view's identity, scroll position, and
   internal state survive the alternate state. `.background(.background)`

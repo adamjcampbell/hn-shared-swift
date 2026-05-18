@@ -16,8 +16,10 @@ The Swift package splits into two targets:
 - `HackerNews` — API client + entity types (`Client`, `Story`, `Page`).
 - `HackerNewsReader` — reducer + state (`AppCore`, `AppState`,
   `StoryRow`, `LoadStatus`, `LoadedStories`) and the bridged module
-  surface in `Core.swift` (module-level `appState`, `commands`,
-  `sendEvent`, `sendEventAsync`). Depends on `HackerNews`.
+  surface: `makeAppCore()` returns an `AppCoreHandle` of
+  (`state`, `commands`, `sendEvent`); `SendAppEvent` is the
+  Equatable capability struct exposing `send(_:)` and
+  `suspend run(_:)`. Depends on `HackerNews`.
 
 The migration away from a hand-written `swift-java jextract` bridge is
 documented in [`docs/skip-fuse-adoption.md`](docs/skip-fuse-adoption.md).
@@ -29,17 +31,20 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   drives both platforms; one `AppEvent` enum carries every user-driven
   mutation.
 - iOS: direct `@Observable` + SwiftUI; no bridge in the iOS path.
-  `RootView` reads the module-level `appState` and `commands` from
-  `HackerNewsReader` directly. Descendants take `AppState` (the
-  `@Observable final class`) as a parameter and call the bridged
-  `sendEvent(_:)` / `sendEventAsync(_:)` free functions.
-- Android: bridged via SkipFuse. The Compose UI reads `appState`
-  directly — the bridging plugin emits a Kotlin `class AppState` whose
-  property getters JNI-call into the Swift `@Observable`'s
-  ObservationRegistrar, which SkipFuse routes through Compose's
-  `MutableStateBacking` so reads register with the snapshot system and
-  mutations recompose. Events go back through the bridged
-  `sendEvent` / `sendEventAsync` package-scope functions.
+  `HackerNewsReaderApp` holds the `AppCoreHandle` via `@State` and
+  hands it to `RootView`, which installs the `state` and the
+  `\.sendEvent` capability action into the SwiftUI environment.
+  Descendants read state via `@Environment(AppState.self)` and call
+  events via `@Environment(\.sendEvent)` — `sendEvent(.foo)` for
+  fire-and-forget, `await sendEvent.run(.foo)` for awaitable.
+- Android: bridged via SkipFuse. `App.onCreate` calls `makeAppCore()`
+  once and stashes the `AppCoreHandle` for the process lifetime;
+  `MainActivity` reads it off the `Application` and passes it to
+  `StoryScreen`. Compose reads `core.state` directly — the bridging
+  plugin emits a Kotlin `class AppState` whose property getters
+  JNI-call into the Swift `@Observable`'s ObservationRegistrar, which
+  SkipFuse routes through Compose's `MutableStateBacking`. Events go
+  back through `core.sendEvent.send(...)` / `core.sendEvent.run(...)`.
 - Networking lives in the `HackerNews` target. `Client` is a `Sendable`
   struct with two `@Sendable` closure properties (`frontPage`,
   `search`). Tests inject closures directly. Production callers use
@@ -70,9 +75,11 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   loading lifecycle. Reusable in isolation; the test target
   `HackerNewsTests` exercises it without touching the reader.
 - **`HackerNewsReader` owns the reducer and presentation lifecycle.**
-  `AppCore` (workhorse `actor`), `Core.swift` (the bridged module
-  surface — `appState`, `commands`, `sendEvent`, `sendEventAsync`),
-  `AppState` (`@Observable` flat mega-struct bag), `StoryRow` (UI row
+  `AppCore` (workhorse `actor`, internal), `Core.swift` (the bridged
+  factory `makeAppCore()` returning `AppCoreHandle`),
+  `SendAppEvent` (Equatable capability struct exposing `send(_:)` /
+  `suspend run(_:)`), `AppState` (`@Observable` flat mega-struct bag),
+  `StoryRow` (UI row
   = `Story + isRead`), and the two surviving small value types
   `LoadStatus` + `LoadedStories`. `AppState` carries six flat
   per-axis fields (`feedLoaded`/`feedInitialStatus`/`feedLoadMoreStatus`
@@ -110,24 +117,29 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   is a test seam — its parameter types (`Client` closure-bag,
   `any Clock<Duration>` existential) don't bridge, and it's
   unmarked.
-- **`AppCore` (workhorse actor) is intentionally not bridged.**
-  It's internal coordination — `sendEvent`, `makeFetchTask`, the
-  listener Task spawned from init with the debounced search-fetch
-  flow inlined into its loop. The bridged surface lives at module
-  scope in `Core.swift`: `appState`, `commands`, `sendEvent`, and
-  `sendEventAsync`.
+- **`AppCore` (workhorse actor) is intentionally not bridged and
+  internal.** It's internal coordination — `sendEvent`,
+  `makeFetchTask`, the listener Task spawned from init with the
+  debounced search-fetch flow inlined into its loop. The bridged
+  surface lives on `AppCoreHandle` (state + commands + sendEvent
+  capability) returned from `makeAppCore()`, with `SendAppEvent`
+  holding the only out-of-module reference to the `AppCore`.
 
 ### iOS view layer
 
 (Enforced by `ios-app/HackerNewsReader/RootView.swift`.)
 
-- Views accept `AppState` (the `@Observable final class`) as a
-  parameter; they never own the core itself. The root view passes
-  `appState` (imported from `HackerNewsReader`) into the tree.
-- Events flow back by calling `sendEvent(_:)` (sync, fire-and-forget)
-  or `await sendEventAsync(_:)` (awaitable, for `.refreshable`)
-  directly — both are module-level functions on the
-  `HackerNewsReader` import, no `@Environment` plumbing.
+- Views read `AppState` (the `@Observable final class`) via
+  `@Environment(AppState.self)`; `RootView` installs it from the
+  `AppCoreHandle` owned by `HackerNewsReaderApp`.
+- Events flow back through `@Environment(\.sendEvent)`, a
+  `SendAppEvent` capability action installed alongside the state.
+  `sendEvent(.foo)` is fire-and-forget (SwiftUI `DismissAction`-style
+  `callAsFunction`); `await sendEvent.run(.foo)` is awaitable
+  (`.refreshable`, one-shot `.task`). The wrapper is `Equatable` via
+  `===` on its held `AppCore?` — without it, raw closures in
+  `EnvironmentValues` would defeat SwiftUI's environment diff and
+  invalidate every descendant on each parent body re-eval.
 - Don't write `private var foo: some View` on a View. SwiftUI can't
   diff computed properties — they inline into the parent body and
   lose per-section skip behaviour. Extract into a private
@@ -235,18 +247,20 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   Android too. `skipstone` wraps cdecl thunks for `@MainActor`-
   isolated members in `SkipBridge.assumeMainActorUnchecked { ... }`
   (which is `MainActor.assumeIsolated`).
-- **Architecture: module-level globals + `AppCore` workhorse actor.**
-  `Core.swift` declares `@MainActor public let appState`, `commands`,
-  and the `sendEvent` / `sendEventAsync` free functions — Swift's
-  thread-safe one-time init guarantees a single instance per process.
-  `AppCore` is an `actor` whose `unownedExecutor` borrows MainActor's
-  (SE-0392), so it stays in MainActor's isolation region; the
-  non-Sendable `AppState` reaches the actor via one transient
-  `nonisolated(unsafe)` rebind at construction (SE-0414 region
-  isolation makes this sound). The long-lived `searchQuery` listener
-  Task is spawned from `AppCore`'s sync init body — Task.init's
-  `@_inheritActorContext` keeps the body in the actor's isolation
-  region.
+- **Architecture: `makeAppCore()` factory + `AppCore` workhorse
+  actor.** `Core.swift` declares `@MainActor public func makeAppCore()
+  -> AppCoreHandle`, returning a struct of (`state`, `commands`,
+  `sendEvent`). Hosts call it once at app scope (iOS: `@State` on
+  `App`; Android: `Application.onCreate`) and hold the handle for the
+  process lifetime — the `AppCore` lives as long as the
+  `SendAppEvent` inside the handle holds it. `AppCore` is an `actor`
+  whose `unownedExecutor` borrows MainActor's (SE-0392), so it stays
+  in MainActor's isolation region; the non-Sendable `AppState`
+  reaches the actor via one transient `nonisolated(unsafe)` rebind
+  inside `makeAppCore()` (SE-0414 region isolation makes this sound).
+  The long-lived `searchQuery` listener Task is spawned from
+  `AppCore`'s sync init body — Task.init's `@_inheritActorContext`
+  keeps the body in the actor's isolation region.
 - **`sendEvent` is the single orchestration entry.** All four
   fetch flows (feed refresh / feed load-more / search refresh /
   search load-more) plus `toggleRead` / `openStory` live inline as

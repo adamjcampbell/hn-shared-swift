@@ -33,10 +33,22 @@ Both UIs render the same Swift `AppState` instance:
 ```
 
 ```kotlin
-// android-app — Compose reads the bridged class directly.
-import hacker.news.reader.appState
-TextField(value = appState.searchQuery, onValueChange = { appState.searchQuery = it })
-LazyColumn { items(appState.feedStories.kotlin() as List<StoryRow>) { StoryRowView(it) } }
+// android-app — App.onCreate calls makeAppCore() once; Compose reads
+// the bridged class through core.state.
+class App : Application() {
+    lateinit var core: AppCoreHandle
+    override fun onCreate() {
+        super.onCreate()
+        ProcessInfo.launch(applicationContext)
+        core = makeAppCore()
+    }
+}
+
+@Composable fun StoryScreen(core: AppCoreHandle) {
+    val state = core.state
+    TextField(value = state.searchQuery, onValueChange = { state.searchQuery = it })
+    LazyColumn { items(state.feedStories.kotlin() as List<StoryRow>) { StoryRowView(it) } }
+}
 ```
 
 There is no hand-written JNI glue, no per-property thunk, no
@@ -49,12 +61,14 @@ the `// SKIP @bridgeMembers` markers on the Swift sources.
   Kotlin via the `skipstone` build plugin.
   - `HackerNews` — API client + entity types (`Client`, `Story`,
     `Page`). Self-contained Hacker News SDK; no app-level state.
-  - `HackerNewsReader` — reducer + state (`AppCore`, `AppState`,
-    `StoryRow`, `LoadStatus`, `LoadedStories`) and the bridged module
-    surface in `Core.swift` (module-level `appState`, `commands`,
-    `sendEvent`, `sendEventAsync`). Depends on `HackerNews`. Public
-    product consumed by iOS; Skip transitively packages `HackerNews`
-    into the AAR set.
+  - `HackerNewsReader` — reducer + state (`AppCore` (internal),
+    `AppState`, `StoryRow`, `LoadStatus`, `LoadedStories`) and the
+    bridged factory `makeAppCore()` returning an `AppCoreHandle` of
+    (`state`, `commands`, `sendEvent`). `SendAppEvent` is the
+    Equatable capability struct exposing `send(_:)` and
+    `suspend run(_:)`. Depends on `HackerNews`. Public product
+    consumed by iOS; Skip transitively packages `HackerNews` into
+    the AAR set.
 - `ios-app/` — SwiftUI app generated from `project.yml` via
   [`xcodegen`](https://github.com/yonaskolb/XcodeGen). Imports
   `HackerNewsReader` directly.
