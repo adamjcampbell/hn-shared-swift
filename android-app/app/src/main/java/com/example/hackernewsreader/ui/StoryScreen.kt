@@ -60,32 +60,31 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import hacker.news.reader.AppCommand
+import hacker.news.reader.AppCoreHandle
 import hacker.news.reader.AppEvent
 import hacker.news.reader.AppState
 import hacker.news.reader.LoadStatus
+import hacker.news.reader.SendAppEvent
 import hacker.news.reader.StoryRow
-import hacker.news.reader.appState
-import hacker.news.reader.commands
-import hacker.news.reader.sendEvent
-import hacker.news.reader.sendEventAsync
 import com.example.hackernewsreader.R
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StoryScreen() {
+fun StoryScreen(core: AppCoreHandle) {
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val sendEvent = core.sendEvent
 
     // Initial fetch on first composition.
     LaunchedEffect(Unit) {
-        sendEvent(AppEvent.refresh)
+        sendEvent.send(AppEvent.refresh)
     }
 
     // One-shot commands from the core.
     LaunchedEffect(Unit) {
-        commands.kotlin().collect { command ->
+        core.commands.kotlin().collect { command ->
             when (command) {
                 is AppCommand.PresentURLCase -> context.launchCustomTab(command.value)
             }
@@ -105,11 +104,8 @@ fun StoryScreen() {
         },
     ) { innerPadding ->
         StoriesContent(
-            state = appState,
-            onRefresh = { sendEventAsync(AppEvent.refresh) },
-            onLoadMore = { sendEventAsync(AppEvent.loadMore) },
-            onToggleRead = { id -> sendEvent(AppEvent.toggleRead(id)) },
-            onOpenStory = { id -> sendEvent(AppEvent.openStory(id)) },
+            state = core.state,
+            sendEvent = sendEvent,
             modifier = Modifier
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
@@ -122,10 +118,7 @@ fun StoryScreen() {
 @Composable
 private fun StoriesContent(
     state: AppState,
-    onRefresh: suspend () -> Unit,
-    onLoadMore: suspend () -> Unit,
-    onToggleRead: (String) -> Unit,
-    onOpenStory: (String) -> Unit,
+    sendEvent: SendAppEvent,
     modifier: Modifier = Modifier,
 ) {
     // SkipFuse routes @Observable property reads through Compose's snapshot
@@ -172,15 +165,15 @@ private fun StoriesContent(
     val feedListState = rememberLazyListState()
     val searchListState = rememberLazyListState()
 
-    val pullToRefresh: () -> Unit = { scope.launch { onRefresh() } }
-    val triggerLoadMore: () -> Unit = { scope.launch { onLoadMore() } }
+    val pullToRefresh: () -> Unit = { scope.launch { sendEvent.run(AppEvent.refresh) } }
+    val triggerLoadMore: () -> Unit = { scope.launch { sendEvent.run(AppEvent.loadMore) } }
 
     val shouldLoadMoreFeed by remember(feedListState) {
         derivedStateOf { feedListState.isNearEnd(threshold = 3) }
     }
     LaunchedEffect(shouldLoadMoreFeed, feedHasMore) {
         if (shouldLoadMoreFeed && feedHasMore) {
-            onLoadMore()
+            sendEvent.run(AppEvent.loadMore)
         }
     }
 
@@ -189,7 +182,7 @@ private fun StoriesContent(
     }
     LaunchedEffect(shouldLoadMoreSearch, searchHasMore) {
         if (shouldLoadMoreSearch && searchHasMore) {
-            onLoadMore()
+            sendEvent.run(AppEvent.loadMore)
         }
     }
 
@@ -238,7 +231,7 @@ private fun StoriesContent(
                                 loadError = feedLoadError,
                             )
                         }
-                        storyRows(feedStories, onToggleRead, onOpenStory)
+                        storyRows(feedStories, sendEvent)
                         if (feedHasMore) {
                             item(key = "load-more") {
                                 LoadMoreRow(
@@ -266,7 +259,7 @@ private fun StoriesContent(
                             error = searchLoadError,
                         )
                     }
-                    storyRows(searchResults, onToggleRead, onOpenStory)
+                    storyRows(searchResults, sendEvent)
                     if (searchHasMore) {
                         item(key = "search-load-more") {
                             LoadMoreRow(
@@ -286,14 +279,13 @@ private fun StoriesContent(
 
 private fun LazyListScope.storyRows(
     stories: List<StoryRow>,
-    onToggleRead: (String) -> Unit,
-    onOpenStory: (String) -> Unit,
+    sendEvent: SendAppEvent,
 ) {
     items(stories, key = { it.id }) { story ->
         StoryRowView(
             story = story,
-            onToggle = { onToggleRead(story.id) },
-            onOpen = { onOpenStory(story.id) },
+            onToggle = { sendEvent.send(AppEvent.toggleRead(story.id)) },
+            onOpen = { sendEvent.send(AppEvent.openStory(story.id)) },
         )
     }
 }
