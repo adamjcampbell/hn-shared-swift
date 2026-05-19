@@ -278,19 +278,3 @@ actor AppCore {
         }
     }
 }
-
-extension AppCore {
-    /// Batches multiple reads and `sendEvent(_:)` calls into one
-    /// isolation hop with a consistent snapshot — no other Task can
-    /// interleave between statements inside the block.
-    ///
-    /// - Parameter body: Closure that runs while isolated to the
-    ///   actor; receives `self` as its only argument.
-    /// - Returns: Whatever `body` returns.
-    /// - Throws: Whatever `body` throws.
-    func run<R, Failure: Error>(
-        _ body: sending @Sendable (isolated AppCore) async throws(Failure) -> R
-    ) async throws(Failure) -> R {
-        try await body(self)
-    }
-}
