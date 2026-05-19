@@ -33,12 +33,7 @@ public struct AppCoreHandle {
         let value: Value; init(_ value: Value) { self.value = value }
     }
 
-    let appCore = AppCore(
-        state: AppState(),
-        client: Client(),
-        clock: ContinuousClock(),
-        isolation: MainActor.shared
-    )
+    let appCore = AppCore(isolation: MainActor.shared)
     appCore.assumeIsolated { $0.bind() }
 
     var appState: AppState { appCore.assumeIsolated { Unchecked($0.state) }.value }
@@ -87,9 +82,9 @@ actor AppCore {
     static let searchDebounce: Duration = .milliseconds(250)
 
     init(
-        state: AppState,
-        client: Client,
-        clock: any Clock<Duration>,
+        state: AppState = AppState(),
+        client: Client = Client(),
+        clock: any Clock<Duration> = ContinuousClock(),
         now: @escaping @Sendable () -> Date = Date.init,
         isolation: any Actor
     ) {
