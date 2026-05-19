@@ -14,10 +14,10 @@ API](https://github.com/HackerNews/API)), search via the Algolia HN API
 
 The Swift package splits into two targets:
 - `HackerNews` — API client + entity types (`Client`, `Story`, `Page`).
-- `HackerNewsReader` — reducer + state (`AppCore`, `AppState`,
-  `StoryRow`, `LoadStatus`, `LoadedStories`) and the bridged module
-  surface: `makeAppCore()` returns an `AppCoreHandle` of
-  (`state`, `commands`, `sendEvent`); `SendAppEvent` is the
+- `HackerNewsReader` — reducer + state (`AppCore`, `AppEngine`,
+  `AppState`, `StoryRow`, `LoadStatus`, `LoadedStories`) and the
+  bridged module surface: `makeAppCore()` returns an `AppCore` handle
+  of (`state`, `commands`, `sendEvent`); `SendAppEvent` is the
   Equatable capability struct exposing `send(_:)` and
   `suspend run(_:)`. Depends on `HackerNews`.
 
@@ -27,18 +27,18 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 
 ## Goals
 
-- One Swift type (the `AppCore` workhorse actor in `HackerNewsReader`)
-  drives both platforms; one `AppEvent` enum carries every user-driven
-  mutation.
+- One Swift type (the `AppEngine` workhorse actor in
+  `HackerNewsReader`) drives both platforms; one `AppEvent` enum
+  carries every user-driven mutation.
 - iOS: direct `@Observable` + SwiftUI; no bridge in the iOS path.
-  `HackerNewsReaderApp` holds the `AppCoreHandle` via `@State` and
+  `HackerNewsReaderApp` holds the `AppCore` handle via `@State` and
   hands it to `RootView`, which installs the `state` and the
   `\.sendEvent` capability action into the SwiftUI environment.
   Descendants read state via `@Environment(AppState.self)` and call
   events via `@Environment(\.sendEvent)` — `sendEvent(.foo)` for
   fire-and-forget, `await sendEvent.run(.foo)` for awaitable.
 - Android: bridged via SkipFuse. `App.onCreate` calls `makeAppCore()`
-  once and stashes the `AppCoreHandle` for the process lifetime;
+  once and stashes the `AppCore` handle for the process lifetime;
   `MainActivity` reads it off the `Application` and passes it to
   `StoryScreen`. Compose reads `core.state` directly — the bridging
   plugin emits a Kotlin `class AppState` whose property getters
@@ -75,21 +75,22 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   loading lifecycle. Reusable in isolation; the test target
   `HackerNewsTests` exercises it without touching the reader.
 - **`HackerNewsReader` owns the reducer and presentation lifecycle.**
-  `AppCore` (workhorse `actor`, internal, with the bridged factory
-  `makeAppCore()` returning `AppCoreHandle` at the top of the same
-  file), `SendAppEvent` (Equatable capability struct exposing `send(_:)` /
-  `suspend run(_:)`), `AppState` (`@Observable` flat mega-struct bag),
-  `StoryRow` (UI row
-  = `Story + isRead`), and the two surviving small value types
-  `LoadStatus` + `LoadedStories`. `AppState` carries six flat
-  per-axis fields (`feedLoaded`/`feedInitialStatus`/`feedLoadMoreStatus`
-  and the search mirror) — the former `LoadableStories` wrapper was
-  dissolved because it was a medium-sized helper with three different
-  reader cadences and no operations of its own. `LoadStatus` and
+  `AppEngine` (workhorse `actor`, internal, with the bridged factory
+  `makeAppCore()` returning the `AppCore` handle at the top of the
+  same file), `SendAppEvent` (Equatable capability struct exposing
+  `send(_:)` / `suspend run(_:)`), `AppState` (`@Observable` flat
+  mega-struct bag), `StoryRow` (UI row = `Story + isRead`), and the
+  two surviving small value types `LoadStatus` + `LoadedStories`.
+  `AppState` carries six flat per-axis fields
+  (`feedLoaded`/`feedInitialStatus`/`feedLoadMoreStatus` and the
+  search mirror) — the former `LoadableStories` wrapper was dissolved
+  because it was a medium-sized helper with three different reader
+  cadences and no operations of its own. `LoadStatus` and
   `LoadedStories` earn their keep (operation repetition + temporal
-  access coupling + Carmack-lightweight). Mutators live on `AppCore`,
-  not on `AppState`. `HackerNewsReader` is the only public product in
-  `Package.swift`; iOS and Android consume one product.
+  access coupling + Carmack-lightweight). Mutators live on
+  `AppEngine`, not on `AppState`. `HackerNewsReader` is the only
+  public product in `Package.swift`; iOS and Android consume one
+  product.
 - **`AppEvent` (UI → core) and `AppCommand` (core → UI) follow CQRS
   vocabulary.** "Effect" is intentionally avoided so it stays free
   should we adopt a TCA-style reducer; `LaunchedEffect`/`SideEffect`
@@ -118,13 +119,13 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   that produces a Kotlin class with no field accessors (only
   `Identifiable.id` as `ObjectIdentifier`). Always use `@bridgeMembers`
   for whole-type bridging.
-- **`AppCore` (workhorse actor) is intentionally not bridged and
+- **`AppEngine` (workhorse actor) is intentionally not bridged and
   internal.** It's internal coordination — `sendEvent`, the private
   `fetch` helper, the listener Task spawned from init with the
   debounced search-fetch flow inlined into its loop. The bridged
-  surface lives on `AppCoreHandle` (state + commands + sendEvent
-  capability) returned from `makeAppCore()`, with `SendAppEvent`
-  holding the only out-of-module reference to the `AppCore`.
+  surface lives on `AppCore` (state + commands + sendEvent capability)
+  returned from `makeAppCore()`, with `SendAppEvent` holding the only
+  out-of-module reference to the `AppEngine`.
 
 ### iOS view layer
 
@@ -132,13 +133,13 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 
 - Views read `AppState` (the `@Observable final class`) via
   `@Environment(AppState.self)`; `RootView` installs it from the
-  `AppCoreHandle` owned by `HackerNewsReaderApp`.
+  `AppCore` handle owned by `HackerNewsReaderApp`.
 - Events flow back through `@Environment(\.sendEvent)`, a
   `SendAppEvent` capability action installed alongside the state.
   `sendEvent(.foo)` is fire-and-forget (SwiftUI `DismissAction`-style
   `callAsFunction`); `await sendEvent.run(.foo)` is awaitable
   (`.refreshable`, one-shot `.task`). The wrapper is `Equatable` via
-  `===` on its held `AppCore?` — without it, raw closures in
+  `===` on its held `AppEngine?` — without it, raw closures in
   `EnvironmentValues` would defeat SwiftUI's environment diff and
   invalidate every descendant on each parent body re-eval.
 - Don't write `private var foo: some View` on a View. SwiftUI can't
@@ -179,9 +180,9 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 
 ### Concurrency / testing
 
-- **Inject `clock: any Clock<Duration>` into `AppCore` for tests.**
+- **Inject `clock: any Clock<Duration>` into `AppEngine` for tests.**
   Production wires `ContinuousClock()` via `makeAppCore()`; tests
-  default to `ImmediateClock()` (in `withAppCore`) and override
+  default to `ImmediateClock()` (in `withAppEngine`) and override
   with a `TestClock` only when asserting on debounce timing. The
   private `fetch` helper uses `clock.sleep(for:)` for the search
   debounce. Tests pass a `TestClock` (from
@@ -193,33 +194,33 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   about the post-commit state.
 - **`TestActor` installs a `DispatchSerialQueue` as `unownedExecutor`.**
   SE-0392 + Point-Free Video #362 pattern. `TestActor` is the
-  per-test isolation provider; the `withAppCore(...)` fixture passes
-  it as `isolation:` when constructing `AppCore`, so AppCore borrows
-  TestActor's executor directly (no sibling executor actor needed).
-  The `nonisolated func runPending() async` enqueues a
-  continuation-resume at the back of the queue, so awaiting it
+  per-test isolation provider; the `withAppEngine(...)` fixture
+  passes it as `isolation:` when constructing `AppEngine`, so the
+  engine borrows TestActor's executor directly (no sibling executor
+  actor needed). The `nonisolated func runPending() async` enqueues
+  a continuation-resume at the back of the queue, so awaiting it
   drains every pending job (listener-Task resumption, fetch /
   commit Tasks spawned by `sendEvent`, post-`clock.sleep`
   continuations) deterministically. Replaces `Task.megaYield()`,
   which was probabilistic. Tests recover the TestActor as
-  `appCore.testActor` via a test-target extension that force-casts
-  `appCore.isolation` (relaxed to module-internal). Caveat: the
+  `engine.testActor` via a test-target extension that force-casts
+  `engine.isolation` (relaxed to module-internal). Caveat: the
   queue is strict FIFO, while real actors honour task priority —
   fine because test code has no `Task(priority: …)` diversity.
 - **`try` (not `try?`) on the debounce `clock.sleep`.** The fetch
   Task body uses `try await clock.sleep(for: debounce)` and lets the
   throw propagate. Swallowing it would let cancelled tasks fall
   through to the client's fetch call.
-- **Batch into one `appCore.run` per test.** `AppCore.run` follows
+- **Batch into one `engine.run` per test.** `AppEngine.run` follows
   the Point-Free `Actor.run` pattern (Video #362) — its purpose is
   to group multiple reads and `sendEvent` calls into a single
   isolation hop with a consistent snapshot. Default to one
-  `appCore.run { appCore in … }` block per test; only split when a
-  real suspension boundary forces it (`await appCore.testActor.runPending()`,
+  `engine.run { engine in … }` block per test; only split when a
+  real suspension boundary forces it (`await engine.testActor.runPending()`,
   `await clock.advance(by:)`, `await someTask.value`,
   `await iterator.next()`). `sendEvent` returns with state already
   mutated, so adjacent reads inside the same block see the new
-  state. Inside the closure, alias `let state = appCore.state` at
+  state. Inside the closure, alias `let state = engine.state` at
   the top — direct capture of the outer-scope `state` is rejected
   because the `run` body is `@Sendable`.
 - **Park mocks with `clock.sleep(for: .seconds(Int.max))`.** Mocks
@@ -259,51 +260,51 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   Android too. `skipstone` wraps cdecl thunks for `@MainActor`-
   isolated members in `SkipBridge.assumeMainActorUnchecked { ... }`
   (which is `MainActor.assumeIsolated`).
-- **Architecture: `makeAppCore()` factory + `AppCore` workhorse
+- **Architecture: `makeAppCore()` factory + `AppEngine` workhorse
   actor.** `AppCore.swift` declares `@MainActor public func
-  makeAppCore() -> AppCoreHandle`, returning a struct of (`state`,
+  makeAppCore() -> AppCore`, returning a struct of (`state`,
   `commands`, `sendEvent`). Hosts call it once at app scope (iOS:
   `@State` on `App`; Android: `Application.onCreate`) and hold the
-  handle for the process lifetime — the `AppCore` lives as long as
-  the `SendAppEvent` inside the handle holds it. `AppCore` is an
-  `actor` whose `unownedExecutor` borrows MainActor's (SE-0392), so
-  it stays in MainActor's isolation region; non-Sendable `AppState`
-  flows in via SE-0414 region isolation (the fresh `AppState()`
-  value is unaliased) and back out to the handle through a one-shot
-  `@unchecked Sendable` box scoped to `makeAppCore`. Long-running
-  listener Tasks are bootstrapped externally by `bind()` —
-  `makeAppCore` reaches it synchronously via
-  `appCore.assumeIsolated { $0.bind() }` (a runtime no-op given the
-  borrowed executor); tests `await appCore.bind()` through the
+  handle for the process lifetime — the `AppEngine` lives as long
+  as the `SendAppEvent` inside the handle holds it. `AppEngine` is
+  an `actor` whose `unownedExecutor` borrows MainActor's (SE-0392),
+  so it stays in MainActor's isolation region; non-Sendable
+  `AppState` flows in via SE-0414 region isolation (the fresh
+  `AppState()` value is unaliased) and back out to the handle
+  through a one-shot `@unchecked Sendable` box scoped to
+  `makeAppCore`. Long-running listener Tasks are bootstrapped
+  externally by `bind()` — `makeAppCore` reaches it synchronously
+  via `engine.assumeIsolated { $0.bind() }` (a runtime no-op given
+  the borrowed executor); tests `await engine.bind()` through the
   actor hop. Keeping the bootstrap out of `init` sidesteps the
   "Task spawned in a sync init body doesn't inherit actor isolation"
   workaround.
 - **`sendEvent` is the single orchestration entry.** All four
   fetch flows (feed refresh / feed load-more / search refresh /
   search load-more) plus `toggleRead` / `openStory` live inline as
-  switch arms in `AppCore.sendEvent(_:)`. The intentional duplication
-  is the point — each arm reads top-to-bottom for its event with
-  no helper jumps. The debounced search-fetch flow triggered by
-  every keystroke is similarly inlined into the listener Task's
-  `for await` loop in `init`. `fetch(debounce:body:)` is the one
-  shared helper — five callers (the listener + four `sendEvent`
-  arms) use it for the cancellation-aware fetch (optional
-  pre-sleep, post-sleep `Task.checkCancellation()`, and
+  switch arms in `AppEngine.sendEvent(_:)`. The intentional
+  duplication is the point — each arm reads top-to-bottom for its
+  event with no helper jumps. The debounced search-fetch flow
+  triggered by every keystroke is similarly inlined into the
+  listener Task's `for await` loop in `init`. `fetch(debounce:body:)`
+  is the one shared helper — five callers (the listener + four
+  `sendEvent` arms) use it for the cancellation-aware fetch
+  (optional pre-sleep, post-sleep `Task.checkCancellation()`, and
   `URLError(.cancelled)` → `CancellationError` normalisation). Each
   caller wraps the await in its own `Task` for cancellation;
   `fetch` itself just returns `Page`.
-- **Tests wrap setup in `withAppCore { appCore in … }`.** The
-  helper builds a fresh `TestActor`, constructs `AppCore` with it
-  as `isolation:`, runs the body, and awaits `appCore.cancelAll()`
+- **Tests wrap setup in `withAppEngine { engine in … }`.** The
+  helper builds a fresh `TestActor`, constructs `AppEngine` with it
+  as `isolation:`, runs the body, and awaits `engine.cancelAll()`
   on exit (the body's outcome is captured as a `Result` so the
   teardown runs on a single path before rethrowing via `.get()` —
   `defer` can't `await`) — this breaks the
-  `TaskRegistry → listener-Task → AppCore` cycle deterministically
+  `TaskRegistry → listener-Task → AppEngine` cycle deterministically
   before the next test starts. Mocks pass through `client:`
   (e.g. `client: .mock(frontPage: ..., search: ...)`), the optional
   `clock:` accepts a `TestClock`, and `now:` accepts a `@Sendable
   () -> Date`. Different TestActors run on different queues so
-  tests parallelise across instances. The `appCore.testActor`
+  tests parallelise across instances. The `engine.testActor`
   extension recovers the TestActor for `runPending()`.
 
 ## Build & test

@@ -16,11 +16,11 @@ lives in Swift (`URLSession`); both UIs only render the snapshot.
 
 ## The bridge at the call site
 
-`makeAppCore()` is called once per process and returns an
-`AppCoreHandle` with three parts: `state` (the `@Observable` bag),
-`sendEvent` (an Equatable capability for dispatching `AppEvent`s), and
-`commands` (an `AsyncStream<AppCommand>` of one-shot side-effects). Both
-UIs consume the same handle.
+`makeAppCore()` is called once per process and returns an `AppCore`
+handle with three parts: `state` (the `@Observable` bag), `sendEvent`
+(an Equatable capability for dispatching `AppEvent`s), and `commands`
+(an `AsyncStream<AppCommand>` of one-shot side-effects). Both UIs
+consume the same handle.
 
 ```swift
 // iOS — HackerNewsReaderApp.swift
@@ -33,7 +33,7 @@ UIs consume the same handle.
 ```kotlin
 // Android — App.kt
 class App : Application() {
-    lateinit var core: AppCoreHandle; private set
+    lateinit var core: AppCore; private set
     override fun onCreate() {
         super.onCreate()
         ProcessInfo.launch(applicationContext)
@@ -121,10 +121,11 @@ on `AppState`.
   product (`.library(name: "HackerNewsReader")`).
   - `HackerNews` — API client + entity types (`Client`, `Story`,
     `Page`). Self-contained Hacker News SDK.
-  - `HackerNewsReader` — reducer + state (`AppCore`, `AppState`,
-    `StoryRow`, `LoadStatus`, `LoadedStories`) plus the bridged
-    factory `makeAppCore() -> AppCoreHandle`. Depends on `HackerNews`;
-    Skip transitively packages `HackerNews` into the AAR set.
+  - `HackerNewsReader` — reducer + state (`AppCore`, `AppEngine`,
+    `AppState`, `StoryRow`, `LoadStatus`, `LoadedStories`) plus the
+    bridged factory `makeAppCore() -> AppCore`. Depends on
+    `HackerNews`; Skip transitively packages `HackerNews` into the AAR
+    set.
 - `ios-app/` — SwiftUI app generated from `project.yml` by
   [`xcodegen`](https://github.com/yonaskolb/XcodeGen).
 - `android-app/` — Gradle project consuming the SkipFuse-exported AARs

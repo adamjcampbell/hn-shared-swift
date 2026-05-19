@@ -48,7 +48,7 @@ The first `skipExport` invocation takes a few minutes (Swift toolchain
 
 `App.onCreate` bootstraps the Swift runtime
 (`skip.foundation.ProcessInfo.launch(...)`) and calls `makeAppCore()`
-once, holding the resulting `AppCoreHandle` for the process lifetime.
+once, holding the resulting `AppCore` handle for the process lifetime.
 `MainActivity` reads it off the `Application` and passes it into
 `StoryScreen`, which consumes `core.state`, `core.commands`, and
 `core.sendEvent`. There is no `core-jni/` module — SkipFuse's

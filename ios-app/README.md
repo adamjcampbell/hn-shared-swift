@@ -34,7 +34,7 @@ Android build); Xcode prompts for plugin approval otherwise.
 ## How state reaches the UI
 
 `HackerNewsReaderApp` calls `makeAppCore()` once via `@State` and hands
-the resulting `AppCoreHandle` to `RootView`. `RootView` installs
+the resulting `AppCore` handle to `RootView`. `RootView` installs
 `AppState` and the `\.sendEvent` capability action into the SwiftUI
 environment; descendants read state via `@Environment(AppState.self)`
 and call events via `@Environment(\.sendEvent)` — `sendEvent(.foo)`
