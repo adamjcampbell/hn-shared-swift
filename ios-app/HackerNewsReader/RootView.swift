@@ -2,7 +2,7 @@ import SwiftUI
 import HackerNewsReader
 
 struct RootView: View {
-    let core: AppCoreHandle
+    let core: AppCore
     @State private var presented: IdentifiedURL?
 
     var body: some View {
@@ -35,7 +35,7 @@ private struct StoriesScreen: View {
         @Bindable var state = state
         StoriesContent()
             // Writes flow through AppState's synthesized setter; the
-            // listener Task inside AppCore observes the willSet and
+            // listener Task inside AppEngine observes the willSet and
             // fires a debounced fetch.
             .searchable(text: $state.searchQuery, prompt: "Search Hacker News")
             .textInputAutocapitalization(.never)

@@ -5,16 +5,16 @@ import Foundation
 /// of `DismissAction`.
 ///
 /// `Equatable` is implemented as identity comparison on the held
-/// `AppCore` so SwiftUI's environment diff treats the action as
+/// `AppEngine` so SwiftUI's environment diff treats the action as
 /// stable across parent re-evaluations.
 // SKIP @bridgeMembers
 public struct SendAppEvent: Sendable, Equatable {
-    private let core: AppCore?
+    private let engine: AppEngine?
 
     /// Creates a no-op action — the default environment value and
     /// the value used in previews.
-    public init() { self.core = nil }
-    init(_ core: AppCore) { self.core = core }
+    public init() { self.engine = nil }
+    init(_ engine: AppEngine) { self.engine = engine }
 
     /// SwiftUI ergonomic equivalent of ``send(_:)``.
     ///
@@ -35,10 +35,10 @@ public struct SendAppEvent: Sendable, Equatable {
     public func run(_ event: AppEvent) async { await sendEvent(event) }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.core === rhs.core
+        lhs.engine === rhs.engine
     }
 
     private func sendEvent(_ event: AppEvent) async {
-        if let core { await core.sendEvent(event) }
+        if let engine { await engine.sendEvent(event) }
     }
 }

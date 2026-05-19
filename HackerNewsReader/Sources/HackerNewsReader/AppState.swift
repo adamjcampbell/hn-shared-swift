@@ -17,7 +17,7 @@ import SkipFuse
 /// Setter visibility encodes data-flow direction: `public var` is a
 /// two-way field that the UI binds and writes back (currently only
 /// ``searchQuery``); `public internal(set) var` is one-way, written
-/// by `AppCore` and read by the UI.
+/// by `AppEngine` and read by the UI.
 // SKIP @bridgeMembers
 @Observable
 public final class AppState {
@@ -25,7 +25,7 @@ public final class AppState {
     // MARK: Search input
 
     /// Current search query. Driven directly from both platforms;
-    /// every write echoes into `searchQueryChanges` for `AppCore`'s
+    /// every write echoes into `searchQueryChanges` for `AppEngine`'s
     /// fetch listener.
     public var searchQuery: String = "" {
         didSet { searchQueryEvents.yield(searchQuery) }

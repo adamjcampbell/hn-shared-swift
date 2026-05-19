@@ -4,12 +4,13 @@ import Testing
 @testable import HackerNewsReader
 import HackerNews
 
-extension AppCore {
-    /// Tests construct `AppCore` with `TestActor` isolation and (by default)
-    /// an `ImmediateClock`; these accessors reach the test-specific instance
-    /// without threading it as a separate local. `#require` makes a misuse
-    /// (production isolation in a test, or a non-`TestClock` where one is
-    /// needed) surface as a graceful test failure, not a trap.
+extension AppEngine {
+    /// Tests construct `AppEngine` with `TestActor` isolation and (by
+    /// default) an `ImmediateClock`; these accessors reach the
+    /// test-specific instance without threading it as a separate local.
+    /// `#require` makes a misuse (production isolation in a test, or a
+    /// non-`TestClock` where one is needed) surface as a graceful test
+    /// failure, not a trap.
     nonisolated var testActor: TestActor {
         get throws { try #require(isolation as? TestActor) }
     }
@@ -26,46 +27,45 @@ extension AppCore {
     /// - Returns: Whatever `body` returns.
     /// - Throws: Whatever `body` throws.
     func run<R, Failure: Error>(
-        _ body: sending @Sendable (isolated AppCore) async throws(Failure) -> R
+        _ body: sending @Sendable (isolated AppEngine) async throws(Failure) -> R
     ) async throws(Failure) -> R {
         try await body(self)
     }
 }
 
-/// Per-test AppCore fixture. Builds the actor (with its `TestActor`
-/// isolation, the supplied `Client` / clock / now), runs `body`, and
-/// awaits `appCore.cancelAll()` on exit so the listener Task is
-/// cancelled deterministically before the next test starts.
+/// Per-test `AppEngine` fixture. Builds the actor (with its
+/// `TestActor` isolation, the supplied `Client` / clock / now), runs
+/// `body`, and awaits `engine.cancelAll()` on exit so the listener
+/// Task is cancelled deterministically before the next test starts.
 ///
 /// Default clock is `ImmediateClock`: the only `clock.sleep` in
-/// production is the 250 ms search debounce, and tests that don't
-/// validate timing run faster (and need fewer `runPending` calls)
-/// with that sleep elided. Override with `clock: TestClock()` when
-/// the test asserts on debounce timing.
+/// production is the search debounce, and tests that don't validate
+/// timing run faster (and need fewer `runPending` calls) with that
+/// sleep elided. Override with `clock: TestClock()` when the test
+/// asserts on debounce timing.
 ///
-/// Capturing the throwing body's outcome as a `Result` lets the
-/// teardown run on a single path before rethrowing via `.get()` —
-/// `defer` can't `await`, so the `Result` is what collapses the
-/// dual-arm `do/catch` the previous shape needed. (The stdlib's
-/// async `Result.init(catching:)` requires a `@concurrent` closure;
-/// this body captures task-isolated state, so it's done manually.)
-func withAppCore<R>(
+/// - Note: The body's outcome is captured as a `Result` so the
+///   teardown runs on a single path before rethrowing via `.get()`;
+///   `defer` can't `await`. The stdlib's async
+///   `Result.init(catching:)` requires a `@concurrent` closure, but
+///   this body captures task-isolated state, so the catch is manual.
+func withAppEngine<R>(
     client: Client = .mock(),
     clock: any Clock<Duration> = ImmediateClock(),
     now: @escaping @Sendable () -> Date = Date.init,
-    body: (AppCore) async throws -> R
+    body: (AppEngine) async throws -> R
 ) async throws -> R {
-    let appCore = AppCore(
+    let engine = AppEngine(
         state: AppState(),
         client: client,
         clock: clock,
         now: now,
         isolation: TestActor()
     )
-    await appCore.bind()
+    await engine.bind()
     let result: Result<R, Error>
-    do { result = .success(try await body(appCore)) }
+    do { result = .success(try await body(engine)) }
     catch { result = .failure(error) }
-    await appCore.cancelAll()
+    await engine.cancelAll()
     return try result.get()
 }

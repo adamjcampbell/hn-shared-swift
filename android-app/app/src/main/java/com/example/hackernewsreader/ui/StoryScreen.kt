@@ -60,7 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import hacker.news.reader.AppCommand
-import hacker.news.reader.AppCoreHandle
+import hacker.news.reader.AppCore
 import hacker.news.reader.AppEvent
 import hacker.news.reader.AppState
 import hacker.news.reader.LoadStatus
@@ -72,7 +72,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StoryScreen(core: AppCoreHandle) {
+fun StoryScreen(core: AppCore) {
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val sendEvent = core.sendEvent

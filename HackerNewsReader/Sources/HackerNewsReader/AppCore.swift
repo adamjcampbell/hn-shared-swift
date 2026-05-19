@@ -9,14 +9,14 @@ import FoundationNetworking
 /// command stream, and an `Equatable` send-event capability.
 // SKIP @bridgeMembers
 @MainActor
-public struct AppCoreHandle {
+public struct AppCore {
     public let state: AppState
     public let commands: AsyncStream<AppCommand>
     public let sendEvent: SendAppEvent
 }
 
-/// Builds the `AppCore` and returns the handle for the UI to
-/// consume.
+/// Builds the `AppEngine` and returns the ``AppCore`` handle for the
+/// UI to consume.
 ///
 /// Call once at app scope — iOS holds it as `@State` on the `App`,
 /// Android stashes it on `Application` in `onCreate` — and keep the
@@ -25,28 +25,28 @@ public struct AppCoreHandle {
 /// - Returns: A handle bundling state, the command stream, and the
 ///   send-event capability.
 // SKIP @bridge
-@MainActor public func makeAppCore() -> AppCoreHandle {
-    // Safe: AppCore borrows MainActor's executor and AppCoreHandle is
+@MainActor public func makeAppCore() -> AppCore {
+    // Safe: AppEngine borrows MainActor's executor and AppCore is
     // @MainActor, so AppState only ever lives on MainActor. Unchecked is
     // the local opt-out from `assumeIsolated`'s Sendable-return check.
     struct Unchecked<Value>: @unchecked Sendable {
         let value: Value; init(_ value: Value) { self.value = value }
     }
 
-    let appCore = AppCore(isolation: MainActor.shared)
-    appCore.assumeIsolated { $0.bind() }
+    let engine = AppEngine(isolation: MainActor.shared)
+    engine.assumeIsolated { $0.bind() }
 
-    var appState: AppState { appCore.assumeIsolated { Unchecked($0.state) }.value }
+    var appState: AppState { engine.assumeIsolated { Unchecked($0.state) }.value }
 
-    return AppCoreHandle(
+    return AppCore(
         state: appState,
-        commands: appCore.commands,
-        sendEvent: SendAppEvent(appCore)
+        commands: engine.commands,
+        sendEvent: SendAppEvent(engine)
     )
 }
 
 /// Event-handling workhorse — the internal coordinator behind
-/// ``AppCoreHandle``.
+/// ``AppCore``.
 ///
 /// Borrows the host's `unownedExecutor`, so all methods and Tasks
 /// run in the host's isolation region — `MainActor` in production,
@@ -56,10 +56,8 @@ public struct AppCoreHandle {
 /// - Note: Long-running listener Tasks are bootstrapped externally
 ///   via `bind()` after `init` returns — `makeAppCore` reaches it
 ///   sync via `assumeIsolated`; tests `await` it through the actor
-///   hop. Keeping the bootstrap out of `init` avoids the "Task
-///   spawned in a sync init body doesn't inherit actor isolation"
-///   workaround.
-actor AppCore {
+///   hop.
+actor AppEngine {
     let state: AppState
 
     nonisolated let commands: AsyncStream<AppCommand>
@@ -100,9 +98,9 @@ actor AppCore {
 
     /// Binds long-running listener Tasks to `AppState`'s change streams.
     ///
-    /// Call once per `AppCore`: from `makeAppCore` (sync, via
-    /// `assumeIsolated`) in production, from `withAppCore` (async hop)
-    /// in tests.
+    /// Call once per `AppEngine`: from `makeAppCore` (sync, via
+    /// `assumeIsolated`) in production, from `withAppEngine` (async
+    /// hop) in tests.
     ///
     /// - Note: `Task { … }` here inherits the actor's isolation via
     ///   `@_inheritActorContext` on `Task.init`, so `tasks[…]` /
@@ -252,9 +250,9 @@ actor AppCore {
     /// Cancels every Task this actor owns — the `bind()` listener
     /// plus any in-flight fetch.
     ///
-    /// Test-only: production `AppCore` is process-lifetime. Tests call
-    /// this on fixture exit so the `TaskRegistry → Task → self` cycle
-    /// releases and the actor doesn't outlive its test.
+    /// Test-only: production `AppEngine` is process-lifetime. Tests
+    /// call this on fixture exit so the `TaskRegistry → Task → self`
+    /// cycle releases and the actor doesn't outlive its test.
     func cancelAll() {
         tasks.cancelAll()
     }
