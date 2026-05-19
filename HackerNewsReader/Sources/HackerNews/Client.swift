@@ -104,7 +104,7 @@ extension Client {
     /// Fetches one page of the Firebase front-page feed, dropping
     /// items that fail individually.
     ///
-    /// One request resolves the ranked id list; up to ``pageSize``
+    /// One request resolves the ranked id list; up to `pageSize`
     /// item fetches then run in parallel. Per-item failures are
     /// elided from the returned page rather than failing the whole
     /// request — mirrors the Algolia path's tolerance for hits
@@ -113,7 +113,7 @@ extension Client {
     /// - Parameters:
     ///   - page: Zero-indexed page within the ranked id list.
     ///   - fetch: HTTP transport used for the id list and each item.
-    /// - Returns: The decoded page; may be shorter than ``pageSize``
+    /// - Returns: The decoded page; may be shorter than `pageSize`
     ///   if some item fetches failed.
     /// - Throws: Transport, decoding, or cancellation errors. Per-item
     ///   transport failures are swallowed; cancellation tears down

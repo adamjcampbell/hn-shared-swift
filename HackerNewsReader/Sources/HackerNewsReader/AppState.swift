@@ -17,7 +17,7 @@ import SkipFuse
 /// Setter visibility encodes data-flow direction: `public var` is a
 /// two-way field that the UI binds and writes back (currently only
 /// ``searchQuery``); `public internal(set) var` is one-way, written
-/// by ``AppCore`` and read by the UI.
+/// by `AppCore` and read by the UI.
 // SKIP @bridgeMembers
 @Observable
 public final class AppState {

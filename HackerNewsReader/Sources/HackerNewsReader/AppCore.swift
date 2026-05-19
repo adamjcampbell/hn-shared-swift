@@ -47,12 +47,11 @@ public struct AppCoreHandle {
 /// Event-handling workhorse — the internal coordinator behind
 /// ``AppCoreHandle``.
 ///
-/// Borrows the host's `unownedExecutor` (SE-0392), so all methods and
-/// Tasks run in the host's isolation region — `MainActor` in
-/// production, a per-test executor in `TestCore`. The non-`Sendable`
-/// ``AppState`` reaches the actor via one transient
-/// `nonisolated(unsafe)` rebind at the host's init site, sound under
-/// SE-0414 region isolation.
+/// Borrows the host's `unownedExecutor`, so all methods and Tasks
+/// run in the host's isolation region — `MainActor` in production,
+/// a per-test `TestActor` in tests. The non-`Sendable` ``AppState``
+/// reaches the actor via one transient `nonisolated(unsafe)` rebind
+/// at the host's init site.
 ///
 /// - Note: The search-query listener is bootstrapped from `init` via
 ///   an isolated-parameter local function — a `Task` spawned in a
@@ -77,8 +76,7 @@ actor AppCore {
     private var tasks = Tasks()
 
     /// Debounce window between a `state.searchQuery` write and the
-    /// resulting fetch. Static so tests can name the same duration
-    /// when advancing their `TestClock`.
+    /// resulting fetch.
     static let searchDebounce: Duration = .milliseconds(250)
 
     init(
@@ -247,7 +245,7 @@ actor AppCore {
     /// Test-only teardown — cancels in-flight Tasks so the actor
     /// doesn't outlive its test.
     ///
-    /// - Note: Without this, the ``TaskRegistry`` → listener-Task →
+    /// - Note: Without this, the `TaskRegistry` → listener-Task →
     ///   `self` cycle keeps the actor alive past test scope.
     func shutdown() {
         tasks.cancelAll()
@@ -282,7 +280,7 @@ actor AppCore {
 }
 
 extension AppCore {
-    /// Batches multiple reads and ``sendEvent(_:)`` calls into one
+    /// Batches multiple reads and `sendEvent(_:)` calls into one
     /// isolation hop with a consistent snapshot — no other Task can
     /// interleave between statements inside the block.
     ///
