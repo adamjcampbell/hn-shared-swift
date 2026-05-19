@@ -30,7 +30,7 @@ actor AppCore {
     private let client: Client
     private let clock: any Clock<Duration>
     private let now: @Sendable () -> Date
-    private nonisolated let isolation: any Actor
+    nonisolated let isolation: any Actor
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
         isolation.unownedExecutor
@@ -235,5 +235,16 @@ actor AppCore {
         } catch let urlError as URLError where urlError.code == .cancelled {
             throw CancellationError()
         }
+    }
+}
+
+extension AppCore {
+    /// Batch multiple reads + `sendEvent` calls into one isolation hop
+    /// with a consistent snapshot — no other Task can interleave
+    /// between statements inside the block. Point-Free Video #362.
+    func run<R, Failure: Error>(
+        _ body: sending @Sendable (isolated AppCore) async throws(Failure) -> R
+    ) async throws(Failure) -> R {
+        try await body(self)
     }
 }

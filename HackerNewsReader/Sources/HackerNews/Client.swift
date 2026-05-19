@@ -39,6 +39,15 @@ public struct Client: Sendable {
         self.frontPage = frontPage
         self.search = search
     }
+
+    /// Test convenience: pre-filled defaults that return empty pages.
+    /// Override only the closure(s) the test cares about.
+    public static func mock(
+        frontPage: @escaping @Sendable (_ page: Int) async throws -> Page = { _ in Page(stories: [], totalPages: 0) },
+        search: @escaping @Sendable (_ query: String, _ page: Int) async throws -> Page = { _, _ in Page(stories: [], totalPages: 0) }
+    ) -> Client {
+        Client(frontPage: frontPage, search: search)
+    }
 }
 
 extension Client {
