@@ -34,7 +34,7 @@ extension AppCore {
 
 /// Per-test AppCore fixture. Builds the actor (with its `TestActor`
 /// isolation, the supplied `Client` / clock / now), runs `body`, and
-/// awaits `appCore.shutdown()` on exit so the listener Task is
+/// awaits `appCore.cancelAll()` on exit so the listener Task is
 /// cancelled deterministically before the next test starts.
 ///
 /// Default clock is `ImmediateClock`: the only `clock.sleep` in
@@ -43,12 +43,12 @@ extension AppCore {
 /// with that sleep elided. Override with `clock: TestClock()` when
 /// the test asserts on debounce timing.
 ///
-/// Capturing the throwing body's outcome as a `Result` lets shutdown
-/// run on a single path before rethrowing via `.get()` — `defer` can't
-/// `await`, so the `Result` is what collapses the dual-arm `do/catch`
-/// the previous shape needed. (The stdlib's async `Result.init(catching:)`
-/// requires a `@concurrent` closure; this body captures task-isolated
-/// state, so it's done manually.)
+/// Capturing the throwing body's outcome as a `Result` lets the
+/// teardown run on a single path before rethrowing via `.get()` —
+/// `defer` can't `await`, so the `Result` is what collapses the
+/// dual-arm `do/catch` the previous shape needed. (The stdlib's
+/// async `Result.init(catching:)` requires a `@concurrent` closure;
+/// this body captures task-isolated state, so it's done manually.)
 func withAppCore<R>(
     client: Client = .mock(),
     clock: any Clock<Duration> = ImmediateClock(),
@@ -66,6 +66,6 @@ func withAppCore<R>(
     let result: Result<R, Error>
     do { result = .success(try await body(appCore)) }
     catch { result = .failure(error) }
-    await appCore.shutdown()
+    await appCore.cancelAll()
     return try result.get()
 }

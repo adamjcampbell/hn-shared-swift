@@ -294,10 +294,10 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `fetch` itself just returns `Page`.
 - **Tests wrap setup in `withAppCore { appCore in … }`.** The
   helper builds a fresh `TestActor`, constructs `AppCore` with it
-  as `isolation:`, runs the body, and awaits `appCore.shutdown()`
-  on exit (the body's outcome is captured as a `Result` so shutdown
-  runs on a single path before rethrowing via `.get()` — `defer`
-  can't `await`) — this breaks the
+  as `isolation:`, runs the body, and awaits `appCore.cancelAll()`
+  on exit (the body's outcome is captured as a `Result` so the
+  teardown runs on a single path before rethrowing via `.get()` —
+  `defer` can't `await`) — this breaks the
   `TaskRegistry → listener-Task → AppCore` cycle deterministically
   before the next test starts. Mocks pass through `client:`
   (e.g. `client: .mock(frontPage: ..., search: ...)`), the optional

@@ -249,12 +249,13 @@ actor AppCore {
         }
     }
 
-    /// Test-only teardown — cancels in-flight Tasks so the actor
-    /// doesn't outlive its test.
+    /// Cancels every Task this actor owns — the `bind()` listener
+    /// plus any in-flight fetch.
     ///
-    /// - Note: Without this, the `TaskRegistry` → listener-Task →
-    ///   `self` cycle keeps the actor alive past test scope.
-    func shutdown() {
+    /// Test-only: production `AppCore` is process-lifetime. Tests call
+    /// this on fixture exit so the `TaskRegistry → Task → self` cycle
+    /// releases and the actor doesn't outlive its test.
+    func cancelAll() {
         tasks.cancelAll()
     }
 
