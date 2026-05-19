@@ -16,29 +16,104 @@ lives in Swift (`URLSession`); both UIs only render the snapshot.
 
 ## The bridge at the call site
 
-Both UIs render the same Swift `AppState` instance:
+`makeAppCore()` is called once per process and returns an
+`AppCoreHandle` with three parts: `state` (the `@Observable` bag),
+`sendEvent` (an Equatable capability for dispatching `AppEvent`s), and
+`commands` (an `AsyncStream<AppCommand>` of one-shot side-effects). Both
+UIs consume the same handle.
 
 ```swift
-// HackerNewsReader/Sources/HackerNewsReader/AppState.swift
-@Observable public final class AppState {     // // SKIP @bridgeMembers
-    public var searchQuery: String = ""
-    public var feedLoaded: LoadedStories? = nil
-    public var feedInitialStatus: LoadStatus = LoadStatus()
-    public var feedStories: [StoryRow] { ... }
+// iOS — HackerNewsReaderApp.swift
+@main struct HackerNewsReaderApp: App {
+    @State private var core = makeAppCore()
+    var body: some Scene { WindowGroup { RootView(core: core) } }
 }
 ```
 
 ```kotlin
-// android-app — App.onCreate() calls makeAppCore() once.
-@Composable fun StoryScreen(core: AppCoreHandle) {
-    val state = core.state
-    TextField(value = state.searchQuery, onValueChange = { state.searchQuery = it })
-    LazyColumn { items(state.feedStories.kotlin() as List<StoryRow>) { StoryRowView(it) } }
+// Android — App.kt
+class App : Application() {
+    lateinit var core: AppCoreHandle; private set
+    override fun onCreate() {
+        super.onCreate()
+        ProcessInfo.launch(applicationContext)
+        core = makeAppCore()
+    }
+}
+```
+
+### `state` — observed reads and two-way bindings
+
+```swift
+// iOS — descendants pull AppState from the environment; @Bindable
+// + key-path Binding for two-way writes.
+@Environment(AppState.self) private var state
+
+var body: some View {
+    @Bindable var state = state
+    List(state.feedStories) { StoryRowView(story: $0) }
+        .searchable(text: $state.searchQuery, prompt: "Search Hacker News")
+}
+```
+
+```kotlin
+// Android — Compose reads @Observable properties directly; writes go
+// through the synthesized setter and invalidate readers.
+val state = core.state
+TextField(
+    value = state.searchQuery,
+    onValueChange = { state.searchQuery = it },
+)
+LazyColumn { items(state.feedStories.kotlin() as List<StoryRow>) { StoryRowView(it) } }
+```
+
+### `sendEvent` — fire-and-forget + awaitable
+
+```swift
+// iOS — sendEvent(.foo) is fire-and-forget; await sendEvent.run(.foo)
+// is awaitable (.refreshable, one-shot .task).
+@Environment(\.sendEvent) private var sendEvent
+
+.refreshable { await sendEvent.run(.refresh) }
+Button("Mark read") { sendEvent(.toggleRead(id: story.id)) }
+```
+
+```kotlin
+// Android — same shape, .send(...) and suspend .run(...).
+val sendEvent = core.sendEvent
+
+LaunchedEffect(Unit) { sendEvent.send(AppEvent.refresh) }
+PullToRefreshBox(onRefresh = { scope.launch { sendEvent.run(AppEvent.refresh) } }) { … }
+```
+
+### `commands` — one-shot side-effects from core to UI
+
+```swift
+// iOS — long-lived consumer in .task; the sheet binding lives on the
+// view, so user-driven dismissal doesn't touch the core.
+.task {
+    for await command in core.commands {
+        switch command {
+        case .presentURL(let url): presented = IdentifiedURL(url)
+        }
+    }
+}
+```
+
+```kotlin
+// Android — AsyncStream surfaced as a Kotlin Flow via .kotlin().
+LaunchedEffect(Unit) {
+    core.commands.kotlin().collect { command ->
+        when (command) {
+            is AppCommand.PresentURLCase -> context.launchCustomTab(command.value)
+        }
+    }
 }
 ```
 
 No hand-written JNI, no per-property thunk, no `*OnChange` SAM —
-SkipFuse generates all of it from the `// SKIP @bridgeMembers` marker.
+SkipFuse generates all of it from the `// SKIP @bridgeMembers` marker
+on `AppState`.
 
 ## Layout
 
