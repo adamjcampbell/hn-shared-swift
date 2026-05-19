@@ -56,11 +56,11 @@ private func page(_ stories: [Story], totalPages: Int = 1) -> Page {
 /// instead when asserting mid-flight. Requires the test's `AppCore`
 /// to hold a `TestClock`; `#require` throws otherwise.
 private func commitSearch(_ query: String, on appCore: AppCore) async throws {
-    try await appCore.testActor.settle()
+    try await appCore.testActor.runPending()
     await appCore.run { core in core.state.searchQuery = query }
-    try await appCore.testActor.settle()
+    try await appCore.testActor.runPending()
     try await appCore.testClock.advance(by: AppCore.searchDebounce)
-    try await appCore.testActor.settle()
+    try await appCore.testActor.runPending()
 }
 
 @Suite("AppCore")
@@ -233,19 +233,19 @@ struct AppCoreTests {
             client: .mock(search: { _, _ in page([storyA]) }),
             clock: TestClock()
         ) { appCore in
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
             await appCore.run { appCore in
                 let state = appCore.state
                 #expect(state.searchInitialStatus.isLoading == false)
                 state.searchQuery = "r"
             }
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             // Spinner is on before the debounce elapses.
             await appCore.run { appCore in #expect(appCore.state.searchInitialStatus.isLoading == true) }
 
             try await appCore.testClock.advance(by: AppCore.searchDebounce)
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             await appCore.run { appCore in #expect(appCore.state.searchInitialStatus.isLoading == false) }
         }
@@ -285,16 +285,16 @@ struct AppCoreTests {
             ),
             clock: clock
         ) { appCore in
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
             await appCore.run { appCore in appCore.state.searchQuery = "ru" }
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
             await clock.advance(by: AppCore.searchDebounce)
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             await appCore.run { appCore in appCore.state.searchQuery = "rust" }
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
             await clock.advance(by: AppCore.searchDebounce)
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             await appCore.run { appCore in
                 let state = appCore.state
@@ -333,7 +333,7 @@ struct AppCoreTests {
                 #expect(state.searchResults.map(\.id) == ["100"])
                 state.searchQuery = ""
             }
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             await appCore.run { appCore in
                 let state = appCore.state
@@ -388,16 +388,16 @@ struct AppCoreTests {
             clock: TestClock()
         ) { appCore in
             // Let the listener reach its `for await` suspension before the first write.
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             await appCore.run { appCore in appCore.state.searchQuery = "rust" }
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             await appCore.run { appCore in appCore.state.searchQuery = "" }
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             try await appCore.testClock.advance(by: AppCore.searchDebounce)
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             await appCore.run { appCore in
                 let state = appCore.state
@@ -423,17 +423,17 @@ struct AppCoreTests {
             clock: TestClock()
         ) { appCore in
             // Let the listener reach its `for await` suspension before the first write.
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             await appCore.run { appCore in appCore.state.searchQuery = "r" }
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
             await appCore.run { appCore in appCore.state.searchQuery = "ru" }
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
             await appCore.run { appCore in appCore.state.searchQuery = "rust" }
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             try await appCore.testClock.advance(by: AppCore.searchDebounce)
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             let recorded = calls.searchCalls
             #expect(recorded.map(\.0) == ["rust"])
@@ -556,7 +556,7 @@ struct AppCoreTests {
             let loadMore = Task { [appCore] in
                 await appCore.run { await $0.sendEvent(.loadMore) }
             }
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
             await appCore.run { appCore in #expect(appCore.state.feedLoadMoreStatus.isLoading == true) }
 
             // Refresh's `tasks[.feedMore] = nil` cancels the parked page-1 task.
@@ -640,12 +640,12 @@ struct AppCoreTests {
             let loadMore = Task { [appCore] in
                 await appCore.run { await $0.sendEvent(.loadMore) }
             }
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
             await appCore.run { appCore in #expect(appCore.state.searchLoadMoreStatus.isLoading == true) }
 
             await appCore.run { appCore in appCore.state.searchQuery = "" }
             await loadMore.value
-            try await appCore.testActor.settle()
+            try await appCore.testActor.runPending()
 
             await appCore.run { appCore in
                 let state = appCore.state

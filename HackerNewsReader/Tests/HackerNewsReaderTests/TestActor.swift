@@ -7,11 +7,11 @@ import Dispatch
 /// different `TestActor`s run on different queues, so tests parallelise
 /// across instances.
 ///
-/// `settle()` enqueues a continuation-resume at the back of the queue
-/// (Point‑Free Video #362 pattern). Awaiting it drains every pending
-/// job — listener-Task resumption, fetch / commit Tasks spawned by
-/// `sendEvent`, post-`clock.sleep` continuations — deterministically.
-/// Replaces `Task.megaYield()`.
+/// `runPending()` enqueues a continuation-resume at the back of the
+/// queue (Point‑Free Video #362 pattern). Awaiting it runs every job
+/// already scheduled — listener-Task resumption, fetch / commit Tasks
+/// spawned by `sendEvent`, post-`clock.sleep` continuations —
+/// deterministically. Replaces `Task.megaYield()`.
 public actor TestActor {
     private nonisolated let queue: DispatchSerialQueue
 
@@ -23,7 +23,7 @@ public actor TestActor {
         self.queue = DispatchSerialQueue(label: label)
     }
 
-    public nonisolated func settle() async {
+    public nonisolated func runPending() async {
         await withCheckedContinuation { continuation in
             queue.async { continuation.resume() }
         }

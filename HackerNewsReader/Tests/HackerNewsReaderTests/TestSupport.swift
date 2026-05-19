@@ -25,9 +25,9 @@ extension AppCore {
 ///
 /// Default clock is `ImmediateClock`: the only `clock.sleep` in
 /// production is the 250 ms search debounce, and tests that don't
-/// validate timing run faster (and need fewer settles) with that
-/// sleep elided. Override with `clock: TestClock()` when the test
-/// asserts on debounce timing.
+/// validate timing run faster (and need fewer `runPending` calls)
+/// with that sleep elided. Override with `clock: TestClock()` when
+/// the test asserts on debounce timing.
 ///
 /// Capturing the throwing body's outcome as a `Result` lets shutdown
 /// run on a single path before rethrowing via `.get()` — `defer` can't
