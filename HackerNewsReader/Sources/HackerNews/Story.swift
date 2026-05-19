@@ -1,28 +1,29 @@
 import Foundation
 
-/// A Hacker News story. The canonical entity returned by the official
-/// Firebase HN API at `hacker-news.firebaseio.com/v0` (front-page feed)
-/// and the Algolia HN search API at `hn.algolia.com/api/v1` (text
-/// search). Both transports normalise into this shape.
-///
-/// The `id` is the story's numeric HN ID, kept as `String` because
-/// Algolia surfaces it as `objectID` (string) and we don't gain anything
-/// from converting twice on the bridge.
-///
-/// `score` matches both APIs' vocabulary (Firebase: `score`, HN UI:
-/// "points"). Other fields favour the more descriptive Swift names
-/// (`author`, `commentCount`, `createdAt`) over the terser Firebase
-/// originals (`by`, `descendants`, `time`).
+/// A Hacker News story — the canonical entity normalised from both
+/// the Firebase front-page feed and the Algolia search results.
 // SKIP @bridgeMembers
 public struct Story: Sendable, Identifiable, Codable, Equatable {
     public let id: String
     public let title: String
     public let author: String
+    /// HN points; both APIs surface this as the upvote score.
     public let score: Int
     public let commentCount: Int
     public let url: String?
     public let createdAt: Date
 
+    /// Creates a story from already-decoded field values.
+    ///
+    /// - Parameters:
+    ///   - id: The HN story id (string so Algolia's `objectID` and
+    ///     Firebase's numeric id share one shape).
+    ///   - title: Headline text.
+    ///   - author: Submitter username.
+    ///   - score: HN points.
+    ///   - commentCount: Number of descendant comments.
+    ///   - url: Submitted link, or `nil` for self-posts.
+    ///   - createdAt: Submission timestamp.
     public init(
         id: String,
         title: String,

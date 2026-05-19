@@ -5,9 +5,8 @@ import HackerNews
 import FoundationNetworking
 #endif
 
-/// Handle returned by `makeAppCore()` — bundles the three surfaces
-/// the UI consumes: observable state, a one-shot command stream, and
-/// an Equatable send-event capability.
+/// The surfaces the UI consumes — observable state, a one-shot
+/// command stream, and an `Equatable` send-event capability.
 // SKIP @bridgeMembers
 @MainActor
 public struct AppCoreHandle {
@@ -16,13 +15,15 @@ public struct AppCoreHandle {
     public let sendEvent: SendAppEvent
 }
 
-/// Builds the `AppCore` and returns the handle. Call once at app
-/// scope (iOS: `@State` on the `App`; Android: `Application.onCreate`)
-/// and hold the handle for the process lifetime — the `AppCore`
-/// inside survives Activity recreation. `AppCore` borrows MainActor's
-/// executor via SE-0392 so event handling and observation callbacks
-/// run in MainActor's isolation region — the same region SwiftUI and
-/// Compose recompose on.
+/// Builds the `AppCore` and returns the handle for the UI to
+/// consume.
+///
+/// Call once at app scope — iOS holds it as `@State` on the `App`,
+/// Android stashes it on `Application` in `onCreate` — and keep the
+/// handle for the process lifetime.
+///
+/// - Returns: A handle bundling state, the command stream, and the
+///   send-event capability.
 // SKIP @bridge
 @MainActor public func makeAppCore() -> AppCoreHandle {
     // nonisolated(unsafe) lets the non-Sendable AppState cross
@@ -43,24 +44,20 @@ public struct AppCoreHandle {
     )
 }
 
-/// Event-handling workhorse. An `actor` whose `unownedExecutor`
-/// borrows the host's (SE-0392), so all AppCore methods and Tasks
-/// run isolated to the same actor as the host — MainActor in
-/// production (constructed by `makeAppCore()`) or a per-test executor
-/// in `TestCore`.
+/// Event-handling workhorse — the internal coordinator behind
+/// ``AppCoreHandle``.
 ///
-/// AppState is handed in via one transient `nonisolated(unsafe) let`
-/// at the host's init site; SE-0414 region isolation keeps both
-/// references in the same region. Tasks spawned inside methods
-/// inherit isolation via `@_inheritActorContext` on `Task.init`.
+/// Borrows the host's `unownedExecutor` (SE-0392), so all methods and
+/// Tasks run in the host's isolation region — `MainActor` in
+/// production, a per-test executor in `TestCore`. The non-`Sendable`
+/// ``AppState`` reaches the actor via one transient
+/// `nonisolated(unsafe)` rebind at the host's init site, sound under
+/// SE-0414 region isolation.
 ///
-/// The search-query listener is bootstrapped from `init` via an
-/// isolated-parameter local function — a Task spawned in a sync
-/// init body doesn't inherit actor isolation, so the isolated
-/// parameter is what re-establishes it.
-///
-/// Internal: not bridged, not exposed. `AppCoreHandle` /
-/// `makeAppCore()` above are the public surface.
+/// - Note: The search-query listener is bootstrapped from `init` via
+///   an isolated-parameter local function — a `Task` spawned in a
+///   sync init body doesn't inherit actor isolation, and the
+///   isolated parameter is what re-establishes it.
 actor AppCore {
     let state: AppState
 
@@ -150,10 +147,12 @@ actor AppCore {
         }
     }
 
-    /// Single entry point for every user-driven mutation. Each arm
-    /// inlines its full flow rather than sharing helpers — explicit
-    /// duplication beats jumping between branches. Fetch arms await
-    /// `task.value` so `.refreshable` holds the spinner.
+    /// Single entry point for every user-driven mutation.
+    ///
+    /// Fetch arms await `task.value` so `.refreshable` holds the
+    /// spinner until the fetch lands.
+    ///
+    /// - Parameter event: The event to dispatch.
     func sendEvent(_ event: AppEvent) async {
         switch event {
 
@@ -245,23 +244,27 @@ actor AppCore {
         }
     }
 
-    /// Test-only teardown — the production `AppCore` is app-lifetime
-    /// (held by the `SendAppEvent` inside `AppCoreHandle`). Without
-    /// this, the TaskRegistry → listener-Task → self cycle keeps the
-    /// actor alive past test scope.
+    /// Test-only teardown — cancels in-flight Tasks so the actor
+    /// doesn't outlive its test.
+    ///
+    /// - Note: Without this, the ``TaskRegistry`` → listener-Task →
+    ///   `self` cycle keeps the actor alive past test scope.
     func shutdown() {
         tasks.cancelAll()
     }
 
-    /// Sleep for `debounce` (if set), then run `body`.
+    /// Sleeps for `debounce` (if set), then runs `body`.
     ///
-    /// `try` on the sleep is load-bearing — a test-mock that doesn't
-    /// honor cancellation would otherwise fall through and commit
-    /// stale data.
-    ///
-    /// `URLSession` surfaces task cancellation as `URLError.cancelled`;
-    /// the `catch` rethrows it as `CancellationError` so callers match
-    /// it the same way as in-Swift cancellation.
+    /// - Parameters:
+    ///   - debounce: Delay before invoking `body`, or `nil` for none.
+    ///   - body: Closure that issues the page fetch.
+    /// - Returns: The page produced by `body`.
+    /// - Throws: Whatever `body` throws, plus `CancellationError` if
+    ///   the surrounding task is cancelled.
+    /// - Note: `URLSession` surfaces task cancellation as
+    ///   `URLError.cancelled`; this method rethrows it as
+    ///   `CancellationError` so callers can match cancellation the
+    ///   same way regardless of transport.
     private func fetch(
         debounce: Duration?,
         body: @Sendable (Client) async throws -> Page
@@ -279,9 +282,14 @@ actor AppCore {
 }
 
 extension AppCore {
-    /// Batch multiple reads + `sendEvent` calls into one isolation hop
-    /// with a consistent snapshot — no other Task can interleave
-    /// between statements inside the block. Point-Free Video #362.
+    /// Batches multiple reads and ``sendEvent(_:)`` calls into one
+    /// isolation hop with a consistent snapshot — no other Task can
+    /// interleave between statements inside the block.
+    ///
+    /// - Parameter body: Closure that runs while isolated to the
+    ///   actor; receives `self` as its only argument.
+    /// - Returns: Whatever `body` returns.
+    /// - Throws: Whatever `body` throws.
     func run<R, Failure: Error>(
         _ body: sending @Sendable (isolated AppCore) async throws(Failure) -> R
     ) async throws(Failure) -> R {

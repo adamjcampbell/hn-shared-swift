@@ -5,33 +5,23 @@ import FoundationNetworking
 
 /// HTTP client for the Hacker News data APIs.
 ///
-/// **Two transports behind one closure-bag.** `frontPage` hits the
-/// official Firebase HN API (`hacker-news.firebaseio.com/v0`) — only
-/// that endpoint returns the live front-page ordering. `search` hits the
-/// Algolia HN search API (`hn.algolia.com/api/v1`) because Firebase has
-/// no text-search endpoint. Callers don't see the difference: both
-/// closures return a `Page`.
-///
-/// **Closure-struct shape, not a class.** Tests inject closures directly
-/// without going through `URLSession` or `URLProtocol`. Production
-/// callers use the no-arg `init()`, which wires the closures to a live
-/// `URLSession`.
-///
-/// **`Sendable`.** All properties are `@Sendable` closures of `Sendable`
-/// types, so the whole struct is `Sendable`. That's what makes the
-/// cancel-and-replace pattern in the reader's `AppCore` work: the
-/// unstructured `Task` that issues the HTTP call captures `[client]`
-/// directly, with no `self` capture, so the closure has no
-/// non-Sendable region to send across.
-///
-/// **Cancellation.** The live closures call `URLSession.data(for:)`,
-/// which throws `URLError(.cancelled)` when the surrounding `Task` is
-/// cancelled. For `frontPage`, cancellation propagates into the
-/// `withThrowingTaskGroup` over per-item fetches automatically.
+/// Two transports sit behind one closure-bag: ``frontPage`` hits the
+/// official Firebase HN API for the live front-page ranking,
+/// ``search`` hits the Algolia HN search API for text search. Both
+/// closures resolve to a ``Page``, so callers don't see the
+/// difference. Tests can inject closures directly; production callers
+/// use the no-argument ``init()`` to wire the live `URLSession`.
 public struct Client: Sendable {
     public var frontPage: @Sendable (_ page: Int) async throws -> Page
     public var search: @Sendable (_ query: String, _ page: Int) async throws -> Page
 
+    /// Builds a client from explicit transport closures.
+    ///
+    /// - Parameters:
+    ///   - frontPage: Resolves a zero-indexed page of the front-page
+    ///     ranking.
+    ///   - search: Resolves a zero-indexed page of search results for
+    ///     a query.
     public init(
         frontPage: @escaping @Sendable (_ page: Int) async throws -> Page,
         search: @escaping @Sendable (_ query: String, _ page: Int) async throws -> Page
@@ -40,8 +30,13 @@ public struct Client: Sendable {
         self.search = search
     }
 
-    /// Test convenience: pre-filled defaults that return empty pages.
-    /// Override only the closure(s) the test cares about.
+    /// Builds a test client whose closures return empty pages by
+    /// default. Override only the closures the test exercises.
+    ///
+    /// - Parameters:
+    ///   - frontPage: Front-page closure; defaults to an empty page.
+    ///   - search: Search closure; defaults to an empty page.
+    /// - Returns: A ``Client`` with the supplied closures installed.
     public static func mock(
         frontPage: @escaping @Sendable (_ page: Int) async throws -> Page = { _ in Page(stories: [], totalPages: 0) },
         search: @escaping @Sendable (_ query: String, _ page: Int) async throws -> Page = { _, _ in Page(stories: [], totalPages: 0) }
@@ -51,13 +46,10 @@ public struct Client: Sendable {
 }
 
 extension Client {
-    /// Page size used for both transports. Algolia gets it as a query
-    /// parameter; Firebase's `topstories.json` returns a flat ID list
-    /// that we slice locally.
+    /// Page size used for both transports.
     static let pageSize = 50
 
-    /// Live implementation. Wires both transports to a shared
-    /// `URLSession`.
+    /// Builds a live client backed by a shared `URLSession`.
     public init() {
         let session = Client.productionSession
         self.init(fetch: { request in
@@ -65,10 +57,12 @@ extension Client {
         })
     }
 
-    /// Test seam: inject the HTTP transport directly. Lets tests assert
-    /// on the exact `URLRequest` and return canned `(Data, URLResponse)`
-    /// without any `URLSession` / `URLProtocol` machinery. Module-
-    /// internal so production callers can't bypass `init()` by accident.
+    /// Builds a client over an injected HTTP transport — the test seam
+    /// for asserting on the exact `URLRequest` and returning canned
+    /// `(Data, URLResponse)` without `URLSession` or `URLProtocol`.
+    ///
+    /// - Parameter fetch: The transport closure to use for both
+    ///   front-page and search requests.
     init(fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)) {
         self.init(
             frontPage: { page in
@@ -107,11 +101,23 @@ extension Client {
         URLRequest(url: firebaseBaseURL.appendingPathComponent("item/\(id).json"))
     }
 
-    /// Fetch one page of the front page via Firebase. Cost: 1 request
-    /// for the IDs list (small) + up to `pageSize` parallel item
-    /// fetches. Per-item failures are dropped (page returns
-    /// `count - failed`) rather than failing the whole page — mirrors
-    /// the Algolia path's tolerance for hits missing required fields.
+    /// Fetches one page of the Firebase front-page feed, dropping
+    /// items that fail individually.
+    ///
+    /// One request resolves the ranked id list; up to ``pageSize``
+    /// item fetches then run in parallel. Per-item failures are
+    /// elided from the returned page rather than failing the whole
+    /// request — mirrors the Algolia path's tolerance for hits
+    /// missing required fields.
+    ///
+    /// - Parameters:
+    ///   - page: Zero-indexed page within the ranked id list.
+    ///   - fetch: HTTP transport used for the id list and each item.
+    /// - Returns: The decoded page; may be shorter than ``pageSize``
+    ///   if some item fetches failed.
+    /// - Throws: Transport, decoding, or cancellation errors. Per-item
+    ///   transport failures are swallowed; cancellation tears down
+    ///   the in-flight task group.
     static func firebaseFrontPage(
         page: Int,
         fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)

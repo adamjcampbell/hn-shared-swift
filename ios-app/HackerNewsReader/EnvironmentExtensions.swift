@@ -1,10 +1,8 @@
 import SwiftUI
 import HackerNewsReader
 
-/// Capability-action key for the cross-platform `SendAppEvent`. The
-/// default value's underlying `AppCore` is `nil`, so calls are no-ops
-/// in previews and any view rendered outside an installed
-/// `\.sendEvent`.
 extension EnvironmentValues {
+    /// Capability action for dispatching `AppEvent`s — defaults to
+    /// a no-op so calls in previews are safe.
     @Entry var sendEvent: SendAppEvent = SendAppEvent()
 }

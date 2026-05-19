@@ -1,15 +1,8 @@
 import Foundation
 import HackerNews
 
-/// View row: the API `Story` fields plus the per-user `isRead` flag,
-/// projected from `AppState.readIds` at read time. Constructed by
-/// `AppState.feedStories` / `AppState.searchResults` from the stored
-/// `[String: Story]` entity dictionary + `readIds`. SkipFuse bridges
-/// `StoryRow` to Kotlin as a peer-backed class; `// SKIP @bridgeMembers`
-/// exposes every public field as a Kotlin property getter that JNI-calls
-/// back into the Swift struct. The init is opted out (`// SKIP @nobridge`)
-/// because rows are constructed on the Swift side from `AppState`'s
-/// projections; Kotlin never builds one directly.
+/// View row — `Story` fields plus the per-user `isRead` flag
+/// projected from `AppState.readIds`.
 // SKIP @bridgeMembers
 public struct StoryRow: Sendable, Identifiable, Equatable {
     public let id: String
@@ -21,6 +14,11 @@ public struct StoryRow: Sendable, Identifiable, Equatable {
     public let createdAt: Date
     public let isRead: Bool
 
+    /// Projects a `Story` plus an `isRead` flag into a row.
+    ///
+    /// - Parameters:
+    ///   - story: Source story.
+    ///   - isRead: Whether the user has opened this story.
     // SKIP @nobridge — constructed on the Swift side from a `Story` +
     // `isRead`; Kotlin reads the materialised value.
     public init(story: Story, isRead: Bool) {
