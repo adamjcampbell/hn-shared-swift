@@ -1,28 +1,13 @@
 # Android app
 
-Standard Android Gradle project. Consumes the SkipFuse-bridged
-`HackerNewsReader` (+ `HackerNews` SDK target) as a set of `.aar` files
-in `skip-libs/` (gitignored). The Swift cross-compile is run by a
-small `skipExport` Gradle task (`app/build.gradle.kts`) wired into
-`preBuild`: it shells out to the `skip` CLI, drops the resulting AARs
-into `skip-libs/`, and Gradle links them like any other AAR.
-Gradle's up-to-date check (inputs = Swift sources + `Package.swift`,
-output = `HackerNewsReader-debug.aar`) skips the re-export when
-nothing changed, so incremental Android builds stay fast and editing
-Swift then hitting Run from Android Studio Just Works.
-
-## Modules
-
-- `app/` — the Android application. `App.onCreate` bootstraps the
-  Swift runtime (`skip.foundation.ProcessInfo.launch(...)`) and calls
-  `makeAppCore()` once, holding the resulting `AppCoreHandle` for the
-  process lifetime. `MainActivity` reads it off the `Application` and
-  passes it into `StoryScreen`, which consumes `core.state`,
-  `core.commands`, and `core.sendEvent` (a bridged `SendAppEvent`
-  struct exposing `send(_:)` and `suspend run(_:)`).
-
-There is no `core-jni/` module any more — SkipFuse's `skip export`
-emits the bridge directly.
+Standard Android Gradle project that consumes the SkipFuse-bridged
+`HackerNewsReader` (+ transitive `HackerNews` SDK target) as a set of
+`.aar` files in `skip-libs/` (gitignored). A `skipExport` Gradle task
+wired into `preBuild` shells out to the `skip` CLI when Swift sources
+or `Package.swift` change, drops the resulting AARs into `skip-libs/`,
+and Gradle links them like any other AAR. Incremental Android builds
+stay fast; editing Swift then hitting Run from Android Studio Just
+Works.
 
 ## Prerequisites
 
@@ -36,18 +21,13 @@ emits the bridge directly.
 | JDK | 21 (Android Studio's bundled JBR works) |
 | Kotlin | 2.3.0 (declared in root `build.gradle.kts`) |
 
-`local.properties` (gitignored) needs `sdk.dir`. A starter file:
+`local.properties` (gitignored) needs `sdk.dir`:
 
 ```
 sdk.dir=/Users/<you>/Library/Android/sdk
 ```
 
-## Build & run the APK
-
-`./gradlew :app:assembleDebug` runs `skip export` automatically via
-the `skipExport` task on the first build and any time Swift sources
-change. The first export takes a few minutes (Swift toolchain +
-Android SDK cross-compile); subsequent unchanged builds are a no-op.
+## Build & run
 
 ```sh
 cd android-app
@@ -61,43 +41,32 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n com.example.hackernewsreader/.ui.MainActivity
 ```
 
-The exported AARs land in `skip-libs/`:
-`HackerNewsReader-debug.aar` and `HackerNews-debug.aar` (transitively
-from the package's dependency graph), plus the Skip runtime AARs
-(`SkipFoundation-debug.aar`, `SkipModel-debug.aar`, etc.). Each AAR
-contains the natively-compiled Swift `.so` libraries for `arm64-v8a`
-plus the bridged Kotlin classes.
+The first `skipExport` invocation takes a few minutes (Swift toolchain
++ Android cross-compile); subsequent unchanged builds skip it.
 
-To run the export by hand (e.g. to refresh `skip-libs/` without a full
-Gradle build):
+## How state reaches the UI
 
-```sh
-cd ../HackerNewsReader
-skip export --debug --no-ios --module HackerNewsReader -d ../android-app/skip-libs
-```
+`App.onCreate` bootstraps the Swift runtime
+(`skip.foundation.ProcessInfo.launch(...)`) and calls `makeAppCore()`
+once, holding the resulting `AppCoreHandle` for the process lifetime.
+`MainActivity` reads it off the `Application` and passes it into
+`StoryScreen`, which consumes `core.state`, `core.commands`, and
+`core.sendEvent`. There is no `core-jni/` module — SkipFuse's
+`skip export` emits the bridge directly. No Android-side bridge tests
+in this repo yet; the previous JNI-bench suite was removed during the
+migration. Architecture and concurrency details live in
+[`AGENT.md`](../AGENT.md).
 
 ## Caveats
 
 - **`kotlin-reflect` is required.** SkipFuse's `ProcessInfo.launch()`
-  uses `kotlin.reflect.full.KClasses` to invoke the bridge
-  bootstrapper. The dependency is wired in `app/build.gradle.kts`;
-  without it the app crashes on first launch with
-  `ClassNotFoundException`.
+  uses reflection to invoke the bridge bootstrapper; without it the app
+  crashes on first launch with `ClassNotFoundException`.
 - **Kotlin version match.** SkipFuse exports AARs with Kotlin 2.3.0
-  metadata. The android-app's Kotlin plugin must be 2.3.0+ — root
-  `build.gradle.kts` pins this.
-- **Architectures.** Only `arm64-v8a` is built. Apple Silicon AVDs use
-  arm64; physical Pixel/Galaxy devices are arm64-v8a. Add an `x86_64`
-  Skip export + ABI filter for Intel-Mac emulators.
-- **APK size.** Debug APK ≈ 99 MB — Skip's exported AARs bundle the
-  Swift stdlib + Foundation + Skip runtime as `.so`s. Release builds
-  with ProGuard/minify don't shrink the native side; this is the
-  cost of native Swift on Android.
-
-## Tests
-
-Bridge regression tests for the new SkipFuse path are not in this
-repo yet. The previous `BridgePerfTest` (cold-start + JNI latency
-benchmarks for the deleted `appcoreObserve*` thunks) was removed
-during the migration; an equivalent suite can be re-added once the
-SkipFuse surface is stable enough for it to be useful.
+  metadata; the project's Kotlin plugin must be 2.3.0+.
+- **`arm64-v8a` only.** Apple Silicon AVDs and physical Pixel/Galaxy
+  devices are covered. Add an `x86_64` Skip export + ABI filter for
+  Intel-Mac emulators.
+- **APK size ≈ 99 MB.** Skip's AARs bundle the Swift stdlib +
+  Foundation + Skip runtime as `.so`s. ProGuard/minify doesn't shrink
+  the native side; this is the cost of native Swift on Android.
