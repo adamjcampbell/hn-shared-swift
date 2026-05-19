@@ -183,33 +183,41 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `clock.sleep(for:)` for the search debounce. Tests pass a
   `TestClock` (from `pointfreeco/swift-clocks`) and call
   `clock.advance(by:)` to release suspended sleepers atomically.
-  The `TestCore.commitSearch(_:clock:)` helper packages the
-  listener-debounce-settle pattern (`searchQuery = X` → `settle` →
-  advance → `settle`) for tests that only care about the
-  post-commit state.
-- **`TestCore` installs a `DispatchSerialQueue` as `unownedExecutor`.**
-  SE-0392 + Point-Free Video #362 pattern. The `nonisolated func
-  settle() async` enqueues a continuation-resume at the back of the
-  queue, so awaiting it drains every pending job (listener-Task
-  resumption, fetch / commit Tasks spawned by `sendEvent`,
-  post-`clock.sleep` continuations) deterministically. Replaces
-  `Task.megaYield()`,
-  which was probabilistic. Caveat: the queue is strict FIFO, while
-  real actors honour task priority — fine because test code has no
-  `Task(priority: …)` diversity.
+  The `AppCore.commitSearch(_:clock:)` test-only extension
+  packages the listener-debounce-settle pattern (`searchQuery = X`
+  → `settle` → advance → `settle`) for tests that only care about
+  the post-commit state.
+- **`TestActor` installs a `DispatchSerialQueue` as `unownedExecutor`.**
+  SE-0392 + Point-Free Video #362 pattern. `TestActor` is the
+  per-test isolation provider; the `withAppCore(...)` fixture passes
+  it as `isolation:` when constructing `AppCore`, so AppCore borrows
+  TestActor's executor directly (no sibling executor actor needed).
+  The `nonisolated func settle() async` enqueues a continuation-
+  resume at the back of the queue, so awaiting it drains every
+  pending job (listener-Task resumption, fetch / commit Tasks
+  spawned by `sendEvent`, post-`clock.sleep` continuations)
+  deterministically. Replaces `Task.megaYield()`, which was
+  probabilistic. Tests recover the TestActor as
+  `appCore.testActor` via a test-target extension that force-casts
+  `appCore.isolation` (relaxed to module-internal). Caveat: the
+  queue is strict FIFO, while real actors honour task priority —
+  fine because test code has no `Task(priority: …)` diversity.
 - **`try` (not `try?`) on the debounce `clock.sleep`.** The fetch
   Task body uses `try await clock.sleep(for: debounce)` and lets the
   throw propagate. Swallowing it would let cancelled tasks fall
   through to the client's fetch call.
-- **Batch into one `core.run` per test.** `TestCore.run` follows the
-  Point-Free `Actor.run` pattern (Video #362) — its purpose is to
-  group multiple reads and `sendEvent` calls into a single isolation
-  hop with a consistent snapshot. Default to one `core.run { core in
-  … }` block per test; only split when a real suspension boundary
-  forces it (`await core.settle()`, `await clock.advance(by:)`,
-  `await someTask.value`, `await iterator.next()`). `sendEvent`
-  returns with state already mutated, so adjacent reads inside the
-  same block see the new state.
+- **Batch into one `appCore.run` per test.** `AppCore.run` follows
+  the Point-Free `Actor.run` pattern (Video #362) — its purpose is
+  to group multiple reads and `sendEvent` calls into a single
+  isolation hop with a consistent snapshot. Default to one
+  `appCore.run { appCore in … }` block per test; only split when a
+  real suspension boundary forces it (`await appCore.testActor.settle()`,
+  `await clock.advance(by:)`, `await someTask.value`,
+  `await iterator.next()`). `sendEvent` returns with state already
+  mutated, so adjacent reads inside the same block see the new
+  state. Inside the closure, alias `let state = appCore.state` at
+  the top — direct capture of the outer-scope `state` is rejected
+  because the `run` body is `@Sendable`.
 - **Park mocks with `clock.sleep(for: .seconds(Int.max))`.** Mocks
   that must hang until the parent Task cancels them call `try await
   clock.sleep(for: .seconds(Int.max))` on the injected `TestClock`.
@@ -273,15 +281,18 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   use it for the cancellation-aware Task build (try-sleep, post-sleep
   `Task.checkCancellation()`, and `URLError(.cancelled)` →
   `CancellationError` normalisation).
-- **Tests substitute `TestCore` (per-instance `actor`).**
-  Different `TestCore`s run on different executors so tests
-  parallelise. `TestCore.run { ... }` is the Point-Free actor-run
-  hop for grouped snapshot reads. `TestCore` carries an `isolated
-  deinit` (SE-0371, Swift 6.2) that calls `appCore.shutdown()` —
-  this breaks the `TaskRegistry → listener-Task → self` cycle when
-  each test releases. (Requires macOS 15.4 floor for SE-0371;
-  iOS floor stays at 17 because the production `appCore` is
-  app-lifetime and never deinits.)
+- **Tests wrap setup in `withAppCore { state, commands, appCore in … }`.**
+  The helper builds a fresh `TestActor`, constructs `AppCore` with
+  it as `isolation:`, runs the body, and awaits
+  `appCore.shutdown()` on exit (do/catch — Swift forbids `await`
+  inside `defer`) — this breaks the
+  `TaskRegistry → listener-Task → AppCore` cycle deterministically
+  before the next test starts. Mocks pass through `client:`
+  (e.g. `client: .mock(frontPage: ..., search: ...)`), the optional
+  `clock:` accepts a `TestClock`, and `now:` accepts a `@Sendable
+  () -> Date`. Different TestActors run on different queues so
+  tests parallelise across instances. The `appCore.testActor`
+  extension recovers the TestActor for `settle()`.
 
 ## Build & test
 
