@@ -13,6 +13,11 @@ import SkipFuse
 /// `@Observable` conformance gives SwiftUI fine-grained per-property
 /// tracking on iOS; SkipFuse routes the same tracking through
 /// Compose's snapshot system on Android.
+///
+/// Setter visibility encodes data-flow direction: `public var` is a
+/// two-way field that the UI binds and writes back (currently only
+/// ``searchQuery``); `public internal(set) var` is one-way, written
+/// by ``AppCore`` and read by the UI.
 // SKIP @bridgeMembers
 @Observable
 public final class AppState {
@@ -28,15 +33,15 @@ public final class AppState {
 
     // MARK: Feed surface — three flat axes
 
-    public var feedLoaded: LoadedStories? = nil
-    public var feedInitialStatus: LoadStatus = LoadStatus()
-    public var feedLoadMoreStatus: LoadStatus = LoadStatus()
+    public internal(set) var feedLoaded: LoadedStories? = nil
+    public internal(set) var feedInitialStatus: LoadStatus = LoadStatus()
+    public internal(set) var feedLoadMoreStatus: LoadStatus = LoadStatus()
 
     // MARK: Search surface — mirrored
 
-    public var searchLoaded: LoadedStories? = nil
-    public var searchInitialStatus: LoadStatus = LoadStatus()
-    public var searchLoadMoreStatus: LoadStatus = LoadStatus()
+    public internal(set) var searchLoaded: LoadedStories? = nil
+    public internal(set) var searchInitialStatus: LoadStatus = LoadStatus()
+    public internal(set) var searchLoadMoreStatus: LoadStatus = LoadStatus()
 
     // MARK: Entity store (internal)
 
