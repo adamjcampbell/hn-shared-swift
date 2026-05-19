@@ -27,10 +27,8 @@ func withAppCore<R>(
 ) async rethrows -> R {
     let testActor = TestActor()
     nonisolated(unsafe) let state = AppState()
-    let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
     let appCore = AppCore(
         state: state,
-        commandsContinuation: continuation,
         client: client,
         clock: clock,
         now: now,
@@ -39,7 +37,7 @@ func withAppCore<R>(
     // Swift forbids `await` inside `defer` in async funcs, so the
     // teardown is mirrored on both arms.
     do {
-        let result = try await body(state, stream, appCore)
+        let result = try await body(state, appCore.commands, appCore)
         await appCore.shutdown()
         return result
     } catch {

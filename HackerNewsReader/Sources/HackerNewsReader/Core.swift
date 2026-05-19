@@ -27,17 +27,15 @@ public struct AppCoreHandle {
     // in MainActor's region (AppCore borrows MainActor's executor;
     // AppCoreHandle is @MainActor) — SE-0414.
     nonisolated(unsafe) let state = AppState()
-    let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
     let appCore = AppCore(
         state: state,
-        commandsContinuation: continuation,
         client: Client(),
         clock: ContinuousClock(),
         isolation: MainActor.shared
     )
     return AppCoreHandle(
         state: state,
-        commands: stream,
+        commands: appCore.commands,
         sendEvent: SendAppEvent(appCore)
     )
 }

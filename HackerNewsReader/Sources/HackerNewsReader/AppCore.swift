@@ -26,9 +26,10 @@ import FoundationNetworking
 actor AppCore {
     let state: AppState
 
+    nonisolated let commands: AsyncStream<AppCommand>
     private let commandsContinuation: AsyncStream<AppCommand>.Continuation
     private let client: Client
-    private let clock: any Clock<Duration>
+    nonisolated let clock: any Clock<Duration>
     private let now: @Sendable () -> Date
     nonisolated let isolation: any Actor
 
@@ -47,14 +48,15 @@ actor AppCore {
 
     init(
         state: AppState,
-        commandsContinuation: AsyncStream<AppCommand>.Continuation,
         client: Client,
         clock: any Clock<Duration>,
         now: @escaping @Sendable () -> Date = Date.init,
         isolation: any Actor
     ) {
+        let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
         self.state = state
-        self.commandsContinuation = commandsContinuation
+        self.commands = stream
+        self.commandsContinuation = continuation
         self.client = client
         self.clock = clock
         self.now = now
