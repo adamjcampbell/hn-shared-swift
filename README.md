@@ -1,16 +1,18 @@
-# Cross-platform `@Observable` ↔ Compose, via SkipFuse
+# Hacker News Reader Example
 
-A reference example: one Swift `@Observable` model drives native SwiftUI
-on iOS and native Jetpack Compose on Android. The Swift core is compiled
-natively to `.so` for Android and bridged to Kotlin by
-[SkipFuse](https://skip.dev) — Compose reads `@Observable` properties
-inside `@Composable`s, mutations recompose, `async` functions become
-`suspend`, `AsyncStream` becomes `Flow`. The demo app is a small Hacker
-News reader: front-page stories (via the
-[official Firebase API](https://github.com/HackerNews/API)), search (via
-the [Algolia HN API](https://hn.algolia.com/api) — Firebase has no
-search endpoint), and a per-story read indicator. Networking lives in
-Swift (`URLSession`); both UIs only render the snapshot.
+An example of cross-platform `@Observable` ↔ Compose via
+[SkipFuse](https://skip.dev): one Swift `@Observable` model drives
+native SwiftUI on iOS and native Jetpack Compose on Android. The Swift
+core is compiled natively to `.so` for Android and bridged to Kotlin —
+Compose reads `@Observable` properties inside `@Composable`s, mutations
+recompose, `async` functions become `suspend`, `AsyncStream` becomes
+`Flow`.
+
+The app fetches front-page stories from the
+[official Firebase API](https://github.com/HackerNews/API), search from
+the [Algolia HN API](https://hn.algolia.com/api) (Firebase has no
+search endpoint), and shows a per-story read indicator. Networking
+lives in Swift (`URLSession`); both UIs only render the snapshot.
 
 ## The bridge at the call site
 
