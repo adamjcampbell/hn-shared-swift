@@ -90,6 +90,11 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   access coupling + Carmack-lightweight). Mutators live on `AppCore`,
   not on `AppState`. `HackerNewsReader` is the only public product in
   `Package.swift`; iOS and Android consume one product.
+- **`AppEvent` (UI → core) and `AppCommand` (core → UI) follow CQRS
+  vocabulary.** "Effect" is intentionally avoided so it stays free
+  should we adopt a TCA-style reducer; `LaunchedEffect`/`SideEffect`
+  also have separate meanings in Compose. Commands are one-shot
+  imperative messages with no return value.
 
 ### Bridge
 
