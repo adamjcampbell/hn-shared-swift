@@ -267,15 +267,17 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   handle for the process lifetime — the `AppCore` lives as long as
   the `SendAppEvent` inside the handle holds it. `AppCore` is an
   `actor` whose `unownedExecutor` borrows MainActor's (SE-0392), so
-  it stays in MainActor's isolation region; the non-Sendable
-  `AppState` reaches the actor via one transient
-  `nonisolated(unsafe)` rebind inside `makeAppCore()` (SE-0414
-  region isolation makes this sound). The long-lived `searchQuery`
-  listener Task is bootstrapped from `AppCore`'s sync init body via
-  an isolated-parameter local function (`@Sendable func
-  setupListeners(_ core: isolated AppCore) async`) — Tasks spawned
-  in a sync init body don't inherit the actor's isolation, so the
-  isolated parameter is what re-establishes it.
+  it stays in MainActor's isolation region; non-Sendable `AppState`
+  flows in via SE-0414 region isolation (the fresh `AppState()`
+  value is unaliased) and back out to the handle through a one-shot
+  `@unchecked Sendable` box scoped to `makeAppCore`. Long-running
+  listener Tasks are bootstrapped externally by `bind()` —
+  `makeAppCore` reaches it synchronously via
+  `appCore.assumeIsolated { $0.bind() }` (a runtime no-op given the
+  borrowed executor); tests `await appCore.bind()` through the
+  actor hop. Keeping the bootstrap out of `init` sidesteps the
+  "Task spawned in a sync init body doesn't inherit actor isolation"
+  workaround.
 - **`sendEvent` is the single orchestration entry.** All four
   fetch flows (feed refresh / feed load-more / search refresh /
   search load-more) plus `toggleRead` / `openStory` live inline as

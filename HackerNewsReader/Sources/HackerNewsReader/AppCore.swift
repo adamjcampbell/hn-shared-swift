@@ -26,19 +26,25 @@ public struct AppCoreHandle {
 ///   send-event capability.
 // SKIP @bridge
 @MainActor public func makeAppCore() -> AppCoreHandle {
-    // nonisolated(unsafe) lets the non-Sendable AppState cross
-    // into AppCore's nonisolated init. Sound because both ends sit
-    // in MainActor's region (AppCore borrows MainActor's executor;
-    // AppCoreHandle is @MainActor) — SE-0414.
-    nonisolated(unsafe) let state = AppState()
+    // Safe: AppCore borrows MainActor's executor and AppCoreHandle is
+    // @MainActor, so AppState only ever lives on MainActor. Unchecked is
+    // the local opt-out from `assumeIsolated`'s Sendable-return check.
+    struct Unchecked<Value>: @unchecked Sendable {
+        let value: Value; init(_ value: Value) { self.value = value }
+    }
+
     let appCore = AppCore(
-        state: state,
+        state: AppState(),
         client: Client(),
         clock: ContinuousClock(),
         isolation: MainActor.shared
     )
+    appCore.assumeIsolated { $0.bind() }
+
+    var appState: AppState { appCore.assumeIsolated { Unchecked($0.state) }.value }
+
     return AppCoreHandle(
-        state: state,
+        state: appState,
         commands: appCore.commands,
         sendEvent: SendAppEvent(appCore)
     )
@@ -49,14 +55,15 @@ public struct AppCoreHandle {
 ///
 /// Borrows the host's `unownedExecutor`, so all methods and Tasks
 /// run in the host's isolation region — `MainActor` in production,
-/// a per-test `TestActor` in tests. The non-`Sendable` ``AppState``
-/// reaches the actor via one transient `nonisolated(unsafe)` rebind
-/// at the host's init site.
+/// a per-test `TestActor` in tests. ``AppState`` is non-`Sendable`
+/// but is only ever touched on this borrowed executor.
 ///
-/// - Note: The search-query listener is bootstrapped from `init` via
-///   an isolated-parameter local function — a `Task` spawned in a
-///   sync init body doesn't inherit actor isolation, and the
-///   isolated parameter is what re-establishes it.
+/// - Note: Long-running listener Tasks are bootstrapped externally
+///   via `bind()` after `init` returns — `makeAppCore` reaches it
+///   sync via `assumeIsolated`; tests `await` it through the actor
+///   hop. Keeping the bootstrap out of `init` avoids the "Task
+///   spawned in a sync init body doesn't inherit actor isolation"
+///   workaround.
 actor AppCore {
     let state: AppState
 
@@ -94,51 +101,56 @@ actor AppCore {
         self.clock = clock
         self.now = now
         self.isolation = isolation
+    }
 
-        Task { await setupListeners(self) }
-
-        @Sendable func setupListeners(_ core: isolated AppCore) async {
-            let state = core.state
-            var tasks: Tasks { get { core.tasks } set { core.tasks = newValue } }
-
-            tasks[.searchListener] = Task {
-                for await query in state.searchQueryChanges {
-                    if query.isEmpty {
-                        tasks[.search] = nil
-                        tasks[.searchMore] = nil
-                        state.searchLoaded = nil
-                        state.searchInitialStatus = LoadStatus()
-                        state.searchLoadMoreStatus = LoadStatus()
-                        continue
-                    }
-
+    /// Binds long-running listener Tasks to `AppState`'s change streams.
+    ///
+    /// Call once per `AppCore`: from `makeAppCore` (sync, via
+    /// `assumeIsolated`) in production, from `withAppCore` (async hop)
+    /// in tests.
+    ///
+    /// - Note: `Task { … }` here inherits the actor's isolation via
+    ///   `@_inheritActorContext` on `Task.init`, so `tasks[…]` /
+    ///   `state.…` writes inside the spawned bodies stay isolated to
+    ///   `self`.
+    func bind() {
+        tasks[.searchListener] = Task {
+            for await query in state.searchQueryChanges {
+                if query.isEmpty {
+                    tasks[.search] = nil
                     tasks[.searchMore] = nil
-                    // @Observable re-fires notifications on equal writes;
-                    // skip the no-op writes to avoid per-character
-                    // recomposition during keystroke bursts.
-                    if state.searchLoadMoreStatus != LoadStatus() {
-                        state.searchLoadMoreStatus = LoadStatus()
-                    }
-                    if !state.searchInitialStatus.isLoading {
-                        state.searchInitialStatus.startLoading()
-                    }
+                    state.searchLoaded = nil
+                    state.searchInitialStatus = LoadStatus()
+                    state.searchLoadMoreStatus = LoadStatus()
+                    continue
+                }
 
-                    tasks[.search] = Task {
-                        do {
-                            let page = try await core.fetch(debounce: Self.searchDebounce) {
-                                try await $0.search(query, 0)
-                            }
-                            try Task.checkCancellation()
-                            for story in page.stories { state.stories[story.id] = story }
-                            let ids = page.stories.map(\.id)
-                            state.searchLoaded = LoadedStories(
-                                ids: ids, page: 0, totalPages: page.totalPages, loadedAt: core.now()
-                            )
-                            state.searchInitialStatus.finishSuccess()
-                        } catch is CancellationError {
-                        } catch {
-                            state.searchInitialStatus.finishFailure(error.localizedDescription)
+                tasks[.searchMore] = nil
+                // @Observable re-fires notifications on equal writes;
+                // skip the no-op writes to avoid per-character
+                // recomposition during keystroke bursts.
+                if state.searchLoadMoreStatus != LoadStatus() {
+                    state.searchLoadMoreStatus = LoadStatus()
+                }
+                if !state.searchInitialStatus.isLoading {
+                    state.searchInitialStatus.startLoading()
+                }
+
+                tasks[.search] = Task {
+                    do {
+                        let page = try await fetch(debounce: Self.searchDebounce) {
+                            try await $0.search(query, 0)
                         }
+                        try Task.checkCancellation()
+                        for story in page.stories { state.stories[story.id] = story }
+                        let ids = page.stories.map(\.id)
+                        state.searchLoaded = LoadedStories(
+                            ids: ids, page: 0, totalPages: page.totalPages, loadedAt: now()
+                        )
+                        state.searchInitialStatus.finishSuccess()
+                    } catch is CancellationError {
+                    } catch {
+                        state.searchInitialStatus.finishFailure(error.localizedDescription)
                     }
                 }
             }

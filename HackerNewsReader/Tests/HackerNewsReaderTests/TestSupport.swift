@@ -62,6 +62,7 @@ func withAppCore<R>(
         now: now,
         isolation: TestActor()
     )
+    await appCore.bind()
     let result: Result<R, Error>
     do { result = .success(try await body(appCore)) }
     catch { result = .failure(error) }
