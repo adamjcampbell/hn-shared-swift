@@ -150,7 +150,7 @@ struct CoreTests {
         ) { engine in
             await engine.run { await $0.sendMessage(.refresh) }
 
-            // First emission we observe is storyA's — proving storyB emitted nothing.
+            // First emission we observe is storyA's — proves storyB emitted nothing.
             var iterator = engine.commands.makeAsyncIterator()
             await engine.run { engine in
                 let model = engine.model
@@ -189,7 +189,6 @@ struct CoreTests {
         ) { engine in
             await engine.run { engine in
                 let model = engine.model
-                // readIds is the canonical record; toggling before the projection has anything to map onto is fine.
                 await engine.sendMessage(.toggleRead(id: "100"))
                 #expect(model.readIds.contains("100"))
                 #expect(model.feedStories.isEmpty)
@@ -241,7 +240,6 @@ struct CoreTests {
             }
             try await engine.testActor.runPending()
 
-            // Spinner is on before the debounce elapses.
             await engine.run { engine in #expect(engine.model.searchInitialStatus.isLoading == true) }
 
             try await engine.testClock.advance(by: Engine.searchDebounce)
@@ -276,7 +274,6 @@ struct CoreTests {
             client: .mock(
                 search: { query, _ in
                     if query == "ru" {
-                        // Park until cancelled, then surface URLError(.cancelled).
                         do { try await clock.sleep(for: .seconds(Int.max)) }
                         catch { throw URLError(.cancelled) }
                     }
@@ -387,7 +384,7 @@ struct CoreTests {
             ),
             clock: TestClock()
         ) { engine in
-            // Let the listener reach its `for await` suspension before the first write.
+            // Let the listener suspend on `for await` before the first write.
             try await engine.testActor.runPending()
 
             await engine.run { engine in engine.model.searchQuery = "rust" }
@@ -422,7 +419,7 @@ struct CoreTests {
             ),
             clock: TestClock()
         ) { engine in
-            // Let the listener reach its `for await` suspension before the first write.
+            // Let the listener suspend on `for await` before the first write.
             try await engine.testActor.runPending()
 
             await engine.run { engine in engine.model.searchQuery = "r" }
@@ -539,7 +536,6 @@ struct CoreTests {
                 frontPage: { p in
                     calls.recordFrontPage(page: p)
                     if p == 1 {
-                        // Park until the refresh cancels us.
                         try await clock.sleep(for: .seconds(Int.max))
                     }
                     return page([storyA], totalPages: 5)
@@ -559,7 +555,6 @@ struct CoreTests {
             try await engine.testActor.runPending()
             await engine.run { engine in #expect(engine.model.feedLoadMoreStatus.isLoading == true) }
 
-            // Refresh's `tasks[.feedMore] = nil` cancels the parked page-1 task.
             await engine.run { await $0.sendMessage(.refresh) }
             await loadMore.value
 
@@ -627,7 +622,6 @@ struct CoreTests {
             client: .mock(
                 search: { _, p in
                     if p == 0 { return page([storyA], totalPages: 5) }
-                    // Park until cancelled.
                     try await clock.sleep(for: .seconds(Int.max))
                     return page([])
                 }
@@ -658,7 +652,7 @@ struct CoreTests {
 
     @Test("loadMore preserves loadedAt from the initial fetch")
     func loadMore_preservesLoadedAt() async throws {
-        // Monotonic `now` so a wrongly-reassigned `loadedAt` would differ deterministically.
+        // Monotonic `now`: a wrongly-reassigned `loadedAt` would differ deterministically.
         let dates = MonotonicDates()
         try await withEngine(
             client: .mock(

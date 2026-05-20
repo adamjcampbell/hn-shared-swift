@@ -23,9 +23,8 @@ public struct Core {
 ///   the send-message capability.
 // SKIP @bridge
 @MainActor public func makeCore() -> Core {
-    // Safe: Engine borrows MainActor's executor and Core is
-    // @MainActor, so Model only ever lives on MainActor. Unchecked is
-    // the local opt-out from `assumeIsolated`'s Sendable-return check.
+    // Engine borrows MainActor's executor; Model only ever lives on MainActor.
+    // Unchecked opts out of `assumeIsolated`'s Sendable-return check.
     struct Unchecked<Value>: @unchecked Sendable {
         let value: Value; init(_ value: Value) { self.value = value }
     }

@@ -78,9 +78,7 @@ actor Engine {
                 }
 
                 tasks[.searchMore] = nil
-                // @Observable re-fires notifications on equal writes;
-                // skip the no-op writes to avoid per-character
-                // recomposition during keystroke bursts.
+                // @Observable re-fires on equal writes; skip no-ops during keystroke bursts.
                 if model.searchLoadMoreStatus != LoadStatus() {
                     model.searchLoadMoreStatus = LoadStatus()
                 }
@@ -133,9 +131,7 @@ actor Engine {
             }
 
         case .refresh:
-            // Pull-to-refresh only; not reachable while search is active.
-            // Cancel any in-flight load-more so its appended page doesn't
-            // land on the snapshot we're about to replace.
+            // Cancel in-flight load-more so its page doesn't append onto the snapshot we're replacing.
             tasks[.feedMore] = nil
             model.feedLoadMoreStatus = LoadStatus()
             model.feedInitialStatus.startLoading()
@@ -151,7 +147,7 @@ actor Engine {
                     )
                     model.feedInitialStatus.finishSuccess()
                 } catch is CancellationError {
-                    // Newer fetch will clear loading when it commits.
+                    // Newer fetch clears loading when it commits.
                 } catch {
                     model.feedInitialStatus.finishFailure(error.localizedDescription)
                 }

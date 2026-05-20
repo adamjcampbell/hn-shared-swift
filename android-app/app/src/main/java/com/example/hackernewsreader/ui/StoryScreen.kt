@@ -77,12 +77,10 @@ fun StoryScreen(core: Core) {
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val sendMessage = core.sendMessage
 
-    // Initial fetch on first composition.
     LaunchedEffect(Unit) {
         sendMessage.send(Message.refresh)
     }
 
-    // One-shot commands from the core.
     LaunchedEffect(Unit) {
         core.commands.kotlin().collect { command ->
             when (command) {
@@ -121,9 +119,7 @@ private fun StoriesContent(
     sendMessage: SendMessageAction,
     modifier: Modifier = Modifier,
 ) {
-    // SkipFuse routes @Observable property reads through Compose's snapshot
-    // system; reading these properties inside a @Composable registers them
-    // for tracking and mutations from any thread trigger recomposition.
+    // SkipFuse routes @Observable reads through Compose's snapshot system; reading here registers for recomposition.
     val authoritativeSearchQuery = model.searchQuery
     @Suppress("UNCHECKED_CAST")
     val feedStories = model.feedStories.kotlin() as List<StoryRow>
@@ -143,17 +139,11 @@ private fun StoriesContent(
     val textFieldState = rememberTextFieldState(initialText = authoritativeSearchQuery)
     val scope = rememberCoroutineScope()
 
-    // User typing → core. Direct property setter; Swift's @Observable
-    // setter routes through SkipFuse's Compose snapshot integration, so any
-    // composable that read `searchQuery` is invalidated and the next
-    // StoriesContent recomposition picks up the new value.
     LaunchedEffect(model) {
         snapshotFlow { textFieldState.text.toString() }
             .distinctUntilChanged()
             .collect { model.searchQuery = it }
     }
-    // Authoritative writes from core (cold-start initial, programmatic
-    // clears) → TextFieldState.
     LaunchedEffect(authoritativeSearchQuery) {
         if (textFieldState.text.toString() != authoritativeSearchQuery) {
             textFieldState.edit { replace(0, length, authoritativeSearchQuery) }
@@ -355,9 +345,7 @@ private fun SearchHeader(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
-                // Always present in the layout so the title doesn't
-                // shift width as the spinner appears/disappears on each
-                // debounce cycle. Alpha animates the fade in/out.
+                // Always mounted so the title doesn't shift width as the spinner fades in/out.
                 val spinnerAlpha by animateFloatAsState(
                     targetValue = if (isLoading) 1f else 0f,
                     label = "searchHeaderSpinnerAlpha",

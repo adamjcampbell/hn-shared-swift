@@ -14,9 +14,6 @@ struct RootView: View {
                     .ignoresSafeArea()
             }
             .task {
-                // Long-lived consumer of Command. The sheet binding
-                // lives here in the SwiftUI tree; user-driven dismissal
-                // sets `presented = nil` without touching the core.
                 for await command in core.commands {
                     switch command {
                     case .presentURL(let urlString):
@@ -34,14 +31,10 @@ private struct StoriesScreen: View {
     var body: some View {
         @Bindable var model = model
         StoriesContent()
-            // Writes flow through Model's synthesized setter; the
-            // listener Task inside Engine observes the willSet and
-            // fires a debounced fetch.
             .searchable(text: $model.searchQuery, prompt: "Search Hacker News")
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .task {
-                // One-shot first-appear fetch.
                 await sendMessage.run(.refresh)
             }
             .navigationTitle("Hacker News")
@@ -54,12 +47,7 @@ private struct StoriesContent: View {
     var body: some View {
         StoriesList()
             .overlay {
-                // While the search field is active, occlude the front-page
-                // surface (HeaderCard + full list) with the search
-                // surface. Overlay (not if/else swap) keeps StoriesList
-                // mounted so scroll position survives a search-cancel
-                // cycle — and `model.feedStories` survives untouched
-                // because the search fetch writes to its own searchIds.
+                // Overlay (not if/else) keeps StoriesList mounted so scroll position survives a search-cancel cycle.
                 if isSearching {
                     SearchResults()
                 }
@@ -90,10 +78,7 @@ private struct SearchResults: View {
         .listStyle(.insetGrouped)
         .background(.background)
         .overlay {
-            // Empty-search-results overlay. The `!isLoading` guard
-            // suppresses the brief window during a debounced query
-            // change where searchResults are stale-empty before the
-            // new fetch lands.
+            // `!isLoading` suppresses the stale-empty window during a debounced query change.
             if !model.searchInitialStatus.isLoading
                 && model.searchResults.isEmpty
                 && !model.searchQuery.isEmpty {
@@ -133,11 +118,7 @@ private struct LoadMoreRow: View {
     let status: LoadStatus
     @Environment(\.sendMessage) private var sendMessage
 
-    // Forces a fresh `ProgressView` instance on every row appearance.
-    // SwiftUI's `ProgressView` wraps `UIActivityIndicatorView`, which
-    // pauses when its host cell is detached during List virtualisation
-    // and isn't re-started when the cell is re-attached — bumping the
-    // id replaces the indicator, which restarts its animation.
+    // `UIActivityIndicatorView` pauses when List virtualisation detaches its cell; bumping the id remounts it.
     @State private var spinId = 0
 
     var body: some View {
@@ -227,9 +208,7 @@ private struct SearchHeader: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text("Searching for “\(query)”").font(.headline)
-                // Always present in the layout so the title doesn't
-                // shift width as the spinner appears/disappears on each
-                // debounce cycle. Opacity animates the fade in/out.
+                // Always mounted so the title doesn't shift width as the spinner fades in/out.
                 ProgressView()
                     .controlSize(.small)
                     .opacity(isLoading ? 1 : 0)

@@ -26,9 +26,7 @@ struct FirebaseFrontPageTests {
 
     @Test("preserves topstories order regardless of item completion order")
     func preservesOrder() async throws {
-        // Items returned in reverse — the result must still follow topstories
-        // order. TaskGroup yields in completion order, so the sort+index
-        // logic is what's under test here.
+        // Items returned in reverse; the sort+index logic is what's under test.
         let client = Client(fetch: firebaseMock(
             topstories: [10, 20, 30],
             items: [
@@ -36,9 +34,6 @@ struct FirebaseFrontPageTests {
                 20: itemJSON(id: 20, title: "Twenty"),
                 30: itemJSON(id: 30, title: "Thirty"),
             ],
-            // Synthetic delay would be nice but isn't needed — the test
-            // asserts on ordering invariants the implementation must hold
-            // even under any completion shuffle.
             recordURL: { _ in }
         ))
 
@@ -51,7 +46,6 @@ struct FirebaseFrontPageTests {
     @Test("page 1 fetches items 50-99")
     func pageOneFetchesCorrectSlice() async throws {
         let captured = CapturedURLs()
-        // 101 IDs total: page 0 = [0..49], page 1 = [50..99], page 2 = [100].
         let ids = Array(0..<101)
         var items: [Int: String] = [:]
         for id in ids { items[id] = itemJSON(id: id, title: "S\(id)") }
@@ -113,8 +107,6 @@ struct FirebaseFrontPageTests {
 
     @Test("tolerates per-item fetch failures")
     func toleratesItemFailures() async throws {
-        // One item URL throws — that item should be dropped, but the
-        // other items in the page still land.
         let client = Client(fetch: { request in
             let url = request.url!
             if url.path.hasSuffix("/topstories.json") {

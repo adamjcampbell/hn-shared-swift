@@ -79,9 +79,7 @@ extension Client {
     static let productionSession: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 10
-        // `waitsForConnectivity` is read-only on swift-corelibs-Foundation
-        // (Android/Linux), so we don't touch it. The default (`false`) is
-        // what we want anyway.
+        // `waitsForConnectivity` is read-only on swift-corelibs-Foundation; default is `false` either way.
         return URLSession(configuration: configuration)
     }()
 }
@@ -133,9 +131,7 @@ extension Client {
         let end = min(start + pageSize, allIDs.count)
         let pageIDs = Array(allIDs[start..<end])
 
-        // TaskGroup yields children in completion order, not submission
-        // order — track the index explicitly so the final array follows
-        // the topstories ranking.
+        // TaskGroup yields in completion order; index pairs survive the sort below.
         let indexed: [(Int, Story?)] = try await withThrowingTaskGroup(
             of: (Int, Story?).self
         ) { group in
@@ -146,10 +142,7 @@ extension Client {
                         let item = try firebaseDecoder.decode(FirebaseItem.self, from: data)
                         return (idx, Story(firebaseItem: item))
                     } catch is CancellationError {
-                        // Re-throw cancellation so the group tears down
-                        // the rest of the in-flight requests. Without
-                        // this, parent-Task cancellation gets swallowed
-                        // here and the group keeps fetching.
+                        // Re-throw or the group swallows parent-cancel and keeps fetching.
                         throw CancellationError()
                     } catch let urlError as URLError where urlError.code == .cancelled {
                         throw CancellationError()
