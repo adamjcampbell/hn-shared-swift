@@ -12,19 +12,19 @@ front-page stories (live-ranked via the [official HN Firebase
 API](https://github.com/HackerNews/API)), search via the Algolia HN API
 (Firebase has no text-search endpoint), and a per-story read indicator.
 
-The shape is **Elm-like** (`Model` + `Message` in + `Command` out)
-implemented in **idiomatic Swift, made concurrency-safe by an `actor`**:
-a single `Engine` actor owns every write to `Model`, so the
-`@Observable` class itself stays a plain mutable data bag while race-
-free access is enforced by Swift 6's isolation system. `Effect` is
-deliberately avoided as a name — reserved should we ever fold `Engine`
-into a TCA-style reducer.
+Names borrow from Elm — `Model`, `Message` in, `Command` out —
+implemented in **idiomatic Swift, made concurrency-safe by an
+`actor`**: a single `Engine` actor owns every write to `Model`, so
+the `@Observable` class itself stays a plain mutable data bag while
+race-free access is enforced by Swift 6's isolation system. `Effect`
+is deliberately avoided as a name — reserved should we ever fold
+`Engine` into a TCA-style reducer.
 
 The Swift package splits into two targets:
 - `HackerNews` — API client + entity types (`Client`, `Story`, `Page`).
 - `HackerNewsReader` — `Model` + `Engine` + the bridged module
-  surface. `makeCore()` returns a `Core` handle of (`model`,
-  `commands`, `sendMessage`); `SendMessageAction` is the Equatable
+  surface. `makeCore()` returns a `Core` of (`model`, `commands`,
+  `sendMessage`); `SendMessageAction` is the Equatable
   capability struct (mirroring SwiftUI's `DismissAction`) exposing
   `send(_:)` and `suspend run(_:)`. `Message` (UI → core) and
   `Command` (core → UI) form the symmetric Elm-style pair. Plus
@@ -40,14 +40,14 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `HackerNewsReader`) drives both platforms; one `Message` enum
   carries every user-driven mutation.
 - iOS: direct `@Observable` + SwiftUI; no bridge in the iOS path.
-  `HackerNewsReaderApp` holds the `Core` handle via `@State` and
+  `HackerNewsReaderApp` holds the `Core` via `@State` and
   hands it to `RootView`, which installs the `Model` and the
   `\.sendMessage` capability into the SwiftUI environment.
   Descendants read state via `@Environment(Model.self)` and dispatch
   messages via `@Environment(\.sendMessage)` — `sendMessage(.foo)` for
   fire-and-forget, `await sendMessage.run(.foo)` for awaitable.
 - Android: bridged via SkipFuse. `App.onCreate` calls `makeCore()`
-  once and stashes the `Core` handle for the process lifetime;
+  once and stashes the `Core` for the process lifetime;
   `MainActivity` reads it off the `Application` and passes it to
   `StoryScreen`. Compose reads `core.model` directly — the bridging
   plugin emits a Kotlin `class Model` whose property getters JNI-call
@@ -85,7 +85,7 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `HackerNewsTests` exercises it without touching the reader.
 - **`HackerNewsReader` owns the presentation lifecycle.** `Engine`
   (workhorse `actor`, internal, in `Engine.swift`), with the bridged
-  factory `makeCore()` returning the `Core` handle in `Core.swift`;
+  factory `makeCore()` returning the `Core` value in `Core.swift`;
   `SendMessageAction` (Equatable capability struct, `DismissAction`-
   flavoured, exposing `send(_:)` / `suspend run(_:)`); `Model`
   (`@Observable` flat mega-struct bag); `StoryRow` (UI row = `Story
@@ -143,7 +143,7 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 
 - Views read `Model` (the `@Observable final class`) via
   `@Environment(Model.self)`; `RootView` installs it from the
-  `Core` handle owned by `HackerNewsReaderApp`.
+  `Core` owned by `HackerNewsReaderApp`.
 - Messages flow back through `@Environment(\.sendMessage)`, a
   `SendMessageAction` capability installed alongside the state.
   `sendMessage(.foo)` is fire-and-forget (SwiftUI `DismissAction`-style
@@ -272,16 +272,16 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   (which is `MainActor.assumeIsolated`).
 - **Architecture: `makeCore()` factory + `Engine` workhorse
   actor.** `Core.swift` declares `@MainActor public func makeCore()
-  -> Core`, returning a struct of (`state`, `commands`,
+  -> Core`, returning a struct of (`model`, `commands`,
   `sendMessage`). Hosts call it once at app scope (iOS: `@State` on
-  `App`; Android: `Application.onCreate`) and hold the handle for
+  `App`; Android: `Application.onCreate`) and hold the `Core` for
   the process lifetime — the `Engine` lives as long as the
-  `SendMessageAction` inside the handle holds it. `Engine` (in
+  `SendMessageAction` inside the `Core` holds it. `Engine` (in
   `Engine.swift`) is an `actor` whose `unownedExecutor` borrows
   MainActor's (SE-0392), so it stays in MainActor's isolation
   region; non-Sendable `Model` flows in via SE-0414 region isolation
   (the fresh `Model()` value is unaliased) and back out to the
-  handle through a one-shot `@unchecked Sendable` box scoped to
+  `Core` through a one-shot `@unchecked Sendable` box scoped to
   `makeCore`. Long-running listener Tasks are bootstrapped
   externally by `bind()` — `makeCore` reaches it synchronously via
   `engine.assumeIsolated { $0.bind() }` (a runtime no-op given the

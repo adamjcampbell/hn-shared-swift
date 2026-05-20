@@ -34,7 +34,7 @@ Android build); Xcode prompts for plugin approval otherwise.
 ## How the model reaches the UI
 
 `HackerNewsReaderApp` calls `makeCore()` once via `@State` and hands
-the resulting `Core` handle to `RootView`. `RootView` installs the
+the resulting `Core` to `RootView`. `RootView` installs the
 `Model` and the `\.sendMessage` capability into the SwiftUI
 environment; descendants read state via `@Environment(Model.self)`
 and dispatch messages via `@Environment(\.sendMessage)` —

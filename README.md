@@ -13,18 +13,18 @@ The app fetches front-page stories from the
 the [Algolia HN API](https://hn.algolia.com/api), and shows a per-story
 read indicator. Networking lives in Swift via `URLSession`.
 
-## How we use Skip
+## How Skip is used
 
 Skip's tagline is **One Swift Codebase. Two Native Platforms.** This
 approach differs: only the model and engine ship as Swift on both
-platforms. The UIs are hand-written per platform — SwiftUI on iOS,
-Jetpack Compose on Android.
+platforms. The UIs are written per platform — SwiftUI on iOS, Jetpack
+Compose on Android.
 
 ## Architecture in brief
 
-The shape is **Elm-like**. A single observable `Model` is the source
-of truth, user inputs flow in as `Message`s, one-shot side-effects
-flow out as `Command`s.
+A single observable `Model` is the source of truth, user inputs flow
+in as `Message`s, and one-shot side-effects flow out as `Command`s —
+names borrowed from Elm.
 
 Mutations are written in **idiomatic Swift, made concurrency-safe by
 an `actor`**. A single `Engine` actor owns every write to `Model`, so
@@ -36,7 +36,7 @@ a per-test `TestActor` in tests. Reads on the UI thread stay
 synchronous, the actor hop only serialises writes, and nothing
 crosses an isolation boundary by accident.
 
-## Consuming the `Core` handle
+## Consuming the `Core`
 
 `makeCore()` runs once per process and returns a `Core` value with
 three surfaces:
@@ -45,7 +45,7 @@ three surfaces:
 - `sendMessage` — an `Equatable` capability for dispatching `Message`s.
 - `commands` — an `AsyncStream<Command>` of one-shot side-effects.
 
-Both UIs consume the same handle.
+Both UIs consume the same `Core`.
 
 ```swift
 // iOS — HackerNewsReaderApp.swift

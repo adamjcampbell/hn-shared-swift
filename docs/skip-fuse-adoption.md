@@ -184,7 +184,7 @@ indirection; `@State private var core = makeCore()` in
 `MainActor.shared`, so `Engine`'s executor IS MainActor's at runtime
 — `await engine.sendMessage(...)` is a virtual hop with no real
 thread switch. Non-`Sendable` `Model` flows into `Engine` via SE-0414
-region isolation and back out to the `Core` handle through a one-shot
+region isolation and back out to the `Core` through a one-shot
 `@unchecked Sendable` box scoped to `makeCore`. Mutators live on
 `Engine`; `Model` itself is a plain `@Observable final class`. The
 production design contains **zero** `@unchecked Sendable` and zero
