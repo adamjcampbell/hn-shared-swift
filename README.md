@@ -36,6 +36,81 @@ a per-test `TestActor` in tests. Reads on the UI thread stay
 synchronous, the actor hop only serialises writes, and nothing
 crosses an isolation boundary.
 
+## Why one Model, one Engine
+
+Common app architectures often leave me feeling unsatisfied. It is
+standard procedure to separate screens, features, etc, into
+distinct objects. When child objects need to communicate with parent
+objects or screens this often results in unnecessary orchestration.
+Callbacks, handlers, coordinators and the like. Separating by
+feature or screen also obscures shared semantics across them and
+can lead to siloed duplication.
+
+In pursuit of a grounded approach to solving this dissatisfaction
+I found myself gravitating to talks by systems and games
+programmers who model their programs in data-oriented ways. This
+architecture attempts to capitalise on the fact that both SwiftUI
+and Jetpack Compose allow us to model our application as pure state
+that is observed. This allows a natural fit for modelling behaviour
+as procedures that act on data. So:
+
+`Model` is our data and `Engine` hosts the procedures that act on
+it. Two pieces, not a tree of feature-split objects, so there's no
+up-and-down communication between them. Data and procedures are
+separate concerns, and the actor isolation `Engine` provides keeps
+`Model`'s mutations race-free. Each `Message`'s handling reads top
+to bottom in one place leaning into *Locality of Behaviour*.
+
+`Model` holds both the source of truth and its derivations. The
+entity store, the feed and search load state, read tracking, and
+the search query are the raw data; `feedStories` and `searchResults`
+are derived projections the UI binds to.
+
+Composition is achieved by function, not by type, under the old
+adage that *data + procedures = programs*. In this way
+`fetch(debounce:body:)` is the shared helper, handling debounce,
+task cancellation, and the normalisation of `URLError(.cancelled)`
+to `CancellationError` for every fetch path.
+
+*Semantic Compression* makes the same case for the fetch paths.
+The feed and search fetch paths look similar but are different
+semantically: each writes to different `Model` fields, cancels a
+different prior task, and the search paths thread `searchQuery`
+through. A shared type would just be forced to fit across different
+semantics.
+
+This is a small app written by one person. A lot of the granular
+vertical slicing I complained about above exists because large
+teams need clear ownership boundaries to coordinate, not because
+the code itself demands it. The structure here hasn't been tested
+at that scale.
+
+That said, teams are often larger and more numerous than they need
+to be, driven by organisational needs rather than technical ones.
+Outside that overhead, app complexity could be much lower.
+
+### References
+
+**Cited above**
+
+- [*Locality of Behaviour*](https://htmx.org/essays/locality-of-behaviour/), Carson Gross. A code unit's behaviour should be obvious from that unit alone.
+- [*Semantic Compression*](https://caseymuratori.com/blog_0015), Casey Muratori. Treat code like a compression problem; keep same-meaning things in one place.
+- [Odin](https://odin-lang.org/)'s design philosophy: programs transform data; code expresses the algorithms. See the [Odin FAQ](https://odin-lang.org/docs/faq/) and the creator's [Wookash Podcast appearance](https://creators.spotify.com/pod/profile/lukasz-sciga/episodes/Odin-creator-Ginger-Bill-on-his-programming-language-and-state-of-software-e2sd9un).
+
+**Further reading**
+
+- [*AHA Programming*](https://kentcdodds.com/blog/aha-programming), Kent C. Dodds. *Avoid Hasty Abstractions*; wait for the abstraction to make itself obvious.
+- [*File Pilot: Inside the Engine*](https://www.youtube.com/watch?v=bUOOaXf9qIM), Vjekoslav Krajačić, BSC 2025. A 2 MB Windows file manager shipped from deliberately few files with no per feature code splits.
+- [*Algorithms + Data Structures = Programs*](https://en.wikipedia.org/wiki/Algorithms_%2B_Data_Structures_%3D_Programs), Niklaus Wirth (1976).
+- [*Inlined Code*](https://cbarrete.com/carmack.html), John Carmack (2007/2014 archive). Inline single-callsite functions; avoid medium-sized helpers.
+- [*Go at Google: Language Design in the Service of Software Engineering*](https://go.dev/talks/2012/splash.article), Rob Pike, SPLASH 2012. Composition of independently executing functions over otherwise procedural code.
+- [*Data-Oriented Design and C++*](https://www.youtube.com/watch?v=rX0ItVEVjHc), Mike Acton, CppCon 2014. The transformation of data is the program's purpose; design around the data.
+- [*State Management: Large Arrays of Things*](https://www.youtube.com/watch?v=L6flrupW3W0), Anton Mikhailov on the Wookash Podcast. State as plain arrays acted on by procedures.
+- [*Upstream and Downstream*](https://www.dgtlgrove.com/p/upstream-and-downstream), Ryan Fleury. State lives upstream; downstream reads the bag.
+- [*Pass data backward more elegantly without using delegation*](https://clean-swift.com/pass-data-backward-more-elegantly-without-using-delegation/), Clean Swift. Suggests fixing N delegates with closure passing instead of the root cause; an example from the community of the issue this project avoids.
+- [*Data Essentials in SwiftUI*](https://developer.apple.com/videos/play/wwdc2020/10040/), Apple WWDC20. Views as a function of state.
+- [*Conway's Law*](https://martinfowler.com/bliki/ConwaysLaw.html), Martin Fowler. Organisations design systems shaped by their communication structures; granular vertical slicing is largely a result of separated team responsibility rather than technical need.
+
 ## Consuming the `Core`
 
 `Core` is a `@MainActor` struct that exposes the surfaces the UI
