@@ -47,11 +47,11 @@ The first `skipExport` invocation takes a few minutes (Swift toolchain
 ## How state reaches the UI
 
 `App.onCreate` bootstraps the Swift runtime
-(`skip.foundation.ProcessInfo.launch(...)`) and calls `makeAppCore()`
-once, holding the resulting `AppCore` handle for the process lifetime.
+(`skip.foundation.ProcessInfo.launch(...)`) and calls `makeCore()`
+once, holding the resulting `Core` handle for the process lifetime.
 `MainActivity` reads it off the `Application` and passes it into
 `StoryScreen`, which consumes `core.state`, `core.commands`, and
-`core.sendEvent`. There is no `core-jni/` module — SkipFuse's
+`core.sendMessage`. There is no `core-jni/` module — SkipFuse's
 `skip export` emits the bridge directly. No Android-side bridge tests
 in this repo yet; the previous JNI-bench suite was removed during the
 migration. Architecture and concurrency details live in

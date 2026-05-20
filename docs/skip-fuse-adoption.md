@@ -28,39 +28,39 @@ all four for free.
 
 ## What it actually looks like
 
-iOS — unchanged. AppCore is consumed directly:
+iOS — Core is consumed directly:
 
 ```swift
-@Bindable var state: AppState
-TextField("Search", text: $state.searchQuery)
-LazyVStack { ForEach(state.stories) { StoryRow($0) } }
-.task { await appModel.dispatch(.refresh) }
+@Bindable var model: Model
+TextField("Search", text: $model.searchQuery)
+LazyVStack { ForEach(model.feedStories) { StoryRow($0) } }
+.task { await sendMessage.run(.refresh) }
 ```
 
-Android — Compose now reads the bridged AppCore directly. No
+Android — Compose now reads the bridged Core directly. No
 `SwiftState`, no `*OnChange`, no `appcoreObserveX`:
 
 ```kotlin
 @Composable
-fun StoryScreen() {
-    val core = rememberCore()
-    val state = appModel.state
+fun StoryScreen(core: Core) {
+    val model = core.state
+    val sendMessage = core.sendMessage
 
-    LaunchedEffect(appModel) { appModel.dispatch(AppEvent.refresh) }
+    LaunchedEffect(Unit) { sendMessage.send(Message.refresh) }
 
     TextField(
-        value = state.searchQuery,
-        onValueChange = { state.searchQuery = it },
+        value = model.searchQuery,
+        onValueChange = { model.searchQuery = it },
     )
     LazyColumn {
-        items(state.stories.kotlin() as List<Story>) { story ->
+        items(model.feedStories.kotlin() as List<StoryRow>) { story ->
             StoryRow(story)
         }
     }
 }
 ```
 
-`state.searchQuery = it` runs the Swift setter through JNI, which
+`model.searchQuery = it` runs the Swift setter through JNI, which
 fires `@Observable`'s willSet, which SkipFuse routes through Compose's
 `MutableStateBacking` snapshot system, which schedules recomposition
 of every Composable that read `searchQuery`.
@@ -89,7 +89,7 @@ The migration plan abandoned per-platform actor pinning (`@MainActor`
 on iOS, `@JavaUIActor` on Android) on the assumption that SkipFuse
 couldn't handle actor-isolated bridged classes — that was the lesson
 from the earlier `swift-java jextract` experiments, where adding
-`@JavaUIActor` to AppState produced ~20 compile errors in
+`@JavaUIActor` to the model class produced ~20 compile errors in
 auto-generated cdecl thunks. **The assumption doesn't hold for
 SkipFuse**: its bridge codegen is fully actor-aware, and Apple's
 `MainActor` is plumbed to Android's main looper at runtime. You can
@@ -105,29 +105,29 @@ every cdecl thunk's body in `SkipBridge.assumeMainActorUnchecked
 ```swift
 @MainActor
 @Observable
-public final class AppState {
+public final class Model {
     public var searchQuery: String = ""
     // …
 }
 ```
 
 ```swift
-// Generated AppState_Bridge.swift
-@_cdecl("Java_app_core_AppState_Swift_1searchQuery")
-public func AppState_Swift_searchQuery(...) -> JavaString {
-    let peer_swift: AppState = Swift_peer.pointee()!
+// Generated Model_Bridge.swift
+@_cdecl("Java_hacker_news_reader_Model_Swift_1searchQuery")
+public func Model_Swift_searchQuery(...) -> JavaString {
+    let peer_swift: Model = Swift_peer.pointee()!
     return SkipBridge.assumeMainActorUnchecked {
         return peer_swift.searchQuery.toJavaObject(options: [])!
     }
 }
 
-@_cdecl("Java_app_core_AppCore_Swift_1callback_1dispatch_11")
-public func AppCore_Swift_callback_dispatch_1(...) {
+@_cdecl("Java_hacker_news_reader_Core_Swift_1callback_1sendMessage_11")
+public func Core_Swift_callback_sendMessage_1(...) {
     let f_callback_swift = ...
-    let peer_swift: AppCore = Swift_peer.pointee()!
-    let p_0_swift = AppEvent.fromJavaObject(p_0, options: [])
+    let peer_swift: Core = Swift_peer.pointee()!
+    let p_0_swift = Message.fromJavaObject(p_0, options: [])
     Task {
-        await peer_swift.dispatch(p_0_swift)
+        await peer_swift.sendMessage(p_0_swift)
         f_callback_swift()
     }
 }
@@ -135,8 +135,8 @@ public func AppCore_Swift_callback_dispatch_1(...) {
 
 `assumeMainActorUnchecked` is literally `MainActor.assumeIsolated`
 (`skip-bridge/Sources/SkipBridge/BridgeSupport.swift:101`). Async
-dispatches stay simple — `Task { await peer.dispatch(...) }` — because
-under SE-0461 the await hops to MainActor automatically.
+dispatches stay simple — `Task { await peer.sendMessage(...) }` —
+because under SE-0461 the await hops to MainActor automatically.
 
 ### Why MainActor reaches Android's main thread
 
@@ -171,64 +171,28 @@ upstream.
 
 ### Verified empirically
 
-`AppCore` is a `@MainActor` `struct` bridged via
-`// SKIP @bridgeMembers`. Its `let` fields hold the `AppState`
-class, the `AppCoreActor`, and the commands stream, so copying
-the struct shares those references — the bridge facade flipped
-from class to struct without changing the underlying topology.
-The Kotlin/Compose side still reads `appCore.state.foo` through
-SkipFuse's `@Observable` interception without indirection;
-`@State private var appCore = AppCore()` in `RootView` remains
-the single owning location on iOS.
+`Core` is a `@MainActor` `struct` bridged via `// SKIP @bridgeMembers`.
+Its `let` fields hold the `Model` class, the commands stream, and the
+`SendMessageAction` (which holds the only out-of-module reference to
+the internal `Engine` actor). The Kotlin/Compose side reads
+`core.state.foo` through SkipFuse's `@Observable` interception without
+indirection; `@State private var core = makeCore()` in
+`HackerNewsReaderApp` is the single owning location on iOS.
 
-`AppCoreActor` is a real `actor` whose `unownedExecutor` is
-borrowed from an `isolation: any Actor` init parameter (SE-0392).
-Production passes `MainActor.shared`, so `AppCoreActor`'s executor
-IS MainActor's at runtime — `await core.dispatch(...)` is a virtual
-hop with no real thread switch.
+`Engine` is a real `actor` whose `unownedExecutor` is borrowed from an
+`isolation: any Actor` init parameter (SE-0392). Production passes
+`MainActor.shared`, so `Engine`'s executor IS MainActor's at runtime
+— `await engine.sendMessage(...)` is a virtual hop with no real
+thread switch. Non-`Sendable` `Model` flows into `Engine` via SE-0414
+region isolation and back out to the `Core` handle through a one-shot
+`@unchecked Sendable` box scoped to `makeCore`. Mutators live on
+`Engine`; `Model` itself is a plain `@Observable final class`. The
+production design contains **zero** `@unchecked Sendable` and zero
+`nonisolated(unsafe)` outside that one scoped box.
 
-`AppCoreActor` does **all** orchestration (dispatch, run, fetch
-coordination, task registry). It doesn't own `AppState`; instead it
-holds a `state: StateAccess` shim
-(`AppCore/Sources/AppCore/StateAccess.swift`) that the shell installs
-post-init. `StateAccess` is a `Sendable` `@dynamicMemberLookup`
-struct wrapping `any StateMutator`:
-
-- Reads via dynamic-member subscript — `state.searchQuery`.
-- Writes via `callAsFunction` — `state { $0.foo = bar }`. (Writable
-  subscripts would need `sending` on the keypath, which conflicts
-  with Swift's `_modify` synthesis.)
-- Compound reads via `state.read { $0.foo }`.
-
-`StateMutator` is a `Sendable & AnyObject` protocol whose methods
-take **`sending`** (not `@Sendable`) closures — that's the key
-escape from the `@unchecked Sendable` workarounds the older
-closure-based design needed. The implementation:
-
-```swift
-let mutator = MainActorMutator(self.state)
-handler.assumeIsolated { handler in
-    handler.state = StateAccess(mutator)
-}
-```
-
-`MainActorMutator` is a `@MainActor final class` whose `apply` /
-`read` are `nonisolated` and use `MainActor.assumeIsolated` to
-reach `appState` — a runtime no-op because `AppCoreActor`'s
-executor is borrowed from MainActor. The non-`Sendable` `AppState`
-never crosses an actor boundary; only the `Sendable` shim does.
-Before the shell installs the real mutator, `AppCoreActor.state`
-defaults to a `NoopMutator` so the brief pre-install window is
-safe (`AppCore.init` installs synchronously in production;
-`TestCore`'s async init awaits past the install).
-
-Tests can use `TestCore` (`AppCore/Tests/AppCoreTests/TestCore.swift`),
-a per-test `actor` shell with the same `StateAccess` plumbing. Each
-`TestCore` instance is its own actor with its own executor, so
-state mutations across tests run in parallel — measured ~4×
-speedup on the `AppCore` suite after the migration. The whole
-design contains **zero** `@unchecked Sendable` and zero
-`nonisolated(unsafe)` in `Sources/`.
+Tests construct `Engine` with a `TestActor` `isolation:` so each test
+runs on its own `DispatchSerialQueue` executor and the suite
+parallelises across instances.
 
 The empirical run:
 
@@ -238,10 +202,6 @@ The empirical run:
 - A clean `./gradlew :app:assembleDebug`.
 - An app that boots, fetches HN stories, and handles search end-to-end
   with no behaviour change.
-
-`AppState` is intentionally not annotated — it stays a plain
-`@Observable final class`, owned by whichever shell creates it
-(`AppCore` in production, `TestCore` in tests).
 
 ## Gotchas worth knowing
 

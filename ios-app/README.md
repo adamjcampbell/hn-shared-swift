@@ -33,12 +33,12 @@ Android build); Xcode prompts for plugin approval otherwise.
 
 ## How state reaches the UI
 
-`HackerNewsReaderApp` calls `makeAppCore()` once via `@State` and hands
-the resulting `AppCore` handle to `RootView`. `RootView` installs
-`AppState` and the `\.sendEvent` capability action into the SwiftUI
-environment; descendants read state via `@Environment(AppState.self)`
-and call events via `@Environment(\.sendEvent)` — `sendEvent(.foo)`
-for fire-and-forget, `await sendEvent.run(.foo)` for awaitable.
+`HackerNewsReaderApp` calls `makeCore()` once via `@State` and hands
+the resulting `Core` handle to `RootView`. `RootView` installs `Model`
+and the `\.sendMessage` capability action into the SwiftUI environment;
+descendants read state via `@Environment(Model.self)` and dispatch
+messages via `@Environment(\.sendMessage)` — `sendMessage(.foo)` for
+fire-and-forget, `await sendMessage.run(.foo)` for awaitable.
 
 The SwiftUI view-layer rules (per-property `@Observable` invalidation,
 the overlay pattern, when to extract a `struct: View`) live in

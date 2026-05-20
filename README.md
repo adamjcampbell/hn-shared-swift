@@ -14,18 +14,33 @@ the [Algolia HN API](https://hn.algolia.com/api) (Firebase has no
 search endpoint), and shows a per-story read indicator. Networking
 lives in Swift (`URLSession`); both UIs only render the snapshot.
 
+## Architecture in one paragraph
+
+The shape is **Elm-like**: a single observable `Model` is the source of
+truth, user inputs flow in as `Message`s, one-shot side-effects flow
+out as `Command`s. Mutations are written in **idiomatic Swift, made
+concurrency-safe by an `actor`**: a single `Engine` actor owns every
+write to `Model`, so the `@Observable` class itself stays a plain
+mutable data bag while race-free access is enforced by Swift 6's
+isolation system. The `Engine` borrows its host's executor — `MainActor`
+in production, a per-test `TestActor` in tests — so reads on the UI
+thread stay synchronous, the actor hop only serialises writes, and
+nothing crosses an isolation boundary by accident. `Effect` is
+deliberately not used as a name — it's reserved should we ever fold
+the `Engine` into a TCA-style reducer.
+
 ## The bridge at the call site
 
-`makeAppCore()` is called once per process and returns an `AppCore`
-handle with three parts: `state` (the `@Observable` bag), `sendEvent`
-(an Equatable capability for dispatching `AppEvent`s), and `commands`
-(an `AsyncStream<AppCommand>` of one-shot side-effects). Both UIs
-consume the same handle.
+`makeCore()` is called once per process and returns a `Core` handle
+with three parts: `state` (the `@Observable` `Model`), `sendMessage`
+(an Equatable capability for dispatching `Message`s), and `commands`
+(an `AsyncStream<Command>` of one-shot side-effects). Both UIs consume
+the same handle.
 
 ```swift
 // iOS — HackerNewsReaderApp.swift
 @main struct HackerNewsReaderApp: App {
-    @State private var core = makeAppCore()
+    @State private var core = makeCore()
     var body: some Scene { WindowGroup { RootView(core: core) } }
 }
 ```
@@ -33,11 +48,11 @@ consume the same handle.
 ```kotlin
 // Android — App.kt
 class App : Application() {
-    lateinit var core: AppCore; private set
+    lateinit var core: Core; private set
     override fun onCreate() {
         super.onCreate()
         ProcessInfo.launch(applicationContext)
-        core = makeAppCore()
+        core = makeCore()
     }
 }
 ```
@@ -45,45 +60,46 @@ class App : Application() {
 ### `state` — observed reads and two-way bindings
 
 ```swift
-// iOS — descendants pull AppState from the environment; @Bindable
+// iOS — descendants pull Model from the environment; @Bindable
 // + key-path Binding for two-way writes.
-@Environment(AppState.self) private var state
+@Environment(Model.self) private var model
 
 var body: some View {
-    @Bindable var state = state
-    List(state.feedStories) { StoryRowView(story: $0) }
-        .searchable(text: $state.searchQuery, prompt: "Search Hacker News")
+    @Bindable var model = model
+    List(model.feedStories) { StoryRowView(story: $0) }
+        .searchable(text: $model.searchQuery, prompt: "Search Hacker News")
 }
 ```
 
 ```kotlin
 // Android — Compose reads @Observable properties directly; writes go
 // through the synthesized setter and invalidate readers.
-val state = core.state
+val model = core.state
 TextField(
-    value = state.searchQuery,
-    onValueChange = { state.searchQuery = it },
+    value = model.searchQuery,
+    onValueChange = { model.searchQuery = it },
 )
-LazyColumn { items(state.feedStories.kotlin() as List<StoryRow>) { StoryRowView(it) } }
+LazyColumn { items(model.feedStories.kotlin() as List<StoryRow>) { StoryRowView(it) } }
 ```
 
-### `sendEvent` — fire-and-forget + awaitable
+### `sendMessage` — fire-and-forget + awaitable
 
 ```swift
-// iOS — sendEvent(.foo) is fire-and-forget; await sendEvent.run(.foo)
-// is awaitable (.refreshable, one-shot .task).
-@Environment(\.sendEvent) private var sendEvent
+// iOS — sendMessage(.foo) is fire-and-forget; await sendMessage.run(.foo)
+// is awaitable (.refreshable, one-shot .task). `SendMessageAction`
+// mirrors SwiftUI's `DismissAction` ergonomic.
+@Environment(\.sendMessage) private var sendMessage
 
-.refreshable { await sendEvent.run(.refresh) }
-Button("Mark read") { sendEvent(.toggleRead(id: story.id)) }
+.refreshable { await sendMessage.run(.refresh) }
+Button("Mark read") { sendMessage(.toggleRead(id: story.id)) }
 ```
 
 ```kotlin
 // Android — same shape, .send(...) and suspend .run(...).
-val sendEvent = core.sendEvent
+val sendMessage = core.sendMessage
 
-LaunchedEffect(Unit) { sendEvent.send(AppEvent.refresh) }
-PullToRefreshBox(onRefresh = { scope.launch { sendEvent.run(AppEvent.refresh) } }) { … }
+LaunchedEffect(Unit) { sendMessage.send(Message.refresh) }
+PullToRefreshBox(onRefresh = { scope.launch { sendMessage.run(Message.refresh) } }) { … }
 ```
 
 ### `commands` — one-shot side-effects from core to UI
@@ -105,7 +121,7 @@ PullToRefreshBox(onRefresh = { scope.launch { sendEvent.run(AppEvent.refresh) } 
 LaunchedEffect(Unit) {
     core.commands.kotlin().collect { command ->
         when (command) {
-            is AppCommand.PresentURLCase -> context.launchCustomTab(command.value)
+            is Command.PresentURLCase -> context.launchCustomTab(command.value)
         }
     }
 }
@@ -113,7 +129,7 @@ LaunchedEffect(Unit) {
 
 No hand-written JNI, no per-property thunk, no `*OnChange` SAM —
 SkipFuse generates all of it from the `// SKIP @bridgeMembers` marker
-on `AppState`.
+on `Model`.
 
 ## Layout
 
@@ -121,11 +137,11 @@ on `AppState`.
   product (`.library(name: "HackerNewsReader")`).
   - `HackerNews` — API client + entity types (`Client`, `Story`,
     `Page`). Self-contained Hacker News SDK.
-  - `HackerNewsReader` — reducer + state (`AppCore`, `AppEngine`,
-    `AppState`, `StoryRow`, `LoadStatus`, `LoadedStories`) plus the
-    bridged factory `makeAppCore() -> AppCore`. Depends on
-    `HackerNews`; Skip transitively packages `HackerNews` into the AAR
-    set.
+  - `HackerNewsReader` — `Model` + `Engine` + the bridged factory
+    `makeCore() -> Core` (plus `Message`, `Command`,
+    `SendMessageAction`, `StoryRow`, `LoadStatus`, `LoadedStories`).
+    Depends on `HackerNews`; Skip transitively packages `HackerNews`
+    into the AAR set.
 - `ios-app/` — SwiftUI app generated from `project.yml` by
   [`xcodegen`](https://github.com/yonaskolb/XcodeGen).
 - `android-app/` — Gradle project consuming the SkipFuse-exported AARs
