@@ -10,32 +10,36 @@ recompose, `async` functions become `suspend`, `AsyncStream` becomes
 
 The app fetches front-page stories from the
 [official Firebase API](https://github.com/HackerNews/API), search from
-the [Algolia HN API](https://hn.algolia.com/api) (Firebase has no
-search endpoint), and shows a per-story read indicator. Networking
-lives in Swift (`URLSession`); both UIs only render the snapshot.
+the [Algolia HN API](https://hn.algolia.com/api), and shows a per-story
+read indicator. Networking lives in Swift via `URLSession`; both UIs
+only render the snapshot.
 
-## Architecture in one paragraph
+## Architecture in brief
 
-The shape is **Elm-like**: a single observable `Model` is the source of
-truth, user inputs flow in as `Message`s, one-shot side-effects flow
-out as `Command`s. Mutations are written in **idiomatic Swift, made
-concurrency-safe by an `actor`**: a single `Engine` actor owns every
-write to `Model`, so the `@Observable` class itself stays a plain
-mutable data bag while race-free access is enforced by Swift 6's
-isolation system. The `Engine` borrows its host's executor — `MainActor`
-in production, a per-test `TestActor` in tests — so reads on the UI
-thread stay synchronous, the actor hop only serialises writes, and
-nothing crosses an isolation boundary by accident. `Effect` is
-deliberately not used as a name — it's reserved should we ever fold
-the `Engine` into a TCA-style reducer.
+The shape is **Elm-like**. A single observable `Model` is the source
+of truth, user inputs flow in as `Message`s, one-shot side-effects
+flow out as `Command`s.
 
-## The bridge at the call site
+Mutations are written in **idiomatic Swift, made concurrency-safe by
+an `actor`**. A single `Engine` actor owns every write to `Model`, so
+the `@Observable` class itself stays a plain mutable data bag while
+race-free access is enforced by Swift 6's isolation system.
 
-`makeCore()` is called once per process and returns a `Core` handle
-with three parts: `state` (the `@Observable` `Model`), `sendMessage`
-(an Equatable capability for dispatching `Message`s), and `commands`
-(an `AsyncStream<Command>` of one-shot side-effects). Both UIs consume
-the same handle.
+The `Engine` borrows its host's executor — `MainActor` in production,
+a per-test `TestActor` in tests. Reads on the UI thread stay
+synchronous, the actor hop only serialises writes, and nothing
+crosses an isolation boundary by accident.
+
+## Consuming the `Core` handle
+
+`makeCore()` runs once per process and returns a `Core` value with
+three surfaces:
+
+- `state` — the `@Observable` `Model`.
+- `sendMessage` — an `Equatable` capability for dispatching `Message`s.
+- `commands` — an `AsyncStream<Command>` of one-shot side-effects.
+
+Both UIs consume the same handle.
 
 ```swift
 // iOS — HackerNewsReaderApp.swift
@@ -57,11 +61,15 @@ class App : Application() {
 }
 ```
 
-### `state` — observed reads and two-way bindings
+### Reading the `Model`
+
+Descendants pull the `Model` from the environment on iOS, or read
+`core.state` directly inside `@Composable`s on Android. Both sides
+observe property-level changes; writes go through the synthesised
+setter and invalidate readers.
 
 ```swift
-// iOS — descendants pull Model from the environment; @Bindable
-// + key-path Binding for two-way writes.
+// iOS — @Bindable + $model.foo for two-way writes.
 @Environment(Model.self) private var model
 
 var body: some View {
@@ -72,8 +80,7 @@ var body: some View {
 ```
 
 ```kotlin
-// Android — Compose reads @Observable properties directly; writes go
-// through the synthesized setter and invalidate readers.
+// Android — Compose reads @Observable properties directly.
 val model = core.state
 TextField(
     value = model.searchQuery,
@@ -82,12 +89,14 @@ TextField(
 LazyColumn { items(model.feedStories.kotlin() as List<StoryRow>) { StoryRowView(it) } }
 ```
 
-### `sendMessage` — fire-and-forget + awaitable
+### Sending a `Message`
+
+`SendMessageAction` mirrors SwiftUI's `DismissAction` ergonomic:
+`callAsFunction` for fire-and-forget, `run` for awaitable.
 
 ```swift
-// iOS — sendMessage(.foo) is fire-and-forget; await sendMessage.run(.foo)
-// is awaitable (.refreshable, one-shot .task). `SendMessageAction`
-// mirrors SwiftUI's `DismissAction` ergonomic.
+// iOS — sendMessage(.foo) fire-and-forget; await sendMessage.run(.foo)
+// from .refreshable / one-shot .task.
 @Environment(\.sendMessage) private var sendMessage
 
 .refreshable { await sendMessage.run(.refresh) }
@@ -95,14 +104,18 @@ Button("Mark read") { sendMessage(.toggleRead(id: story.id)) }
 ```
 
 ```kotlin
-// Android — same shape, .send(...) and suspend .run(...).
+// Android — same shape: .send(...) and suspend .run(...).
 val sendMessage = core.sendMessage
 
 LaunchedEffect(Unit) { sendMessage.send(Message.refresh) }
 PullToRefreshBox(onRefresh = { scope.launch { sendMessage.run(Message.refresh) } }) { … }
 ```
 
-### `commands` — one-shot side-effects from core to UI
+### Receiving `Command`s
+
+One-shot imperatives from the core to the UI — typically platform
+presentations whose lifetime belongs to SwiftUI or Compose, not to
+the `Model`.
 
 ```swift
 // iOS — long-lived consumer in .task; the sheet binding lives on the
@@ -135,25 +148,25 @@ on `Model`.
 
 - `HackerNewsReader/` — SwiftPM package, two targets, one exported
   product (`.library(name: "HackerNewsReader")`).
-  - `HackerNews` — API client + entity types (`Client`, `Story`,
-    `Page`). Self-contained Hacker News SDK.
+  - `HackerNews` — API client and entity types: `Client`, `Story`,
+    `Page`. Self-contained Hacker News SDK.
   - `HackerNewsReader` — `Model` + `Engine` + the bridged factory
-    `makeCore() -> Core` (plus `Message`, `Command`,
-    `SendMessageAction`, `StoryRow`, `LoadStatus`, `LoadedStories`).
+    `makeCore() -> Core`, plus `Message`, `Command`,
+    `SendMessageAction`, `StoryRow`, `LoadStatus`, `LoadedStories`.
     Depends on `HackerNews`; Skip transitively packages `HackerNews`
     into the AAR set.
 - `ios-app/` — SwiftUI app generated from `project.yml` by
   [`xcodegen`](https://github.com/yonaskolb/XcodeGen).
 - `android-app/` — Gradle project consuming the SkipFuse-exported AARs
-  from `skip-libs/` (gitignored). A `skipExport` task wired into
-  `preBuild` re-runs `skip export` whenever Swift sources change.
-- `docs/skip-fuse-adoption.md` — why we adopted SkipFuse and the gotchas
-  hit during the migration.
-- `docs/historical/` — design docs for the previous hand-written JNI
-  bridge. Frozen; don't act on them.
+  from `skip-libs/`, which is gitignored. A `skipExport` task wired
+  into `preBuild` re-runs `skip export` whenever Swift sources change.
+- `docs/skip-fuse-adoption.md` — why we adopted SkipFuse and the
+  gotchas hit during the migration.
+- `docs/historical/` — frozen design docs for the previous
+  hand-written JNI bridge.
 
-Architecture, concurrency rules, and the SwiftUI view-layer conventions
-are in [`AGENT.md`](AGENT.md).
+Architecture, concurrency rules, and the SwiftUI view-layer
+conventions are in [`AGENT.md`](AGENT.md).
 
 ## Quick start
 
@@ -168,9 +181,9 @@ are in [`AGENT.md`](AGENT.md).
 |---|---|
 | Swift | 6.3.1 |
 | Skip CLI | 1.8.14 |
-| Kotlin | 2.3.0 (must match SkipFuse's exported AAR metadata) |
-| Android NDK | 27.x (via Skip CLI's auto-managed install) |
-| JDK | 21 (Android Studio's bundled JBR works) |
+| Kotlin | 2.3.0 — must match SkipFuse's exported AAR metadata |
+| Android NDK | 27.x, via Skip CLI's auto-managed install |
+| JDK | 21 — Android Studio's bundled JBR works |
 | Xcode | 26.0+ |
 | iOS deployment target | 17.0 |
 | Android `minSdk` | 28 |

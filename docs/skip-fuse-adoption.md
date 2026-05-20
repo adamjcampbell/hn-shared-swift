@@ -33,7 +33,7 @@ iOS — Core is consumed directly:
 ```swift
 @Bindable var model: Model
 TextField("Search", text: $model.searchQuery)
-LazyVStack { ForEach(model.feedStories) { StoryRow($0) } }
+LazyVStack { ForEach(model.feedStories) { StoryRowView(story: $0) } }
 .task { await sendMessage.run(.refresh) }
 ```
 
@@ -273,7 +273,7 @@ skip export --debug --no-ios --module HackerNewsReader -d ../android-app/skip-li
 | Cancellation on suspend | wired                     | not propagated upstream        |
 | APK size impact         | ~99 MB debug              | ~99 MB debug (parity)          |
 | Bridge tests            | `BridgePerfTest` cold-start regression | none yet — needs reseeding |
-| Per-platform actor pinning | `@MainActor` on iOS, `@JavaUIActor` on Android (custom executor) | `@MainActor` on both — Skip's runtime drains libdispatch from `ALooper` |
+| Per-platform actor pinning | `@MainActor` on iOS, `@JavaUIActor` on Android (custom executor) | One `Engine` actor borrowing `MainActor`'s executor on both — Skip's runtime drains libdispatch from `ALooper` |
 
 ## Where the previous bridge lives
 

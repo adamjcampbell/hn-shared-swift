@@ -41,9 +41,9 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   carries every user-driven mutation.
 - iOS: direct `@Observable` + SwiftUI; no bridge in the iOS path.
   `HackerNewsReaderApp` holds the `Core` handle via `@State` and
-  hands it to `RootView`, which installs the `state` and the
-  `\.sendMessage` capability action into the SwiftUI environment.
-  Descendants read state via `@Environment(Model.self)` and call
+  hands it to `RootView`, which installs the `Model` and the
+  `\.sendMessage` capability into the SwiftUI environment.
+  Descendants read state via `@Environment(Model.self)` and dispatch
   messages via `@Environment(\.sendMessage)` — `sendMessage(.foo)` for
   fire-and-forget, `await sendMessage.run(.foo)` for awaitable.
 - Android: bridged via SkipFuse. `App.onCreate` calls `makeCore()`
@@ -157,7 +157,7 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   lose per-section skip behaviour. Extract into a private
   `struct Foo: View`.
 - For two-way bindings to `@Observable` properties, use `@Bindable`
-  + `$state.foo`. **Never** construct a `Binding(get:set:)` closure
+  + `$model.foo`. **Never** construct a `Binding(get:set:)` closure
   shim — closures aren't `Hashable` or reference-comparable, so they
   destroy the identity SwiftUI's animation/transaction tracking
   relies on.
