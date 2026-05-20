@@ -28,15 +28,19 @@ names borrowed from Elm.
 
 Mutations are written in **idiomatic Swift, made concurrency-safe by
 an `actor`**. A single `Engine` actor owns every write to `Model`, so
-the `@Observable` class itself stays a plain mutable data bag while
-race-free access is enforced by Swift 6's isolation system.
+the `@Observable` class itself stays a nonisolated mutable data bag
+while race-free access is enforced by Swift 6's isolation system.
 
 The `Engine` borrows its host's executor — `MainActor` in production,
 a per-test `TestActor` in tests. Reads on the UI thread stay
 synchronous, the actor hop only serialises writes, and nothing
-crosses an isolation boundary by accident.
+crosses an isolation boundary.
 
 ## Consuming the `Core`
+
+`Core` is a `@MainActor` struct that exposes the surfaces the UI
+consumes while hiding the `Engine` actor — actors aren't part of the
+Swift-to-Kotlin bridge surface.
 
 `makeCore()` runs once per process and returns a `Core` value with
 three surfaces:
@@ -123,6 +127,9 @@ One-shot imperatives from the core to the UI — typically platform
 presentations whose lifetime belongs to SwiftUI or Compose, not to
 the `Model`.
 
+On iOS this could be tracked as a `presentedURL: String?` on `Model`;
+the `Command` channel keeps the same shape on both platforms.
+
 ```swift
 // iOS — long-lived consumer in .task; the sheet binding lives on the
 // view, so user-driven dismissal doesn't touch the core.
@@ -162,10 +169,6 @@ LaunchedEffect(Unit) {
 - `android-app/` — Gradle project consuming the SkipFuse-exported AARs
   from `skip-libs/`, which is gitignored. A `skipExport` task wired
   into `preBuild` re-runs `skip export` whenever Swift sources change.
-- `docs/skip-fuse-adoption.md` — why we adopted SkipFuse and the
-  gotchas hit during the migration.
-- `docs/historical/` — frozen design docs for the previous
-  hand-written JNI bridge.
 
 Architecture, concurrency rules, and the SwiftUI view-layer
 conventions are in [`AGENT.md`](AGENT.md).
