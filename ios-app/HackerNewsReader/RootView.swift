@@ -2,19 +2,19 @@ import SwiftUI
 import HackerNewsReader
 
 struct RootView: View {
-    let core: AppCore
+    let core: Core
     @State private var presented: IdentifiedURL?
 
     var body: some View {
         NavigationStack { StoriesScreen() }
             .environment(core.state)
-            .environment(\.sendEvent, core.sendEvent)
+            .environment(\.sendMessage, core.sendMessage)
             .sheet(item: $presented) { item in
                 SafariView(url: item.url)
                     .ignoresSafeArea()
             }
             .task {
-                // Long-lived consumer of AppCommand. The sheet binding
+                // Long-lived consumer of Command. The sheet binding
                 // lives here in the SwiftUI tree; user-driven dismissal
                 // sets `presented = nil` without touching the core.
                 for await command in core.commands {
@@ -28,21 +28,21 @@ struct RootView: View {
 }
 
 private struct StoriesScreen: View {
-    @Environment(AppState.self) private var state
-    @Environment(\.sendEvent) private var sendEvent
+    @Environment(Model.self) private var model
+    @Environment(\.sendMessage) private var sendMessage
 
     var body: some View {
-        @Bindable var state = state
+        @Bindable var model = model
         StoriesContent()
-            // Writes flow through AppState's synthesized setter; the
-            // listener Task inside AppEngine observes the willSet and
+            // Writes flow through Model's synthesized setter; the
+            // listener Task inside Engine observes the willSet and
             // fires a debounced fetch.
-            .searchable(text: $state.searchQuery, prompt: "Search Hacker News")
+            .searchable(text: $model.searchQuery, prompt: "Search Hacker News")
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .task {
                 // One-shot first-appear fetch.
-                await sendEvent.run(.refresh)
+                await sendMessage.run(.refresh)
             }
             .navigationTitle("Hacker News")
     }
@@ -58,7 +58,7 @@ private struct StoriesContent: View {
                 // surface (HeaderCard + full list) with the search
                 // surface. Overlay (not if/else swap) keeps StoriesList
                 // mounted so scroll position survives a search-cancel
-                // cycle — and `state.feedStories` survives untouched
+                // cycle — and `model.feedStories` survives untouched
                 // because the search fetch writes to its own searchIds.
                 if isSearching {
                     SearchResults()
@@ -69,21 +69,21 @@ private struct StoriesContent: View {
 }
 
 private struct SearchResults: View {
-    @Environment(AppState.self) private var state
+    @Environment(Model.self) private var model
 
     var body: some View {
         List {
             Section {
                 SearchHeader(
-                    query: state.searchQuery,
-                    isLoading: state.searchInitialStatus.isLoading,
-                    error: state.searchInitialStatus.error
+                    query: model.searchQuery,
+                    isLoading: model.searchInitialStatus.isLoading,
+                    error: model.searchInitialStatus.error
                 )
             }
-            Section { StoryRows(stories: state.searchResults) }
-            if state.searchLoaded?.hasMore == true {
+            Section { StoryRows(stories: model.searchResults) }
+            if model.searchLoaded?.hasMore == true {
                 Section {
-                    LoadMoreRow(status: state.searchLoadMoreStatus)
+                    LoadMoreRow(status: model.searchLoadMoreStatus)
                 }
             }
         }
@@ -94,44 +94,44 @@ private struct SearchResults: View {
             // suppresses the brief window during a debounced query
             // change where searchResults are stale-empty before the
             // new fetch lands.
-            if !state.searchInitialStatus.isLoading
-                && state.searchResults.isEmpty
-                && !state.searchQuery.isEmpty {
-                EmptyResultsOverlay(query: state.searchQuery)
+            if !model.searchInitialStatus.isLoading
+                && model.searchResults.isEmpty
+                && !model.searchQuery.isEmpty {
+                EmptyResultsOverlay(query: model.searchQuery)
             }
         }
     }
 }
 
 private struct StoriesList: View {
-    @Environment(AppState.self) private var state
-    @Environment(\.sendEvent) private var sendEvent
+    @Environment(Model.self) private var model
+    @Environment(\.sendMessage) private var sendMessage
 
     var body: some View {
         List {
             Section {
                 FeedHeaderCard(
-                    storyCount: state.feedStories.count,
-                    unreadCount: state.feedStories.lazy.filter { !$0.isRead }.count,
-                    lastRefreshedAt: state.feedLoaded?.loadedAt,
-                    loadError: state.feedInitialStatus.error
+                    storyCount: model.feedStories.count,
+                    unreadCount: model.feedStories.lazy.filter { !$0.isRead }.count,
+                    lastRefreshedAt: model.feedLoaded?.loadedAt,
+                    loadError: model.feedInitialStatus.error
                 )
             }
-            Section { StoryRows(stories: state.feedStories) }
-            if state.feedLoaded?.hasMore == true {
+            Section { StoryRows(stories: model.feedStories) }
+            if model.feedLoaded?.hasMore == true {
                 Section {
-                    LoadMoreRow(status: state.feedLoadMoreStatus)
+                    LoadMoreRow(status: model.feedLoadMoreStatus)
                 }
             }
         }
         .listStyle(.insetGrouped)
-        .refreshable { await sendEvent.run(.refresh) }
+        .refreshable { await sendMessage.run(.refresh) }
     }
 }
 
 private struct LoadMoreRow: View {
     let status: LoadStatus
-    @Environment(\.sendEvent) private var sendEvent
+    @Environment(\.sendMessage) private var sendMessage
 
     // Forces a fresh `ProgressView` instance on every row appearance.
     // SwiftUI's `ProgressView` wraps `UIActivityIndicatorView`, which
@@ -155,7 +155,7 @@ private struct LoadMoreRow: View {
                     .id(spinId)
                     .opacity(showError ? 0 : 1)
 
-                Button("Try again") { sendEvent(.loadMore) }
+                Button("Try again") { sendMessage(.loadMore) }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .opacity(showError ? 1 : 0)
@@ -165,7 +165,7 @@ private struct LoadMoreRow: View {
         .animation(.default, value: status)
         .onAppear {
             spinId &+= 1
-            sendEvent(.loadMore)
+            sendMessage(.loadMore)
         }
     }
 }
@@ -246,13 +246,13 @@ private struct SearchHeader: View {
 
 private struct StoryRowView: View {
     let story: StoryRow
-    @Environment(\.sendEvent) private var sendEvent
+    @Environment(\.sendMessage) private var sendMessage
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if story.url != nil {
                 Button {
-                    sendEvent(.openStory(id: story.id))
+                    sendMessage(.openStory(id: story.id))
                 } label: {
                     Text(story.title)
                         .font(.body)
@@ -275,7 +275,7 @@ private struct StoryRowView: View {
                 story.isRead ? "Mark Unread" : "Mark Read",
                 systemImage: story.isRead ? "circle" : "checkmark.circle.fill"
             ) {
-                sendEvent(.toggleRead(id: story.id))
+                sendMessage(.toggleRead(id: story.id))
             }
             .tint(.blue)
         }

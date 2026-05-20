@@ -3,7 +3,7 @@ import HackerNewsReader
 
 @main
 struct HackerNewsReaderApp: App {
-    @State private var core = makeAppCore()
+    @State private var core = makeCore()
 
     var body: some Scene {
         WindowGroup {
