@@ -35,7 +35,7 @@ crosses an isolation boundary by accident.
 `makeCore()` runs once per process and returns a `Core` value with
 three surfaces:
 
-- `state` — the `@Observable` `Model`.
+- `model` — the `@Observable` source of truth.
 - `sendMessage` — an `Equatable` capability for dispatching `Message`s.
 - `commands` — an `AsyncStream<Command>` of one-shot side-effects.
 
@@ -64,7 +64,7 @@ class App : Application() {
 ### Reading the `Model`
 
 Descendants pull the `Model` from the environment on iOS, or read
-`core.state` directly inside `@Composable`s on Android. Both sides
+`core.model` directly inside `@Composable`s on Android. Both sides
 observe property-level changes; writes go through the synthesised
 setter and invalidate readers.
 
@@ -81,7 +81,7 @@ var body: some View {
 
 ```kotlin
 // Android — Compose reads @Observable properties directly.
-val model = core.state
+val model = core.model
 TextField(
     value = model.searchQuery,
     onValueChange = { model.searchQuery = it },

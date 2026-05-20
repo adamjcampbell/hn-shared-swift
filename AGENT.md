@@ -23,7 +23,7 @@ into a TCA-style reducer.
 The Swift package splits into two targets:
 - `HackerNews` — API client + entity types (`Client`, `Story`, `Page`).
 - `HackerNewsReader` — `Model` + `Engine` + the bridged module
-  surface. `makeCore()` returns a `Core` handle of (`state`,
+  surface. `makeCore()` returns a `Core` handle of (`model`,
   `commands`, `sendMessage`); `SendMessageAction` is the Equatable
   capability struct (mirroring SwiftUI's `DismissAction`) exposing
   `send(_:)` and `suspend run(_:)`. `Message` (UI → core) and
@@ -49,7 +49,7 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 - Android: bridged via SkipFuse. `App.onCreate` calls `makeCore()`
   once and stashes the `Core` handle for the process lifetime;
   `MainActivity` reads it off the `Application` and passes it to
-  `StoryScreen`. Compose reads `core.state` directly — the bridging
+  `StoryScreen`. Compose reads `core.model` directly — the bridging
   plugin emits a Kotlin `class Model` whose property getters JNI-call
   into the Swift `@Observable`'s ObservationRegistrar, which SkipFuse
   routes through Compose's `MutableStateBacking`. Messages go back
@@ -133,7 +133,7 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   internal.** It's internal coordination — `sendMessage`, the private
   `fetch` helper, the listener Task spawned from init with the
   debounced search-fetch flow inlined into its loop. The bridged
-  surface lives on `Core` (state + commands + sendMessage capability)
+  surface lives on `Core` (model + commands + sendMessage capability)
   returned from `makeCore()`, with `SendMessageAction` holding the
   only out-of-module reference to the `Engine`.
 
@@ -228,10 +228,10 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
   `engine.run { engine in … }` block per test; only split when a
   real suspension boundary forces it (`await engine.testActor.runPending()`,
   `await clock.advance(by:)`, `await someTask.value`,
-  `await iterator.next()`). `sendMessage` returns with state already
-  mutated, so adjacent reads inside the same block see the new
-  state. Inside the closure, alias `let state = engine.state` at
-  the top — direct capture of the outer-scope `state` is rejected
+  `await iterator.next()`). `sendMessage` returns with the model
+  already mutated, so adjacent reads inside the same block see the
+  new state. Inside the closure, alias `let model = engine.model` at
+  the top — direct capture of the outer-scope `model` is rejected
   because the `run` body is `@Sendable`.
 - **Park mocks with `clock.sleep(for: .seconds(Int.max))`.** Mocks
   that must hang until the parent Task cancels them call `try await

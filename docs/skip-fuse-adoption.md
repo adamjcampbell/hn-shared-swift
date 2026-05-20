@@ -43,7 +43,7 @@ Android — Compose now reads the bridged Core directly. No
 ```kotlin
 @Composable
 fun StoryScreen(core: Core) {
-    val model = core.state
+    val model = core.model
     val sendMessage = core.sendMessage
 
     LaunchedEffect(Unit) { sendMessage.send(Message.refresh) }
@@ -175,7 +175,7 @@ upstream.
 Its `let` fields hold the `Model` class, the commands stream, and the
 `SendMessageAction` (which holds the only out-of-module reference to
 the internal `Engine` actor). The Kotlin/Compose side reads
-`core.state.foo` through SkipFuse's `@Observable` interception without
+`core.model.foo` through SkipFuse's `@Observable` interception without
 indirection; `@State private var core = makeCore()` in
 `HackerNewsReaderApp` is the single owning location on iOS.
 
