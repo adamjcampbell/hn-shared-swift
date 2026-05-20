@@ -59,12 +59,12 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import hacker.news.reader.AppCommand
-import hacker.news.reader.AppCore
-import hacker.news.reader.AppEvent
-import hacker.news.reader.AppState
+import hacker.news.reader.Command
+import hacker.news.reader.Core
 import hacker.news.reader.LoadStatus
-import hacker.news.reader.SendAppEvent
+import hacker.news.reader.Message
+import hacker.news.reader.Model
+import hacker.news.reader.SendMessageAction
 import hacker.news.reader.StoryRow
 import com.example.hackernewsreader.R
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -72,21 +72,21 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StoryScreen(core: AppCore) {
+fun StoryScreen(core: Core) {
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
-    val sendEvent = core.sendEvent
+    val sendMessage = core.sendMessage
 
     // Initial fetch on first composition.
     LaunchedEffect(Unit) {
-        sendEvent.send(AppEvent.refresh)
+        sendMessage.send(Message.refresh)
     }
 
     // One-shot commands from the core.
     LaunchedEffect(Unit) {
         core.commands.kotlin().collect { command ->
             when (command) {
-                is AppCommand.PresentURLCase -> context.launchCustomTab(command.value)
+                is Command.PresentURLCase -> context.launchCustomTab(command.value)
             }
         }
     }
@@ -104,8 +104,8 @@ fun StoryScreen(core: AppCore) {
         },
     ) { innerPadding ->
         StoriesContent(
-            state = core.state,
-            sendEvent = sendEvent,
+            model = core.state,
+            sendMessage = sendMessage,
             modifier = Modifier
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
@@ -117,27 +117,27 @@ fun StoryScreen(core: AppCore) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun StoriesContent(
-    state: AppState,
-    sendEvent: SendAppEvent,
+    model: Model,
+    sendMessage: SendMessageAction,
     modifier: Modifier = Modifier,
 ) {
     // SkipFuse routes @Observable property reads through Compose's snapshot
     // system; reading these properties inside a @Composable registers them
     // for tracking and mutations from any thread trigger recomposition.
-    val authoritativeSearchQuery = state.searchQuery
+    val authoritativeSearchQuery = model.searchQuery
     @Suppress("UNCHECKED_CAST")
-    val feedStories = state.feedStories.kotlin() as List<StoryRow>
+    val feedStories = model.feedStories.kotlin() as List<StoryRow>
     @Suppress("UNCHECKED_CAST")
-    val searchResults = state.searchResults.kotlin() as List<StoryRow>
-    val isFeedRefreshing = state.feedInitialStatus.isLoading
-    val isSearchLoading = state.searchInitialStatus.isLoading
-    val lastRefreshedAt = state.feedLoaded?.loadedAt
-    val feedLoadError = state.feedInitialStatus.error
-    val searchLoadError = state.searchInitialStatus.error
-    val feedHasMore = state.feedLoaded?.hasMore == true
-    val searchHasMore = state.searchLoaded?.hasMore == true
-    val feedLoadMoreStatus = state.feedLoadMoreStatus
-    val searchLoadMoreStatus = state.searchLoadMoreStatus
+    val searchResults = model.searchResults.kotlin() as List<StoryRow>
+    val isFeedRefreshing = model.feedInitialStatus.isLoading
+    val isSearchLoading = model.searchInitialStatus.isLoading
+    val lastRefreshedAt = model.feedLoaded?.loadedAt
+    val feedLoadError = model.feedInitialStatus.error
+    val searchLoadError = model.searchInitialStatus.error
+    val feedHasMore = model.feedLoaded?.hasMore == true
+    val searchHasMore = model.searchLoaded?.hasMore == true
+    val feedLoadMoreStatus = model.feedLoadMoreStatus
+    val searchLoadMoreStatus = model.searchLoadMoreStatus
 
     val searchBarState = rememberSearchBarState()
     val textFieldState = rememberTextFieldState(initialText = authoritativeSearchQuery)
@@ -147,10 +147,10 @@ private fun StoriesContent(
     // setter routes through SkipFuse's Compose snapshot integration, so any
     // composable that read `searchQuery` is invalidated and the next
     // StoriesContent recomposition picks up the new value.
-    LaunchedEffect(state) {
+    LaunchedEffect(model) {
         snapshotFlow { textFieldState.text.toString() }
             .distinctUntilChanged()
-            .collect { state.searchQuery = it }
+            .collect { model.searchQuery = it }
     }
     // Authoritative writes from core (cold-start initial, programmatic
     // clears) → TextFieldState.
@@ -165,15 +165,15 @@ private fun StoriesContent(
     val feedListState = rememberLazyListState()
     val searchListState = rememberLazyListState()
 
-    val pullToRefresh: () -> Unit = { scope.launch { sendEvent.run(AppEvent.refresh) } }
-    val triggerLoadMore: () -> Unit = { scope.launch { sendEvent.run(AppEvent.loadMore) } }
+    val pullToRefresh: () -> Unit = { scope.launch { sendMessage.run(Message.refresh) } }
+    val triggerLoadMore: () -> Unit = { scope.launch { sendMessage.run(Message.loadMore) } }
 
     val shouldLoadMoreFeed by remember(feedListState) {
         derivedStateOf { feedListState.isNearEnd(threshold = 3) }
     }
     LaunchedEffect(shouldLoadMoreFeed, feedHasMore) {
         if (shouldLoadMoreFeed && feedHasMore) {
-            sendEvent.run(AppEvent.loadMore)
+            sendMessage.run(Message.loadMore)
         }
     }
 
@@ -182,7 +182,7 @@ private fun StoriesContent(
     }
     LaunchedEffect(shouldLoadMoreSearch, searchHasMore) {
         if (shouldLoadMoreSearch && searchHasMore) {
-            sendEvent.run(AppEvent.loadMore)
+            sendMessage.run(Message.loadMore)
         }
     }
 
@@ -231,7 +231,7 @@ private fun StoriesContent(
                                 loadError = feedLoadError,
                             )
                         }
-                        storyRows(feedStories, sendEvent)
+                        storyRows(feedStories, sendMessage)
                         if (feedHasMore) {
                             item(key = "load-more") {
                                 LoadMoreRow(
@@ -259,7 +259,7 @@ private fun StoriesContent(
                             error = searchLoadError,
                         )
                     }
-                    storyRows(searchResults, sendEvent)
+                    storyRows(searchResults, sendMessage)
                     if (searchHasMore) {
                         item(key = "search-load-more") {
                             LoadMoreRow(
@@ -279,13 +279,13 @@ private fun StoriesContent(
 
 private fun LazyListScope.storyRows(
     stories: List<StoryRow>,
-    sendEvent: SendAppEvent,
+    sendMessage: SendMessageAction,
 ) {
     items(stories, key = { it.id }) { story ->
         StoryRowView(
             story = story,
-            onToggle = { sendEvent.send(AppEvent.toggleRead(story.id)) },
-            onOpen = { sendEvent.send(AppEvent.openStory(story.id)) },
+            onToggle = { sendMessage.send(Message.toggleRead(story.id)) },
+            onOpen = { sendMessage.send(Message.openStory(story.id)) },
         )
     }
 }
