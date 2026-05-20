@@ -74,10 +74,6 @@ private val LocalSendMessage = staticCompositionLocalOf<SendMessageAction> {
     error("LocalSendMessage not provided")
 }
 
-@Suppress("UNCHECKED_CAST")
-private fun <T> skip.lib.Array<T>.asList(): List<T> =
-    kotlin(nocopy = true) as List<T>
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StoryScreen(core: Core) {
