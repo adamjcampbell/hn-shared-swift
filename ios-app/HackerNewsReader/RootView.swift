@@ -7,7 +7,7 @@ struct RootView: View {
 
     var body: some View {
         NavigationStack { StoriesScreen() }
-            .environment(core.state)
+            .environment(core.model)
             .environment(\.sendMessage, core.sendMessage)
             .sheet(item: $presented) { item in
                 SafariView(url: item.url)
