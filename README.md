@@ -177,7 +177,7 @@ conventions are in [`AGENT.md`](AGENT.md).
 
 - iOS — see [`ios-app/README.md`](ios-app/README.md).
 - Android — see [`android-app/README.md`](android-app/README.md).
-- Swift unit tests — `cd HackerNewsReader && swift test --disable-sandbox`.
+- Swift unit tests — `cd HackerNewsReader && swift test`.
 
 ## Toolchain
 

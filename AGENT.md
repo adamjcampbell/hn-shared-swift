@@ -321,9 +321,7 @@ The previous architecture is in [`docs/historical/`](docs/historical/).
 
 ```sh
 # HackerNewsReader + HackerNews unit tests (macOS host).
-cd HackerNewsReader && \
-  JAVA_HOME=/Applications/Android\ Studio.app/Contents/jbr/Contents/Home \
-  swift test --disable-sandbox
+cd HackerNewsReader && swift test
 
 # iOS app build.
 cd ios-app && \
