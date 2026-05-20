@@ -50,7 +50,7 @@ holding the resulting `Core` for the process lifetime.
 `MainActivity` reads it off the `Application` and passes it into
 `StoryScreen`, which consumes `core.model`, `core.commands`, and
 `core.sendMessage`. Architecture and concurrency details live in
-[`AGENT.md`](../AGENT.md).
+[`AGENTS.md`](../AGENTS.md).
 
 ## Caveats
 

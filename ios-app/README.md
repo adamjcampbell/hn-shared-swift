@@ -43,4 +43,4 @@ for awaitable.
 
 The SwiftUI view-layer rules — per-property `@Observable`
 invalidation, the overlay pattern, when to extract a `View` struct —
-live in [`AGENT.md`](../AGENT.md).
+live in [`AGENTS.md`](../AGENTS.md).

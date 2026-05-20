@@ -246,7 +246,7 @@ Outside that overhead, app complexity could be much lower.
   into `preBuild` re-runs `skip export` whenever Swift sources change.
 
 Architecture, concurrency rules, and the SwiftUI view-layer
-conventions are in [`AGENT.md`](AGENT.md).
+conventions are in [`AGENTS.md`](AGENTS.md).
 
 ## Quick start
 
