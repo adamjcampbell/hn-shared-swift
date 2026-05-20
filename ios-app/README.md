@@ -31,15 +31,16 @@ Android build); Xcode prompts for plugin approval otherwise.
 - Codesigning disabled (`CODE_SIGNING_ALLOWED=NO`) so simulator builds
   work out of the box. Re-enable for device runs.
 
-## How state reaches the UI
+## How the model reaches the UI
 
 `HackerNewsReaderApp` calls `makeCore()` once via `@State` and hands
-the resulting `Core` handle to `RootView`. `RootView` installs `Model`
-and the `\.sendMessage` capability action into the SwiftUI environment;
-descendants read state via `@Environment(Model.self)` and dispatch
-messages via `@Environment(\.sendMessage)` — `sendMessage(.foo)` for
-fire-and-forget, `await sendMessage.run(.foo)` for awaitable.
+the resulting `Core` handle to `RootView`. `RootView` installs the
+`Model` and the `\.sendMessage` capability into the SwiftUI
+environment; descendants read state via `@Environment(Model.self)`
+and dispatch messages via `@Environment(\.sendMessage)` —
+`sendMessage(.foo)` for fire-and-forget, `await sendMessage.run(.foo)`
+for awaitable.
 
-The SwiftUI view-layer rules (per-property `@Observable` invalidation,
-the overlay pattern, when to extract a `struct: View`) live in
-[`AGENT.md`](../AGENT.md).
+The SwiftUI view-layer rules — per-property `@Observable`
+invalidation, the overlay pattern, when to extract a `View` struct —
+live in [`AGENT.md`](../AGENT.md).

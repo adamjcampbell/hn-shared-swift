@@ -1,13 +1,11 @@
 # Android app
 
-Standard Android Gradle project that consumes the SkipFuse-bridged
-`HackerNewsReader` (+ transitive `HackerNews` SDK target) as a set of
-`.aar` files in `skip-libs/` (gitignored). A `skipExport` Gradle task
-wired into `preBuild` shells out to the `skip` CLI when Swift sources
-or `Package.swift` change, drops the resulting AARs into `skip-libs/`,
-and Gradle links them like any other AAR. Incremental Android builds
-stay fast; editing Swift then hitting Run from Android Studio Just
-Works.
+An Android Gradle project consuming the SkipFuse-exported
+`HackerNewsReader` AAR (and the transitive `HackerNews` AAR) from
+`skip-libs/`, which is gitignored. A `skipExport` Gradle task wired
+into `preBuild` re-runs `skip export` whenever Swift sources or
+`Package.swift` change; otherwise Gradle links the AARs like any
+other.
 
 ## Prerequisites
 
@@ -44,17 +42,14 @@ adb shell am start -n com.example.hackernewsreader/.ui.MainActivity
 The first `skipExport` invocation takes a few minutes (Swift toolchain
 + Android cross-compile); subsequent unchanged builds skip it.
 
-## How state reaches the UI
+## How the model reaches the UI
 
-`App.onCreate` bootstraps the Swift runtime
-(`skip.foundation.ProcessInfo.launch(...)`) and calls `makeCore()`
-once, holding the resulting `Core` handle for the process lifetime.
+`App.onCreate` bootstraps the Swift runtime via
+`skip.foundation.ProcessInfo.launch(...)` and calls `makeCore()` once,
+holding the resulting `Core` handle for the process lifetime.
 `MainActivity` reads it off the `Application` and passes it into
 `StoryScreen`, which consumes `core.model`, `core.commands`, and
-`core.sendMessage`. There is no `core-jni/` module — SkipFuse's
-`skip export` emits the bridge directly. No Android-side bridge tests
-in this repo yet; the previous JNI-bench suite was removed during the
-migration. Architecture and concurrency details live in
+`core.sendMessage`. Architecture and concurrency details live in
 [`AGENT.md`](../AGENT.md).
 
 ## Caveats
@@ -67,6 +62,6 @@ migration. Architecture and concurrency details live in
 - **`arm64-v8a` only.** Apple Silicon AVDs and physical Pixel/Galaxy
   devices are covered. Add an `x86_64` Skip export + ABI filter for
   Intel-Mac emulators.
-- **APK size ≈ 99 MB.** Skip's AARs bundle the Swift stdlib +
-  Foundation + Skip runtime as `.so`s. ProGuard/minify doesn't shrink
-  the native side; this is the cost of native Swift on Android.
+- **APK size ≈ 99 MB.** Skip's AARs bundle the Swift stdlib,
+  Foundation, and Skip runtime as `.so`s. ProGuard/minify doesn't
+  shrink the native side.

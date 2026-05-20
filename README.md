@@ -11,8 +11,14 @@ recompose, `async` functions become `suspend`, `AsyncStream` becomes
 The app fetches front-page stories from the
 [official Firebase API](https://github.com/HackerNews/API), search from
 the [Algolia HN API](https://hn.algolia.com/api), and shows a per-story
-read indicator. Networking lives in Swift via `URLSession`; both UIs
-only render the snapshot.
+read indicator. Networking lives in Swift via `URLSession`.
+
+## How we use Skip
+
+Skip's tagline is **One Swift Codebase. Two Native Platforms.** This
+approach differs: only the model and engine ship as Swift on both
+platforms. The UIs are hand-written per platform — SwiftUI on iOS,
+Jetpack Compose on Android.
 
 ## Architecture in brief
 
@@ -139,10 +145,6 @@ LaunchedEffect(Unit) {
     }
 }
 ```
-
-No hand-written JNI, no per-property thunk, no `*OnChange` SAM —
-SkipFuse generates all of it from the `// SKIP @bridgeMembers` marker
-on `Model`.
 
 ## Layout
 
