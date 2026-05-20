@@ -1,67 +1,26 @@
 import Foundation
-import Observation
 import HackerNews
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
 
-/// The surfaces the UI consumes — observable state, a one-shot
-/// command stream, and an `Equatable` send-event capability.
-// SKIP @bridgeMembers
-@MainActor
-public struct AppCore {
-    public let state: AppState
-    public let commands: AsyncStream<AppCommand>
-    public let sendEvent: SendAppEvent
-}
-
-/// Builds the `AppEngine` and returns the ``AppCore`` handle for the
-/// UI to consume.
-///
-/// Call once at app scope — iOS holds it as `@State` on the `App`,
-/// Android stashes it on `Application` in `onCreate` — and keep the
-/// handle for the process lifetime.
-///
-/// - Returns: A handle bundling state, the command stream, and the
-///   send-event capability.
-// SKIP @bridge
-@MainActor public func makeAppCore() -> AppCore {
-    // Safe: AppEngine borrows MainActor's executor and AppCore is
-    // @MainActor, so AppState only ever lives on MainActor. Unchecked is
-    // the local opt-out from `assumeIsolated`'s Sendable-return check.
-    struct Unchecked<Value>: @unchecked Sendable {
-        let value: Value; init(_ value: Value) { self.value = value }
-    }
-
-    let engine = AppEngine(isolation: MainActor.shared)
-    engine.assumeIsolated { $0.bind() }
-
-    var appState: AppState { engine.assumeIsolated { Unchecked($0.state) }.value }
-
-    return AppCore(
-        state: appState,
-        commands: engine.commands,
-        sendEvent: SendAppEvent(engine)
-    )
-}
-
-/// Event-handling workhorse — the internal coordinator behind
-/// ``AppCore``.
+/// Message-handling workhorse — the internal coordinator behind
+/// ``Core``.
 ///
 /// Borrows the host's `unownedExecutor`, so all methods and Tasks
 /// run in the host's isolation region — `MainActor` in production,
-/// a per-test `TestActor` in tests. ``AppState`` is non-`Sendable`
+/// a per-test `TestActor` in tests. ``Model`` is non-`Sendable`
 /// but is only ever touched on this borrowed executor.
 ///
 /// - Note: Long-running listener Tasks are bootstrapped externally
-///   via `bind()` after `init` returns — `makeAppCore` reaches it
+///   via `bind()` after `init` returns — `makeCore` reaches it
 ///   sync via `assumeIsolated`; tests `await` it through the actor
 ///   hop.
-actor AppEngine {
-    let state: AppState
+actor Engine {
+    let state: Model
 
-    nonisolated let commands: AsyncStream<AppCommand>
-    private let commandsContinuation: AsyncStream<AppCommand>.Continuation
+    nonisolated let commands: AsyncStream<Command>
+    private let commandsContinuation: AsyncStream<Command>.Continuation
     private let client: Client
     nonisolated let clock: any Clock<Duration>
     private let now: @Sendable () -> Date
@@ -80,13 +39,13 @@ actor AppEngine {
     static let searchDebounce: Duration = .milliseconds(250)
 
     init(
-        state: AppState = AppState(),
+        state: Model = Model(),
         client: Client = Client(),
         clock: any Clock<Duration> = ContinuousClock(),
         now: @escaping @Sendable () -> Date = Date.init,
         isolation: any Actor
     ) {
-        let (stream, continuation) = AsyncStream<AppCommand>.makeStream()
+        let (stream, continuation) = AsyncStream<Command>.makeStream()
         self.state = state
         self.commands = stream
         self.commandsContinuation = continuation
@@ -96,10 +55,10 @@ actor AppEngine {
         self.isolation = isolation
     }
 
-    /// Binds long-running listener Tasks to `AppState`'s change streams.
+    /// Binds long-running listener Tasks to `Model`'s change streams.
     ///
-    /// Call once per `AppEngine`: from `makeAppCore` (sync, via
-    /// `assumeIsolated`) in production, from `withAppEngine` (async
+    /// Call once per `Engine`: from `makeCore` (sync, via
+    /// `assumeIsolated`) in production, from `withEngine` (async
     /// hop) in tests.
     ///
     /// - Note: `Task { … }` here inherits the actor's isolation via
@@ -155,9 +114,9 @@ actor AppEngine {
     /// Fetch arms await `task.value` so `.refreshable` holds the
     /// spinner until the fetch lands.
     ///
-    /// - Parameter event: The event to dispatch.
-    func sendEvent(_ event: AppEvent) async {
-        switch event {
+    /// - Parameter message: The message to dispatch.
+    func sendMessage(_ message: Message) async {
+        switch message {
 
         case .toggleRead(let id):
             if state.readIds.contains(id) {
@@ -250,7 +209,7 @@ actor AppEngine {
     /// Cancels every Task this actor owns — the `bind()` listener
     /// plus any in-flight fetch.
     ///
-    /// Test-only: production `AppEngine` is process-lifetime. Tests
+    /// Test-only: production `Engine` is process-lifetime. Tests
     /// call this on fixture exit so the `TaskRegistry → Task → self`
     /// cycle releases and the actor doesn't outlive its test.
     func cancelAll() {

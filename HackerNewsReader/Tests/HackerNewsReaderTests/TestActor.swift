@@ -2,14 +2,14 @@ import Dispatch
 
 /// Per‑test isolation. Each `TestActor` owns a `DispatchSerialQueue`
 /// exposed as its `unownedExecutor`. Pass it as `isolation:` when
-/// constructing an `AppEngine` so the engine's methods, listener
+/// constructing an `Engine` so the engine's methods, listener
 /// Tasks, and observation callbacks all run on the same serial queue
 /// — different `TestActor`s run on different queues, so tests
 /// parallelise across instances.
 ///
 /// `runPending()` enqueues a continuation-resume at the back of the
 /// queue. Awaiting it runs every job already scheduled — listener-Task
-/// resumption, fetch / commit Tasks spawned by `sendEvent`, and
+/// resumption, fetch / commit Tasks spawned by `sendMessage`, and
 /// post-`clock.sleep` continuations — deterministically.
 public actor TestActor {
     private nonisolated let queue: DispatchSerialQueue

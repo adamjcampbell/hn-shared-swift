@@ -2,7 +2,7 @@ import Foundation
 import HackerNews
 
 /// View row — `Story` fields plus the per-user `isRead` flag
-/// projected from `AppState.readIds`.
+/// projected from `Model.readIds`.
 // SKIP @bridgeMembers
 public struct StoryRow: Sendable, Identifiable, Equatable {
     public let id: String

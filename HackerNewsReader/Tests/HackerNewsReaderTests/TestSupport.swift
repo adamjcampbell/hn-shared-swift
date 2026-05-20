@@ -4,8 +4,8 @@ import Testing
 @testable import HackerNewsReader
 import HackerNews
 
-extension AppEngine {
-    /// Tests construct `AppEngine` with `TestActor` isolation and (by
+extension Engine {
+    /// Tests construct `Engine` with `TestActor` isolation and (by
     /// default) an `ImmediateClock`; these accessors reach the
     /// test-specific instance without threading it as a separate local.
     /// `#require` makes a misuse (production isolation in a test, or a
@@ -18,7 +18,7 @@ extension AppEngine {
         get throws { try #require(clock as? TestClock<Duration>) }
     }
 
-    /// Batches multiple reads and `sendEvent(_:)` calls into one
+    /// Batches multiple reads and `sendMessage(_:)` calls into one
     /// isolation hop with a consistent snapshot — no other Task can
     /// interleave between statements inside the block.
     ///
@@ -27,13 +27,13 @@ extension AppEngine {
     /// - Returns: Whatever `body` returns.
     /// - Throws: Whatever `body` throws.
     func run<R, Failure: Error>(
-        _ body: sending @Sendable (isolated AppEngine) async throws(Failure) -> R
+        _ body: sending @Sendable (isolated Engine) async throws(Failure) -> R
     ) async throws(Failure) -> R {
         try await body(self)
     }
 }
 
-/// Per-test `AppEngine` fixture. Builds the actor (with its
+/// Per-test ``Engine`` fixture. Builds the actor (with its
 /// `TestActor` isolation, the supplied `Client` / clock / now), runs
 /// `body`, and awaits `engine.cancelAll()` on exit so the listener
 /// Task is cancelled deterministically before the next test starts.
@@ -49,14 +49,14 @@ extension AppEngine {
 ///   `defer` can't `await`. The stdlib's async
 ///   `Result.init(catching:)` requires a `@concurrent` closure, but
 ///   this body captures task-isolated state, so the catch is manual.
-func withAppEngine<R>(
+func withEngine<R>(
     client: Client = .mock(),
     clock: any Clock<Duration> = ImmediateClock(),
     now: @escaping @Sendable () -> Date = Date.init,
-    body: (AppEngine) async throws -> R
+    body: (Engine) async throws -> R
 ) async throws -> R {
-    let engine = AppEngine(
-        state: AppState(),
+    let engine = Engine(
+        state: Model(),
         client: client,
         clock: clock,
         now: now,
