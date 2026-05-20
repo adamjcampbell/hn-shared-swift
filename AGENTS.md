@@ -3,6 +3,18 @@
 Context, architecture, and the consumption story live in
 [`README.md`](README.md). This file is the rules.
 
+## Architectural decisions
+
+[`docs/adr/`](docs/adr/README.md) is the durable record of every
+architectural choice in this project. Before proposing a change that
+affects state shape, concurrency, the bridge surface, or the boundary
+between platforms, read the relevant ADRs in
+[`docs/adr/README.md`](docs/adr/README.md). If you make a new
+architectural decision, add a new ADR — copy an existing one as a
+template, give it the next number, and link it from the index.
+Existing ADRs are immutable; if a decision changes, write a new one
+that supersedes the old.
+
 ## Build & test
 
 ```sh
@@ -59,8 +71,8 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 - `suspend fun` uses `suspendCoroutine`, not
   `suspendCancellableCoroutine` — Kotlin cancellation does not
   propagate to the Swift Task.
-- Full gotcha list and migration notes:
-  [`docs/skip-fuse-adoption.md`](docs/skip-fuse-adoption.md).
+- SkipFuse adoption rationale and gotchas:
+  [ADR-0013](docs/adr/0013-skipfuse-bridgemembers.md).
 
 ## iOS view layer
 
