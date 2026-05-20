@@ -56,7 +56,7 @@ func withEngine<R>(
     body: (Engine) async throws -> R
 ) async throws -> R {
     let engine = Engine(
-        state: Model(),
+        model: Model(),
         client: client,
         clock: clock,
         now: now,

@@ -57,7 +57,7 @@ private func page(_ stories: [Story], totalPages: Int = 1) -> Page {
 /// to hold a `TestClock`; `#require` throws otherwise.
 private func commitSearch(_ query: String, on engine: Engine) async throws {
     try await engine.testActor.runPending()
-    await engine.run { core in core.state.searchQuery = query }
+    await engine.run { core in core.model.searchQuery = query }
     try await engine.testActor.runPending()
     try await engine.testClock.advance(by: Engine.searchDebounce)
     try await engine.testActor.runPending()
@@ -72,16 +72,16 @@ struct CoreTests {
             client: .mock(frontPage: { _ in page([storyA, storyB]) })
         ) { engine in
             await engine.run { engine in
-                let state = engine.state
-                #expect(state.feedStories.isEmpty)
-                #expect(state.feedLoaded == nil)
+                let model = engine.model
+                #expect(model.feedStories.isEmpty)
+                #expect(model.feedLoaded == nil)
 
                 await engine.sendMessage(.refresh)
 
-                #expect(state.feedStories.count == 2)
-                #expect(state.feedStories.first?.title == "Top story")
-                #expect(state.feedLoaded?.loadedAt != nil)
-                #expect(state.feedInitialStatus.error == nil)
+                #expect(model.feedStories.count == 2)
+                #expect(model.feedStories.first?.title == "Top story")
+                #expect(model.feedLoaded?.loadedAt != nil)
+                #expect(model.feedInitialStatus.error == nil)
             }
         }
     }
@@ -96,10 +96,10 @@ struct CoreTests {
             )
         ) { engine in
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.refresh)
-                #expect(state.feedStories.isEmpty)
-                #expect(state.feedInitialStatus.error != nil)
+                #expect(model.feedStories.isEmpty)
+                #expect(model.feedInitialStatus.error != nil)
             }
         }
     }
@@ -110,17 +110,17 @@ struct CoreTests {
             client: .mock(frontPage: { _ in page([storyA]) })
         ) { engine in
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.refresh)
-                #expect(state.feedStories.first?.isRead == false)
+                #expect(model.feedStories.first?.isRead == false)
 
                 await engine.sendMessage(.toggleRead(id: storyA.id))
-                #expect(state.feedStories.first?.isRead == true)
-                #expect(state.readIds.contains(storyA.id))
+                #expect(model.feedStories.first?.isRead == true)
+                #expect(model.readIds.contains(storyA.id))
 
                 await engine.sendMessage(.toggleRead(id: storyA.id))
-                #expect(state.feedStories.first?.isRead == false)
-                #expect(state.readIds.contains(storyA.id) == false)
+                #expect(model.feedStories.first?.isRead == false)
+                #expect(model.readIds.contains(storyA.id) == false)
             }
         }
     }
@@ -134,9 +134,9 @@ struct CoreTests {
 
             var iterator = engine.commands.makeAsyncIterator()
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.openStory(id: storyA.id))
-                #expect(state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
+                #expect(model.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
             }
             let command = await iterator.next()
             #expect(command == .presentURL(value: storyA.url!))
@@ -153,10 +153,10 @@ struct CoreTests {
             // First emission we observe is storyA's — proving storyB emitted nothing.
             var iterator = engine.commands.makeAsyncIterator()
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.openStory(id: storyB.id))
                 await engine.sendMessage(.openStory(id: storyA.id))
-                #expect(state.feedStories.first(where: { $0.id == storyB.id })?.isRead == true)
+                #expect(model.feedStories.first(where: { $0.id == storyB.id })?.isRead == true)
             }
             let command = await iterator.next()
             #expect(command == .presentURL(value: storyA.url!))
@@ -170,12 +170,12 @@ struct CoreTests {
         ) { engine in
             var iterator = engine.commands.makeAsyncIterator()
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.refresh)
-                let readBefore = state.readIds
+                let readBefore = model.readIds
                 await engine.sendMessage(.openStory(id: "does-not-exist"))
                 await engine.sendMessage(.openStory(id: storyA.id))
-                #expect(state.readIds == readBefore.union([storyA.id]))
+                #expect(model.readIds == readBefore.union([storyA.id]))
             }
             let command = await iterator.next()
             #expect(command == .presentURL(value: storyA.url!))
@@ -188,14 +188,14 @@ struct CoreTests {
             client: .mock(frontPage: { _ in page([storyA, storyB]) })
         ) { engine in
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 // readIds is the canonical record; toggling before the projection has anything to map onto is fine.
                 await engine.sendMessage(.toggleRead(id: "100"))
-                #expect(state.readIds.contains("100"))
-                #expect(state.feedStories.isEmpty)
+                #expect(model.readIds.contains("100"))
+                #expect(model.feedStories.isEmpty)
 
                 await engine.sendMessage(.refresh)
-                let projected = state.feedStories.first(where: { $0.id == "100" })
+                let projected = model.feedStories.first(where: { $0.id == "100" })
                 #expect(projected != nil)
                 #expect(projected?.isRead == true)
             }
@@ -217,9 +217,9 @@ struct CoreTests {
             try await commitSearch("rust", on: engine)
 
             await engine.run { engine in
-                let state = engine.state
-                #expect(state.searchQuery == "rust")
-                #expect(state.searchResults.map(\.id) == ["100"])
+                let model = engine.model
+                #expect(model.searchQuery == "rust")
+                #expect(model.searchResults.map(\.id) == ["100"])
             }
             let recorded = calls.searchCalls
             #expect(recorded.map(\.0) == ["rust"])
@@ -235,19 +235,19 @@ struct CoreTests {
         ) { engine in
             try await engine.testActor.runPending()
             await engine.run { engine in
-                let state = engine.state
-                #expect(state.searchInitialStatus.isLoading == false)
-                state.searchQuery = "r"
+                let model = engine.model
+                #expect(model.searchInitialStatus.isLoading == false)
+                model.searchQuery = "r"
             }
             try await engine.testActor.runPending()
 
             // Spinner is on before the debounce elapses.
-            await engine.run { engine in #expect(engine.state.searchInitialStatus.isLoading == true) }
+            await engine.run { engine in #expect(engine.model.searchInitialStatus.isLoading == true) }
 
             try await engine.testClock.advance(by: Engine.searchDebounce)
             try await engine.testActor.runPending()
 
-            await engine.run { engine in #expect(engine.state.searchInitialStatus.isLoading == false) }
+            await engine.run { engine in #expect(engine.model.searchInitialStatus.isLoading == false) }
         }
     }
 
@@ -261,10 +261,10 @@ struct CoreTests {
             )
         ) { engine in
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.refresh)
-                #expect(state.feedInitialStatus.error == nil)
-                #expect(state.feedLoaded == nil)
+                #expect(model.feedInitialStatus.error == nil)
+                #expect(model.feedLoaded == nil)
             }
         }
     }
@@ -286,21 +286,21 @@ struct CoreTests {
             clock: clock
         ) { engine in
             try await engine.testActor.runPending()
-            await engine.run { engine in engine.state.searchQuery = "ru" }
+            await engine.run { engine in engine.model.searchQuery = "ru" }
             try await engine.testActor.runPending()
             await clock.advance(by: Engine.searchDebounce)
             try await engine.testActor.runPending()
 
-            await engine.run { engine in engine.state.searchQuery = "rust" }
+            await engine.run { engine in engine.model.searchQuery = "rust" }
             try await engine.testActor.runPending()
             await clock.advance(by: Engine.searchDebounce)
             try await engine.testActor.runPending()
 
             await engine.run { engine in
-                let state = engine.state
-                #expect(state.searchInitialStatus.error == nil)
-                #expect(state.searchQuery == "rust")
-                #expect(state.searchResults.map(\.id) == ["100"])
+                let model = engine.model
+                #expect(model.searchInitialStatus.error == nil)
+                #expect(model.searchQuery == "rust")
+                #expect(model.searchResults.map(\.id) == ["100"])
             }
         }
     }
@@ -323,25 +323,25 @@ struct CoreTests {
         ) { engine in
             let feedBefore = await engine.run { engine in
                 await engine.sendMessage(.refresh)
-                return engine.state.feedStories.map(\.id)
+                return engine.model.feedStories.map(\.id)
             }
             let frontPageBefore = calls.frontPageCalls.count
 
             try await commitSearch("rust", on: engine)
             await engine.run { engine in
-                let state = engine.state
-                #expect(state.searchResults.map(\.id) == ["100"])
-                state.searchQuery = ""
+                let model = engine.model
+                #expect(model.searchResults.map(\.id) == ["100"])
+                model.searchQuery = ""
             }
             try await engine.testActor.runPending()
 
             await engine.run { engine in
-                let state = engine.state
-                #expect(state.searchResults.isEmpty)
-                #expect(state.searchInitialStatus.error == nil)
-                #expect(state.searchInitialStatus.isLoading == false)
-                #expect(state.searchLoaded == nil)
-                #expect(state.feedStories.map(\.id) == feedBefore)
+                let model = engine.model
+                #expect(model.searchResults.isEmpty)
+                #expect(model.searchInitialStatus.error == nil)
+                #expect(model.searchInitialStatus.isLoading == false)
+                #expect(model.searchLoaded == nil)
+                #expect(model.feedStories.map(\.id) == feedBefore)
             }
             let frontPageAfter = calls.frontPageCalls.count
             #expect(frontPageAfter == frontPageBefore)
@@ -361,16 +361,16 @@ struct CoreTests {
         ) { engine in
             let feedSnapshot = await engine.run { engine in
                 await engine.sendMessage(.refresh)
-                return engine.state.feedStories.map(\.id)
+                return engine.model.feedStories.map(\.id)
             }
             #expect(feedSnapshot == ["100", "101"])
 
             try await commitSearch("x", on: engine)
 
             await engine.run { engine in
-                let state = engine.state
-                #expect(state.searchResults.map(\.id) == ["100"])
-                #expect(state.feedStories.map(\.id) == feedSnapshot)
+                let model = engine.model
+                #expect(model.searchResults.map(\.id) == ["100"])
+                #expect(model.feedStories.map(\.id) == feedSnapshot)
             }
         }
     }
@@ -390,20 +390,20 @@ struct CoreTests {
             // Let the listener reach its `for await` suspension before the first write.
             try await engine.testActor.runPending()
 
-            await engine.run { engine in engine.state.searchQuery = "rust" }
+            await engine.run { engine in engine.model.searchQuery = "rust" }
             try await engine.testActor.runPending()
 
-            await engine.run { engine in engine.state.searchQuery = "" }
+            await engine.run { engine in engine.model.searchQuery = "" }
             try await engine.testActor.runPending()
 
             try await engine.testClock.advance(by: Engine.searchDebounce)
             try await engine.testActor.runPending()
 
             await engine.run { engine in
-                let state = engine.state
-                #expect(state.searchResults.isEmpty)
-                #expect(state.searchInitialStatus.error == nil)
-                #expect(state.searchInitialStatus.isLoading == false)
+                let model = engine.model
+                #expect(model.searchResults.isEmpty)
+                #expect(model.searchInitialStatus.error == nil)
+                #expect(model.searchInitialStatus.isLoading == false)
             }
             let recorded = calls.searchCalls
             #expect(recorded.map(\.0) == [])
@@ -425,11 +425,11 @@ struct CoreTests {
             // Let the listener reach its `for await` suspension before the first write.
             try await engine.testActor.runPending()
 
-            await engine.run { engine in engine.state.searchQuery = "r" }
+            await engine.run { engine in engine.model.searchQuery = "r" }
             try await engine.testActor.runPending()
-            await engine.run { engine in engine.state.searchQuery = "ru" }
+            await engine.run { engine in engine.model.searchQuery = "ru" }
             try await engine.testActor.runPending()
-            await engine.run { engine in engine.state.searchQuery = "rust" }
+            await engine.run { engine in engine.model.searchQuery = "rust" }
             try await engine.testActor.runPending()
 
             try await engine.testClock.advance(by: Engine.searchDebounce)
@@ -437,7 +437,7 @@ struct CoreTests {
 
             let recorded = calls.searchCalls
             #expect(recorded.map(\.0) == ["rust"])
-            await engine.run { engine in #expect(engine.state.searchResults.map(\.id) == ["100"]) }
+            await engine.run { engine in #expect(engine.model.searchResults.map(\.id) == ["100"]) }
         }
     }
 
@@ -451,15 +451,15 @@ struct CoreTests {
             clock: TestClock()
         ) { engine in
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.refresh)
                 await engine.sendMessage(.toggleRead(id: storyA.id))
-                #expect(state.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
+                #expect(model.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
             }
 
             try await commitSearch("x", on: engine)
 
-            await engine.run { engine in #expect(engine.state.searchResults.first?.isRead == true) }
+            await engine.run { engine in #expect(engine.model.searchResults.first?.isRead == true) }
         }
     }
 
@@ -477,16 +477,16 @@ struct CoreTests {
             )
         ) { engine in
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.refresh)
-                #expect(state.feedLoaded?.page == 0)
-                #expect(state.feedLoaded?.hasMore == true)
-                #expect(state.feedStories.map(\.id) == ["100", "101"])
+                #expect(model.feedLoaded?.page == 0)
+                #expect(model.feedLoaded?.hasMore == true)
+                #expect(model.feedStories.map(\.id) == ["100", "101"])
 
                 await engine.sendMessage(.loadMore)
-                #expect(state.feedLoaded?.page == 1)
-                #expect(state.feedLoaded?.hasMore == true)
-                #expect(state.feedStories.map(\.id) == ["100", "101", "102"])
+                #expect(model.feedLoaded?.page == 1)
+                #expect(model.feedLoaded?.hasMore == true)
+                #expect(model.feedStories.map(\.id) == ["100", "101", "102"])
             }
         }
     }
@@ -503,9 +503,9 @@ struct CoreTests {
             )
         ) { engine in
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.refresh)
-                #expect(state.feedLoaded?.hasMore == false)
+                #expect(model.feedLoaded?.hasMore == false)
                 await engine.sendMessage(.loadMore)
             }
             let pages = calls.frontPageCalls
@@ -548,26 +548,26 @@ struct CoreTests {
             clock: clock
         ) { engine in
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.refresh)
-                #expect(state.feedLoaded?.page == 0)
+                #expect(model.feedLoaded?.page == 0)
             }
 
             let loadMore = Task { [engine] in
                 await engine.run { await $0.sendMessage(.loadMore) }
             }
             try await engine.testActor.runPending()
-            await engine.run { engine in #expect(engine.state.feedLoadMoreStatus.isLoading == true) }
+            await engine.run { engine in #expect(engine.model.feedLoadMoreStatus.isLoading == true) }
 
             // Refresh's `tasks[.feedMore] = nil` cancels the parked page-1 task.
             await engine.run { await $0.sendMessage(.refresh) }
             await loadMore.value
 
             await engine.run { engine in
-                let state = engine.state
-                #expect(state.feedLoaded?.page == 0)
-                #expect(state.feedLoadMoreStatus.isLoading == false)
-                #expect(state.feedLoadMoreStatus.error == nil)
+                let model = engine.model
+                #expect(model.feedLoaded?.page == 0)
+                #expect(model.feedLoadMoreStatus.isLoading == false)
+                #expect(model.feedLoadMoreStatus.error == nil)
             }
         }
     }
@@ -584,13 +584,13 @@ struct CoreTests {
             )
         ) { engine in
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.refresh)
-                let before = state.feedStories.map(\.id)
+                let before = model.feedStories.map(\.id)
                 await engine.sendMessage(.loadMore)
-                #expect(state.feedStories.map(\.id) == before)
-                #expect(state.feedInitialStatus.error == nil)
-                #expect(state.feedLoadMoreStatus.error != nil)
+                #expect(model.feedStories.map(\.id) == before)
+                #expect(model.feedInitialStatus.error == nil)
+                #expect(model.feedLoadMoreStatus.error != nil)
             }
         }
     }
@@ -609,13 +609,13 @@ struct CoreTests {
         ) { engine in
             try await commitSearch("x", on: engine)
             await engine.run { engine in
-                let state = engine.state
-                #expect(state.searchResults.map(\.id) == ["100"])
-                #expect(state.searchLoaded?.hasMore == true)
+                let model = engine.model
+                #expect(model.searchResults.map(\.id) == ["100"])
+                #expect(model.searchLoaded?.hasMore == true)
 
                 await engine.sendMessage(.loadMore)
-                #expect(state.searchResults.map(\.id) == ["100", "101"])
-                #expect(state.searchLoaded?.hasMore == false)
+                #expect(model.searchResults.map(\.id) == ["100", "101"])
+                #expect(model.searchLoaded?.hasMore == false)
             }
         }
     }
@@ -635,23 +635,23 @@ struct CoreTests {
             clock: clock
         ) { engine in
             try await commitSearch("x", on: engine)
-            await engine.run { engine in #expect(engine.state.searchLoaded?.hasMore == true) }
+            await engine.run { engine in #expect(engine.model.searchLoaded?.hasMore == true) }
 
             let loadMore = Task { [engine] in
                 await engine.run { await $0.sendMessage(.loadMore) }
             }
             try await engine.testActor.runPending()
-            await engine.run { engine in #expect(engine.state.searchLoadMoreStatus.isLoading == true) }
+            await engine.run { engine in #expect(engine.model.searchLoadMoreStatus.isLoading == true) }
 
-            await engine.run { engine in engine.state.searchQuery = "" }
+            await engine.run { engine in engine.model.searchQuery = "" }
             await loadMore.value
             try await engine.testActor.runPending()
 
             await engine.run { engine in
-                let state = engine.state
-                #expect(state.searchLoaded == nil)
-                #expect(state.searchLoadMoreStatus.isLoading == false)
-                #expect(state.searchLoadMoreStatus.error == nil)
+                let model = engine.model
+                #expect(model.searchLoaded == nil)
+                #expect(model.searchLoadMoreStatus.isLoading == false)
+                #expect(model.searchLoadMoreStatus.error == nil)
             }
         }
     }
@@ -670,11 +670,11 @@ struct CoreTests {
             now: dates.next
         ) { engine in
             await engine.run { engine in
-                let state = engine.state
+                let model = engine.model
                 await engine.sendMessage(.refresh)
-                let initialLoadedAt = state.feedLoaded?.loadedAt
+                let initialLoadedAt = model.feedLoaded?.loadedAt
                 await engine.sendMessage(.loadMore)
-                #expect(state.feedLoaded?.loadedAt == initialLoadedAt)
+                #expect(model.feedLoaded?.loadedAt == initialLoadedAt)
             }
         }
     }

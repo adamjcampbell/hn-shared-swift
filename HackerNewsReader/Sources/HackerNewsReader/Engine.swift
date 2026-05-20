@@ -17,7 +17,7 @@ import FoundationNetworking
 ///   sync via `assumeIsolated`; tests `await` it through the actor
 ///   hop.
 actor Engine {
-    let state: Model
+    let model: Model
 
     nonisolated let commands: AsyncStream<Command>
     private let commandsContinuation: AsyncStream<Command>.Continuation
@@ -34,19 +34,19 @@ actor Engine {
     typealias Tasks = TaskRegistry<TaskID>
     private var tasks = Tasks()
 
-    /// Debounce window between a `state.searchQuery` write and the
+    /// Debounce window between a `model.searchQuery` write and the
     /// resulting fetch.
     static let searchDebounce: Duration = .milliseconds(250)
 
     init(
-        state: Model = Model(),
+        model: Model = Model(),
         client: Client = Client(),
         clock: any Clock<Duration> = ContinuousClock(),
         now: @escaping @Sendable () -> Date = Date.init,
         isolation: any Actor
     ) {
         let (stream, continuation) = AsyncStream<Command>.makeStream()
-        self.state = state
+        self.model = model
         self.commands = stream
         self.commandsContinuation = continuation
         self.client = client
@@ -63,17 +63,17 @@ actor Engine {
     ///
     /// - Note: `Task { … }` here inherits the actor's isolation via
     ///   `@_inheritActorContext` on `Task.init`, so `tasks[…]` /
-    ///   `state.…` writes inside the spawned bodies stay isolated to
+    ///   `model.…` writes inside the spawned bodies stay isolated to
     ///   `self`.
     func bind() {
         tasks[.searchListener] = Task {
-            for await query in state.searchQueryChanges {
+            for await query in model.searchQueryChanges {
                 if query.isEmpty {
                     tasks[.search] = nil
                     tasks[.searchMore] = nil
-                    state.searchLoaded = nil
-                    state.searchInitialStatus = LoadStatus()
-                    state.searchLoadMoreStatus = LoadStatus()
+                    model.searchLoaded = nil
+                    model.searchInitialStatus = LoadStatus()
+                    model.searchLoadMoreStatus = LoadStatus()
                     continue
                 }
 
@@ -81,11 +81,11 @@ actor Engine {
                 // @Observable re-fires notifications on equal writes;
                 // skip the no-op writes to avoid per-character
                 // recomposition during keystroke bursts.
-                if state.searchLoadMoreStatus != LoadStatus() {
-                    state.searchLoadMoreStatus = LoadStatus()
+                if model.searchLoadMoreStatus != LoadStatus() {
+                    model.searchLoadMoreStatus = LoadStatus()
                 }
-                if !state.searchInitialStatus.isLoading {
-                    state.searchInitialStatus.startLoading()
+                if !model.searchInitialStatus.isLoading {
+                    model.searchInitialStatus.startLoading()
                 }
 
                 tasks[.search] = Task {
@@ -94,15 +94,15 @@ actor Engine {
                             try await $0.search(query, 0)
                         }
                         try Task.checkCancellation()
-                        for story in page.stories { state.stories[story.id] = story }
+                        for story in page.stories { model.stories[story.id] = story }
                         let ids = page.stories.map(\.id)
-                        state.searchLoaded = LoadedStories(
+                        model.searchLoaded = LoadedStories(
                             ids: ids, page: 0, totalPages: page.totalPages, loadedAt: now()
                         )
-                        state.searchInitialStatus.finishSuccess()
+                        model.searchInitialStatus.finishSuccess()
                     } catch is CancellationError {
                     } catch {
-                        state.searchInitialStatus.finishFailure(error.localizedDescription)
+                        model.searchInitialStatus.finishFailure(error.localizedDescription)
                     }
                 }
             }
@@ -119,15 +119,15 @@ actor Engine {
         switch message {
 
         case .toggleRead(let id):
-            if state.readIds.contains(id) {
-                state.readIds.remove(id)
+            if model.readIds.contains(id) {
+                model.readIds.remove(id)
             } else {
-                state.readIds.insert(id)
+                model.readIds.insert(id)
             }
 
         case .openStory(let id):
-            guard let story = state.stories[id] else { return }
-            state.readIds.insert(id)
+            guard let story = model.stories[id] else { return }
+            model.readIds.insert(id)
             if let url = story.url {
                 commandsContinuation.yield(.presentURL(value: url))
             }
@@ -137,68 +137,68 @@ actor Engine {
             // Cancel any in-flight load-more so its appended page doesn't
             // land on the snapshot we're about to replace.
             tasks[.feedMore] = nil
-            state.feedLoadMoreStatus = LoadStatus()
-            state.feedInitialStatus.startLoading()
+            model.feedLoadMoreStatus = LoadStatus()
+            model.feedInitialStatus.startLoading()
 
             let task = Task {
                 do {
                     let page = try await fetch(debounce: nil) { try await $0.frontPage(0) }
                     try Task.checkCancellation()
-                    for story in page.stories { state.stories[story.id] = story }
+                    for story in page.stories { model.stories[story.id] = story }
                     let ids = page.stories.map(\.id)
-                    state.feedLoaded = LoadedStories(
+                    model.feedLoaded = LoadedStories(
                         ids: ids, page: 0, totalPages: page.totalPages, loadedAt: now()
                     )
-                    state.feedInitialStatus.finishSuccess()
+                    model.feedInitialStatus.finishSuccess()
                 } catch is CancellationError {
                     // Newer fetch will clear loading when it commits.
                 } catch {
-                    state.feedInitialStatus.finishFailure(error.localizedDescription)
+                    model.feedInitialStatus.finishFailure(error.localizedDescription)
                 }
             }
             tasks[.feed] = task
             await task.value
 
-        case .loadMore where state.searchQuery.isEmpty:
-            guard let loaded = state.feedLoaded, loaded.hasMore,
-                  !state.feedLoadMoreStatus.isLoading else { return }
+        case .loadMore where model.searchQuery.isEmpty:
+            guard let loaded = model.feedLoaded, loaded.hasMore,
+                  !model.feedLoadMoreStatus.isLoading else { return }
             let next = loaded.nextPage
-            state.feedLoadMoreStatus.startLoading()
+            model.feedLoadMoreStatus.startLoading()
 
             let task = Task {
                 do {
                     let page = try await fetch(debounce: nil) { try await $0.frontPage(next) }
                     try Task.checkCancellation()
-                    for story in page.stories { state.stories[story.id] = story }
+                    for story in page.stories { model.stories[story.id] = story }
                     let ids = page.stories.map(\.id)
-                    state.feedLoaded?.appendPage(ids, totalPages: page.totalPages)
-                    state.feedLoadMoreStatus.finishSuccess()
+                    model.feedLoaded?.appendPage(ids, totalPages: page.totalPages)
+                    model.feedLoadMoreStatus.finishSuccess()
                 } catch is CancellationError {
                 } catch {
-                    state.feedLoadMoreStatus.finishFailure(error.localizedDescription)
+                    model.feedLoadMoreStatus.finishFailure(error.localizedDescription)
                 }
             }
             tasks[.feedMore] = task
             await task.value
 
         case .loadMore:
-            guard let loaded = state.searchLoaded, loaded.hasMore,
-                  !state.searchLoadMoreStatus.isLoading else { return }
-            let query = state.searchQuery
+            guard let loaded = model.searchLoaded, loaded.hasMore,
+                  !model.searchLoadMoreStatus.isLoading else { return }
+            let query = model.searchQuery
             let next = loaded.nextPage
-            state.searchLoadMoreStatus.startLoading()
+            model.searchLoadMoreStatus.startLoading()
 
             let task = Task {
                 do {
                     let page = try await fetch(debounce: nil) { try await $0.search(query, next) }
                     try Task.checkCancellation()
-                    for story in page.stories { state.stories[story.id] = story }
+                    for story in page.stories { model.stories[story.id] = story }
                     let ids = page.stories.map(\.id)
-                    state.searchLoaded?.appendPage(ids, totalPages: page.totalPages)
-                    state.searchLoadMoreStatus.finishSuccess()
+                    model.searchLoaded?.appendPage(ids, totalPages: page.totalPages)
+                    model.searchLoadMoreStatus.finishSuccess()
                 } catch is CancellationError {
                 } catch {
-                    state.searchLoadMoreStatus.finishFailure(error.localizedDescription)
+                    model.searchLoadMoreStatus.finishFailure(error.localizedDescription)
                 }
             }
             tasks[.searchMore] = task

@@ -2,12 +2,12 @@ import Foundation
 import Observation
 import HackerNews
 
-/// The surfaces the UI consumes — observable state, a one-shot
+/// The surfaces the UI consumes — the observable `Model`, a one-shot
 /// command stream, and an `Equatable` send-message capability.
 // SKIP @bridgeMembers
 @MainActor
 public struct Core {
-    public let state: Model
+    public let model: Model
     public let commands: AsyncStream<Command>
     public let sendMessage: SendMessageAction
 }
@@ -19,8 +19,8 @@ public struct Core {
 /// Android stashes it on `Application` in `onCreate` — and keep the
 /// handle for the process lifetime.
 ///
-/// - Returns: A handle bundling state, the command stream, and the
-///   send-message capability.
+/// - Returns: A handle bundling the model, the command stream, and
+///   the send-message capability.
 // SKIP @bridge
 @MainActor public func makeCore() -> Core {
     // Safe: Engine borrows MainActor's executor and Core is
@@ -33,10 +33,10 @@ public struct Core {
     let engine = Engine(isolation: MainActor.shared)
     engine.assumeIsolated { $0.bind() }
 
-    var model: Model { engine.assumeIsolated { Unchecked($0.state) }.value }
+    var model: Model { engine.assumeIsolated { Unchecked($0.model) }.value }
 
     return Core(
-        state: model,
+        model: model,
         commands: engine.commands,
         sendMessage: SendMessageAction(engine)
     )
