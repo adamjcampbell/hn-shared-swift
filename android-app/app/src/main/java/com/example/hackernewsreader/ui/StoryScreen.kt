@@ -104,7 +104,7 @@ fun StoryScreen(core: Core) {
         },
     ) { innerPadding ->
         StoriesContent(
-            model = core.state,
+            model = core.model,
             sendMessage = sendMessage,
             modifier = Modifier
                 .padding(innerPadding)
