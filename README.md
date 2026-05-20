@@ -165,22 +165,22 @@ can lead to siloed duplication.
 
 In pursuit of a grounded approach to solving this dissatisfaction
 I found myself gravitating to talks by systems and games
-programmers who model their programs in data-oriented ways. This
+programmers who model their programs in data oriented ways. This
 architecture attempts to capitalise on the fact that both SwiftUI
 and Jetpack Compose allow us to model our application as pure state
 that is observed. This allows a natural fit for modelling behaviour
 as procedures that act on data. So:
 
 `Model` is our data and `Engine` hosts the procedures that act on
-it. Two pieces, not a tree of feature-split objects, so there's no
-up-and-down communication between them. Data and procedures are
+it. Two pieces, not a tree of objects split by feature, so there's
+no up and down communication between them. Data and procedures are
 separate concerns, and the actor isolation `Engine` provides keeps
-`Model`'s mutations race-free. Each `Message`'s handling reads top
+`Model`'s mutations race free. Each `Message`'s handling reads top
 to bottom in one place leaning into *Locality of Behaviour*.
 
 `Model` holds both the source of truth and its derivations. The
 entity store, the feed and search load state, read tracking, and
-the search query are the raw data; `feedStories` and `searchResults`
+the search query are the raw data. `feedStories` and `searchResults`
 are derived projections the UI binds to.
 
 Composition is achieved by function, not by type, under the old
@@ -214,7 +214,7 @@ Outside that overhead, app complexity could be much lower.
 - [*Semantic Compression*](https://caseymuratori.com/blog_0015), Casey Muratori. Treat code like a compression problem; keep same-meaning things in one place.
 - [Odin](https://odin-lang.org/)'s design philosophy: programs transform data; code expresses the algorithms. See the [Odin FAQ](https://odin-lang.org/docs/faq/) and the creator's [Wookash Podcast appearance](https://creators.spotify.com/pod/profile/lukasz-sciga/episodes/Odin-creator-Ginger-Bill-on-his-programming-language-and-state-of-software-e2sd9un).
 
-**Further reading**
+**Sources of inspiration**
 
 - [*AHA Programming*](https://kentcdodds.com/blog/aha-programming), Kent C. Dodds. *Avoid Hasty Abstractions*; wait for the abstraction to make itself obvious.
 - [*File Pilot: Inside the Engine*](https://www.youtube.com/watch?v=bUOOaXf9qIM), Vjekoslav Krajačić, BSC 2025. A 2 MB Windows file manager shipped from deliberately few files with no per feature code splits.
