@@ -1,7 +1,7 @@
 #!/usr/bin/env swift
 // Reads HackerNewsReader's Localizable.xcstrings and writes a
-// Strings.swift file with `tr(_:_:)`-routed accessors. Run from the
-// package root:
+// Strings.swift file with `localized(_:default:)`-routed accessors.
+// Run from the package root:
 //
 //   swift HackerNewsReader/scripts/generate-strings.swift
 //
@@ -130,7 +130,7 @@ func emitAccessor(key: String, value: String, comment: String?) -> String {
     if args.isEmpty {
         return """
         \(header)    public static var \(key): String {
-                tr(\(keyLit), \(valueLit))
+                localized(\(keyLit), default: \(valueLit))
             }
         """
     }
@@ -140,7 +140,7 @@ func emitAccessor(key: String, value: String, comment: String?) -> String {
     let forwarded = args.indices.map { "arg\($0 + 1)" }.joined(separator: ", ")
     return """
     \(header)    public static func \(key)(\(params)) -> String {
-            String(format: tr(\(keyLit), \(valueLit)), \(forwarded))
+            String(format: localized(\(keyLit), default: \(valueLit)), \(forwarded))
         }
     """
 }
@@ -182,8 +182,8 @@ let output = """
 import Foundation
 
 /// User-visible strings backed by `Localizable.xcstrings`. Each
-/// accessor routes through ``tr(_:_:)`` for catalog lookup with the
-/// English source as the runtime fallback.
+/// accessor routes through ``localized(_:default:)`` for catalog
+/// lookup with the English source as the runtime fallback.
 // SKIP @bridgeMembers
 public enum Strings {
 

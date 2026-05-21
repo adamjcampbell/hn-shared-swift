@@ -23,12 +23,19 @@ extension Bundle {
 }
 
 /// Looks up `key` in the package's localization catalog and returns
-/// the localized value (falling back to `value` when no entry matches
-/// the current locale). The lower-level
-/// `Bundle.localizedString(forKey:value:table:)` is used directly —
-/// `String(localized:bundle:)` and `AttributedString(localized:)`
-/// don't resolve cleanly on Skip Fuse's Android Swift target.
+/// the localized value, falling back to `value` when no entry matches
+/// the current locale.
+///
+/// `Bundle.localizedString(forKey:value:table:)` is used directly because
+/// `String(localized:bundle:)` and `AttributedString(localized:)` don't
+/// resolve cleanly on Skip Fuse's Android Swift target.
+///
+/// - Parameters:
+///   - key: Catalog key to look up in `Localizable.xcstrings`.
+///   - value: English source string used as the runtime fallback when
+///     no localization matches the current locale.
+/// - Returns: The localized string, or `value` if no entry matches.
 @inline(__always)
-func tr(_ key: String, _ value: String) -> String {
+func localized(_ key: String, default value: String) -> String {
     Bundle.hackerNewsReaderResources.localizedString(forKey: key, value: value, table: nil)
 }

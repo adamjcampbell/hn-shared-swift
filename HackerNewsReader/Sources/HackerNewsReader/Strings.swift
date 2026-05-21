@@ -3,68 +3,68 @@
 import Foundation
 
 /// User-visible strings backed by `Localizable.xcstrings`. Each
-/// accessor routes through ``tr(_:_:)`` for catalog lookup with the
-/// English source as the runtime fallback.
+/// accessor routes through ``localized(_:default:)`` for catalog
+/// lookup with the English source as the runtime fallback.
 // SKIP @bridgeMembers
 public enum Strings {
 
     /// Navigation title for the app's root screen.
     public static var appTitle: String {
-        tr("appTitle", "Hacker News")
+        localized("appTitle", default: "Hacker News")
     }
 
     /// Substituted into `feedHeaderRefreshedOnly` / `feedHeaderUnreadOfTotal` when the feed has never been refreshed.
     public static var feedHeaderLastRefreshedNever: String {
-        tr("feedHeaderLastRefreshedNever", "never")
+        localized("feedHeaderLastRefreshedNever", default: "never")
     }
 
     /// Feed subtitle when no stories have loaded yet. %@ is a time-of-day stamp.
     public static func feedHeaderRefreshedOnly(_ arg1: String) -> String {
-        String(format: tr("feedHeaderRefreshedOnly", "Last refreshed: %@"), arg1)
+        String(format: localized("feedHeaderRefreshedOnly", default: "Last refreshed: %@"), arg1)
     }
 
     /// Feed subtitle. %1$lld = unread count, %2$lld = total count, %3$@ = time-of-day stamp.
     public static func feedHeaderUnreadOfTotal(_ arg1: Int, _ arg2: Int, _ arg3: String) -> String {
-        String(format: tr("feedHeaderUnreadOfTotal", "%1$lld unread of %2$lld · last refreshed %3$@"), arg1, arg2, arg3)
+        String(format: localized("feedHeaderUnreadOfTotal", default: "%1$lld unread of %2$lld · last refreshed %3$@"), arg1, arg2, arg3)
     }
 
     /// Section header above the front page list.
     public static var feedTitle: String {
-        tr("feedTitle", "Front page")
+        localized("feedTitle", default: "Front page")
     }
 
     /// Caption shown while paginating into the next page.
     public static var loadingMore: String {
-        tr("loadingMore", "Loading more…")
+        localized("loadingMore", default: "Loading more…")
     }
 
     /// Swipe-action label when the story is currently unread.
     public static var markRead: String {
-        tr("markRead", "Mark Read")
+        localized("markRead", default: "Mark Read")
     }
 
     /// Swipe-action label when the story is currently read.
     public static var markUnread: String {
-        tr("markUnread", "Mark Unread")
+        localized("markUnread", default: "Mark Unread")
     }
 
     /// Section header above search results. %@ is the user's query.
     public static func searchHeader(_ arg1: String) -> String {
-        String(format: tr("searchHeader", "Searching for “%@”"), arg1)
+        String(format: localized("searchHeader", default: "Searching for “%@”"), arg1)
     }
 
     /// Empty-state caption when search returns no stories. %@ is the user's query.
     public static func searchNoResults(_ arg1: String) -> String {
-        String(format: tr("searchNoResults", "No matching stories for “%@”"), arg1)
+        String(format: localized("searchNoResults", default: "No matching stories for “%@”"), arg1)
     }
 
     /// Prompt text inside the empty search field.
     public static var searchPlaceholder: String {
-        tr("searchPlaceholder", "Search Hacker News")
+        localized("searchPlaceholder", default: "Search Hacker News")
     }
 
     /// Retry button shown when a load-more fetch fails.
     public static var tryAgain: String {
-        tr("tryAgain", "Try again")
+        localized("tryAgain", default: "Try again")
     }
 }
