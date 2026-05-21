@@ -99,6 +99,18 @@ TextField(
 LazyColumn { items(model.feedStories.kotlin() as List<StoryRow>) { StoryRowView(it) } }
 ```
 
+### Row projections
+
+`Model.feedStories` and `Model.searchResults` vend `[StoryRow]`, not
+raw `Story`s. `StoryRow` is a value type with the presentation
+strings — `metaLine`, `readActionLabel`, `displayHost` — precomputed
+at construction against a reference `now` captured from
+`Dependencies.date.now`. Both platforms consume those strings as
+properties; neither runs `Date.now` or formats a row inside its view
+body. Tests pin time via `Dependencies.$date.withValue(.constant(...)) { … }`;
+the `withEngine` fixture installs a fixed `now` internally. See
+[ADR-0017](docs/adr/0017-presenter-rows-in-model.md).
+
 ### Sending a `Message`
 
 `SendMessageAction` mirrors SwiftUI's `DismissAction` ergonomic:
@@ -152,6 +164,22 @@ LaunchedEffect(Unit) {
     }
 }
 ```
+
+### Localized strings
+
+User-visible strings live in
+`HackerNewsReader/Sources/HackerNewsReader/Resources/Localizable.xcstrings`.
+`scripts/generate-strings.swift` regenerates `Strings.swift` from the
+catalog, emitting typed accessors — `Strings.appTitle: String`,
+`Strings.searchHeader(_:) -> String`, and so on — on a bridged
+`public enum Strings`. Compose reads the same enum across the
+SkipFuse bridge; there's no parallel Android `strings.xml`. The
+accessor routes through `localized(_:default:)`, which uses
+`Bundle.localizedString(forKey:value:table:)` directly — Apple's
+`String(localized:bundle:)` ergonomics don't resolve through
+skip-foundation on Android, hence the indirection. To add or change
+a string, edit the catalog and rerun the generator. See
+[ADR-0018](docs/adr/0018-localized-strings-catalog-generator.md).
 
 ## Why one Model, one Engine
 
@@ -236,9 +264,11 @@ Outside that overhead, app complexity could be much lower.
     `Page`. Self-contained Hacker News SDK.
   - `HackerNewsReader` — `Model` + `Engine` + the bridged factory
     `makeCore() -> Core`, plus `Message`, `Command`,
-    `SendMessageAction`, `StoryRow`, `LoadStatus`, `LoadedStories`.
-    Depends on `HackerNews`; Skip transitively packages `HackerNews`
-    into the AAR set.
+    `SendMessageAction`, `StoryRow`, `LoadStatus`, `LoadedStories`,
+    `Dependencies` (the `@TaskLocal` `Date` seam), and the bridged
+    `Strings` enum generated from `Resources/Localizable.xcstrings`
+    by `scripts/generate-strings.swift`. Depends on `HackerNews`;
+    Skip transitively packages `HackerNews` into the AAR set.
 - `ios-app/` — SwiftUI app generated from `project.yml` by
   [`xcodegen`](https://github.com/yonaskolb/XcodeGen).
 - `android-app/` — Gradle project consuming the SkipFuse-exported AARs
