@@ -11,6 +11,7 @@ import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.reflect.KMutableProperty0
 
+
 /**
  * Bridges a Skip-transpiled Swift `Array<T>` to a Kotlin `List<T>` without copying.
  *
@@ -52,10 +53,4 @@ fun rememberBoundTextFieldState(property: KMutableProperty0<String>): TextFieldS
         }
     }
     return state
-}
-
-/** Formats a Skip-bridged `Date` as `HH:mm:ss` in the device's default locale. */
-fun formatTimestamp(date: skip.foundation.Date): String {
-    val formatter = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
-    return formatter.format(java.util.Date((date.timeIntervalSince1970 * 1000.0).toLong()))
 }

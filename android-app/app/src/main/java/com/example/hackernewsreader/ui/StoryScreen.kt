@@ -55,9 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import com.example.hackernewsreader.R
 import hacker.news.reader.Command
 import hacker.news.reader.Core
 import hacker.news.reader.LoadStatus
@@ -66,6 +64,7 @@ import hacker.news.reader.Message
 import hacker.news.reader.Model
 import hacker.news.reader.SendMessageAction
 import hacker.news.reader.StoryRow
+import hacker.news.reader.Strings
 import kotlinx.coroutines.launch
 
 private val LocalSendMessage = staticCompositionLocalOf<SendMessageAction> {
@@ -95,7 +94,7 @@ fun StoryScreen(core: Core) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_title)) },
+                title = { Text(Strings.appTitle) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     scrolledContainerColor = MaterialTheme.colorScheme.surface,
                 ),
@@ -133,7 +132,7 @@ private fun StoriesContent(
                 textFieldState = textFieldState,
                 searchBarState = searchBarState,
                 onSearch = { scope.launch { searchBarState.animateToCollapsed() } },
-                placeholder = { Text(stringResource(R.string.search_placeholder)) },
+                placeholder = { Text(Strings.searchPlaceholder) },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 colors = containedSearchBarColors.inputFieldColors,
             )
@@ -152,6 +151,7 @@ private fun StoriesContent(
                 loaded = model.feedLoaded,
                 initialStatus = model.feedInitialStatus,
                 loadMoreStatus = model.feedLoadMoreStatus,
+                subtitle = model.feedHeaderSubtitle,
                 modifier = Modifier.fillMaxWidth().weight(1f),
             )
         }
@@ -179,6 +179,7 @@ private fun FeedList(
     loaded: LoadedStories?,
     initialStatus: LoadStatus,
     loadMoreStatus: LoadStatus,
+    subtitle: String,
     modifier: Modifier = Modifier,
 ) {
     val sendMessage = LocalSendMessage.current
@@ -190,9 +191,7 @@ private fun FeedList(
         LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp)) {
             item(key = "header") {
                 FeedHeaderCard(
-                    storyCount = stories.size,
-                    unreadCount = stories.count { !it.isRead },
-                    lastRefreshedAt = loaded?.loadedAt,
+                    subtitle = subtitle,
                     loadError = initialStatus.error,
                 )
             }
@@ -237,19 +236,9 @@ private fun LazyListScope.storyRows(stories: List<StoryRow>) {
 
 @Composable
 private fun FeedHeaderCard(
-    storyCount: Int,
-    unreadCount: Int,
-    lastRefreshedAt: skip.foundation.Date?,
+    subtitle: String,
     loadError: String?,
 ) {
-    val never = stringResource(R.string.last_refreshed_never)
-    val refreshLabel = lastRefreshedAt?.let(::formatTimestamp) ?: never
-    val meta = if (storyCount == 0) {
-        stringResource(R.string.last_refreshed_label, refreshLabel)
-    } else {
-        stringResource(R.string.unread_meta_label, unreadCount, storyCount, refreshLabel)
-    }
-
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -260,11 +249,11 @@ private fun FeedHeaderCard(
     ) {
         Column(Modifier.padding(16.dp)) {
             Text(
-                text = stringResource(R.string.front_page_title),
+                text = Strings.feedTitle,
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                text = meta,
+                text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -296,7 +285,7 @@ private fun SearchHeader(
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = stringResource(R.string.searching_for_title, query),
+                    text = Strings.searchHeader(query),
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
@@ -335,14 +324,6 @@ private fun StoryRowView(story: StoryRow) {
         Modifier
     }
 
-    val host = remember(story.url) {
-        story.url?.let { runCatching { java.net.URI(it).host }.getOrNull() }
-            ?: "news.ycombinator.com"
-    }
-
-    val swipeLabel = stringResource(
-        if (story.isRead) R.string.mark_unread_action else R.string.mark_read_action,
-    )
     val currentToggle by rememberUpdatedState { sendMessage.send(Message.toggleRead(story.id)) }
     val dismissState = rememberSwipeToDismissBoxState()
     LaunchedEffect(dismissState) {
@@ -367,7 +348,7 @@ private fun StoryRowView(story: StoryRow) {
             ) {
                 Icon(
                     imageVector = if (story.isRead) Icons.Outlined.Circle else Icons.Filled.CheckCircle,
-                    contentDescription = swipeLabel,
+                    contentDescription = story.readActionLabel,
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
             }
@@ -378,7 +359,7 @@ private fun StoryRowView(story: StoryRow) {
             headlineContent = { Text(story.title) },
             supportingContent = {
                 Text(
-                    text = "by ${story.author} · ${story.score} pts · ${story.commentCount} comments · $host",
+                    text = story.metaLine,
                     style = MaterialTheme.typography.bodySmall,
                 )
             },
@@ -410,7 +391,7 @@ private fun LoadMoreRow(status: LoadStatus) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = status.error ?: stringResource(R.string.load_more_loading),
+            text = status.error ?: Strings.loadingMore,
             style = MaterialTheme.typography.bodySmall,
             color = if (showError) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -428,7 +409,7 @@ private fun LoadMoreRow(status: LoadStatus) {
                 enabled = showError,
                 modifier = Modifier.alpha(if (showError) 1f else 0f),
             ) {
-                Text(stringResource(R.string.load_more_retry))
+                Text(Strings.tryAgain)
             }
         }
     }
@@ -444,7 +425,7 @@ private fun EmptyResultsOverlay(query: String) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = stringResource(R.string.no_results, query),
+            text = Strings.searchNoResults(query),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
