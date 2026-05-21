@@ -59,17 +59,39 @@ public final class Model {
     // MARK: Derived view rows
 
     /// View rows for the feed — ids resolved against `stories` and
-    /// tagged with `readIds`.
-    public var feedStories: [StoryRow] {
-        (feedLoaded?.ids ?? []).compactMap { id in
-            stories[id].map { StoryRow(story: $0, isRead: readIds.contains(id)) }
+    /// tagged with `readIds`. The reference time is captured once per
+    /// access from `Dependencies.date` so a row's `metaLine` is
+    /// consistent within one snapshot; tests override via
+    /// `Dependencies.$date.withValue(.constant(_:))`.
+    public var feedStories: [StoryRow] { project(ids: feedLoaded?.ids) }
+
+    public var searchResults: [StoryRow] { project(ids: searchLoaded?.ids) }
+
+    private func project(ids: [String]?) -> [StoryRow] {
+        let now = Dependencies.date.now
+        return (ids ?? []).compactMap { id in
+            stories[id].map { StoryRow(story: $0, isRead: readIds.contains(id), now: now) }
         }
     }
 
-    public var searchResults: [StoryRow] {
-        (searchLoaded?.ids ?? []).compactMap { id in
-            stories[id].map { StoryRow(story: $0, isRead: readIds.contains(id)) }
+    // MARK: Derived presentation
+
+    /// Caption under `Front page` — unread/total counts plus the time
+    /// of the most recent refresh. Reads `feedStories` (via the
+    /// projection above), so `@Observable` tracking refires on any
+    /// change to ``feedLoaded``, the entity store, or ``readIds``.
+    public var feedHeaderSubtitle: String {
+        let stamp: String = (feedLoaded?.loadedAt).map {
+            $0.formatted(date: .omitted, time: .standard)
+        } ?? Strings.feedHeaderLastRefreshedNever
+
+        let rows = feedStories
+        let total = rows.count
+        if total == 0 {
+            return Strings.feedHeaderRefreshedOnly(stamp)
         }
+        let unread = rows.lazy.filter { !$0.isRead }.count
+        return Strings.feedHeaderUnreadOfTotal(unread, total, stamp)
     }
 
     public init() {

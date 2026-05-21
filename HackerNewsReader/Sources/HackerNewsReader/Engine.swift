@@ -23,7 +23,6 @@ actor Engine {
     private let commandsContinuation: AsyncStream<Command>.Continuation
     private let client: Client
     nonisolated let clock: any Clock<Duration>
-    private let now: @Sendable () -> Date
     nonisolated let isolation: any Actor
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
@@ -39,10 +38,9 @@ actor Engine {
     static let searchDebounce: Duration = .milliseconds(250)
 
     init(
-        model: Model = Model(),
+        model: sending Model = Model(),
         client: Client = Client(),
         clock: any Clock<Duration> = ContinuousClock(),
-        now: @escaping @Sendable () -> Date = Date.init,
         isolation: any Actor
     ) {
         let (stream, continuation) = AsyncStream<Command>.makeStream()
@@ -51,7 +49,6 @@ actor Engine {
         self.commandsContinuation = continuation
         self.client = client
         self.clock = clock
-        self.now = now
         self.isolation = isolation
     }
 
@@ -95,7 +92,7 @@ actor Engine {
                         for story in page.stories { model.stories[story.id] = story }
                         let ids = page.stories.map(\.id)
                         model.searchLoaded = LoadedStories(
-                            ids: ids, page: 0, totalPages: page.totalPages, loadedAt: now()
+                            ids: ids, page: 0, totalPages: page.totalPages, loadedAt: Dependencies.date.now
                         )
                         model.searchInitialStatus.finishSuccess()
                     } catch is CancellationError {
@@ -143,7 +140,7 @@ actor Engine {
                     for story in page.stories { model.stories[story.id] = story }
                     let ids = page.stories.map(\.id)
                     model.feedLoaded = LoadedStories(
-                        ids: ids, page: 0, totalPages: page.totalPages, loadedAt: now()
+                        ids: ids, page: 0, totalPages: page.totalPages, loadedAt: Dependencies.date.now
                     )
                     model.feedInitialStatus.finishSuccess()
                 } catch is CancellationError {

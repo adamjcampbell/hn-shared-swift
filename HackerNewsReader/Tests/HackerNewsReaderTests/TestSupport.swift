@@ -50,22 +50,24 @@ extension Engine {
 ///   `Result.init(catching:)` requires a `@concurrent` closure, but
 ///   this body captures task-isolated state, so the catch is manual.
 func withEngine<R>(
+    model: sending Model = Model(),
     client: Client = .mock(),
     clock: any Clock<Duration> = ImmediateClock(),
     now: @escaping @Sendable () -> Date = Date.init,
     body: (Engine) async throws -> R
 ) async throws -> R {
-    let engine = Engine(
-        model: Model(),
-        client: client,
-        clock: clock,
-        now: now,
-        isolation: TestActor()
-    )
-    await engine.bind()
+    // Engine construction is outside `withValue` so the non-`Sendable`
+    // `model` parameter consumes without crossing the closure's
+    // concurrent region. `bind()` and `body` run inside the binding so
+    // the listener `Task` spawned by `bind()` inherits the pinned `now`.
+    let engine = Engine(model: model, client: client, clock: clock, isolation: TestActor())
     let result: Result<R, Error>
-    do { result = .success(try await body(engine)) }
-    catch { result = .failure(error) }
+    do {
+        result = .success(try await Dependencies.$date.withValue(DateGenerator(now)) {
+            await engine.bind()
+            return try await body(engine)
+        })
+    } catch { result = .failure(error) }
     await engine.cancelAll()
     return try result.get()
 }
