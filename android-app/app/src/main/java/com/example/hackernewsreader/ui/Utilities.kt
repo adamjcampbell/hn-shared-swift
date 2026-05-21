@@ -29,9 +29,7 @@ fun <T> skip.lib.Array<T>.asList(): List<T> = kotlin(nocopy = true) as List<T>
 
 /**
  * A `SwipeToDismissBoxState` that invokes [onSwipe] when the row settles on a
- * non-`Settled` value, then animates the row back. Material 3 deprecated
- * `confirmValueChange` without replacement, so `snapshotFlow` + `reset()`
- * remains the supported path.
+ * non-`Settled` value, then animates the row back.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
