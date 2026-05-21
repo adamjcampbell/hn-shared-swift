@@ -75,9 +75,7 @@ fun StoryScreen(core: Core) {
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val sendMessage = core.sendMessage
 
-    LaunchedEffect(Unit) {
-        sendMessage.send(Message.refresh)
-    }
+    LaunchedEffect(Unit) { sendMessage.send(Message.refresh) }
 
     LaunchedEffect(Unit) {
         core.commands.kotlin().collect { command ->
@@ -365,11 +363,7 @@ private fun LoadMoreRow(status: LoadStatus) {
     val sendMessage = LocalSendMessage.current
     val showError = status.error != null && !status.isLoading
 
-    // Compose analogue of SwiftUI's `LoadMoreRow.onAppear` — LazyColumn only composes the row
-    // when the user scrolls it into view, so this fires at the same moment .onAppear would.
-    LaunchedEffect(Unit) {
-        sendMessage.send(Message.loadMore)
-    }
+    LaunchedEffect(Unit) { sendMessage.send(Message.loadMore) }
 
     Row(
         modifier = Modifier

@@ -50,18 +50,9 @@ fun rememberSwipeActionState(onSwipe: (SwipeToDismissBoxValue) -> Unit): SwipeTo
 }
 
 /**
- * Compose equivalent of a SwiftUI `Binding<String>` over a `TextFieldState`.
- *
- * Seeds the field with [property]'s current value on first composition, forwards
- * user edits via [property]'s setter, and reflects external writes to [property]
- * back into the field (cursor jumps to end on reflection).
- *
- * @param property A bound property reference, e.g. `model::searchQuery`. The
- *   Kotlin analogue of SwiftUI's `$model.searchQuery`. Works for any Kotlin
- *   `var`, including Skip-bridged `@Observable` properties whose getter and
- *   setter route through the JNI bridge.
- * @return A remembered `TextFieldState` to pass to `SearchBarDefaults.InputField`
- *   (or any `TextFieldState`-shaped API).
+ * Compose equivalent of a SwiftUI `Binding<String>` over a `TextFieldState`:
+ * seeds the field from [property], forwards edits to [property]'s setter, and
+ * reflects external writes back (cursor jumps to end on reflection).
  */
 @Composable
 fun rememberBoundTextFieldState(property: KMutableProperty0<String>): TextFieldState {
