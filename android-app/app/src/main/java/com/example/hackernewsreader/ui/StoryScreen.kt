@@ -451,8 +451,3 @@ private fun EmptyResultsOverlay(query: String) {
     }
 }
 
-private fun formatTimestamp(date: skip.foundation.Date): String {
-    val formatter = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
-    return formatter.format(java.util.Date((date.timeIntervalSince1970 * 1000.0).toLong()))
-}
-
