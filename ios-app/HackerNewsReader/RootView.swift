@@ -31,13 +31,13 @@ private struct StoriesScreen: View {
     var body: some View {
         @Bindable var model = model
         StoriesContent()
-            .searchable(text: $model.searchQuery, prompt: "Search Hacker News")
+            .searchable(text: $model.searchQuery, prompt: Strings.searchPlaceholder)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .task {
                 await sendMessage.run(.refresh)
             }
-            .navigationTitle("Hacker News")
+            .navigationTitle(Strings.appTitle)
     }
 }
 
@@ -96,9 +96,7 @@ private struct StoriesList: View {
         List {
             Section {
                 FeedHeaderCard(
-                    storyCount: model.feedStories.count,
-                    unreadCount: model.feedStories.lazy.filter { !$0.isRead }.count,
-                    lastRefreshedAt: model.feedLoaded?.loadedAt,
+                    subtitle: model.feedHeaderSubtitle,
                     loadError: model.feedInitialStatus.error
                 )
             }
@@ -123,7 +121,7 @@ private struct LoadMoreRow: View {
 
     var body: some View {
         HStack {
-            Text(status.error ?? "Loading more…")
+            Text(status.error ?? Strings.loadingMore)
                 .foregroundStyle(
                     status.error == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red)
                 )
@@ -136,7 +134,7 @@ private struct LoadMoreRow: View {
                     .id(spinId)
                     .opacity(showError ? 0 : 1)
 
-                Button("Try again") { sendMessage(.loadMore) }
+                Button(Strings.tryAgain) { sendMessage(.loadMore) }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .opacity(showError ? 1 : 0)
@@ -165,29 +163,22 @@ private struct EmptyResultsOverlay: View {
     let query: String
 
     var body: some View {
-        ContentUnavailableView.search(text: query)
-            .background(.background)
+        ContentUnavailableView(
+            Strings.searchNoResults(query),
+            systemImage: "magnifyingglass"
+        )
+        .background(.background)
     }
 }
 
 private struct FeedHeaderCard: View {
-    let storyCount: Int
-    let unreadCount: Int
-    let lastRefreshedAt: Date?
+    let subtitle: String
     let loadError: String?
-
-    private var metaText: String {
-        let stamp = lastRefreshedAt?.formatted(date: .omitted, time: .standard) ?? "never"
-        if storyCount == 0 {
-            return "Last refreshed: \(stamp)"
-        }
-        return "\(unreadCount) unread of \(storyCount) · last refreshed \(stamp)"
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Front page").font(.headline)
-            Text(metaText)
+            Text(Strings.feedTitle).font(.headline)
+            Text(subtitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let loadError {
@@ -207,7 +198,7 @@ private struct SearchHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Text("Searching for “\(query)”").font(.headline)
+                Text(Strings.searchHeader(query)).font(.headline)
                 // Always mounted so the title doesn't shift width as the spinner fades in/out.
                 ProgressView()
                     .controlSize(.small)
@@ -244,25 +235,19 @@ private struct StoryRowView: View {
                     .font(.body)
                     .foregroundStyle(story.isRead ? .secondary : .primary)
             }
-            Text(metaLine)
+            Text(story.metaLine)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
             Button(
-                story.isRead ? "Mark Unread" : "Mark Read",
+                story.readActionLabel,
                 systemImage: story.isRead ? "circle" : "checkmark.circle.fill"
             ) {
                 sendMessage(.toggleRead(id: story.id))
             }
             .tint(.blue)
         }
-    }
-
-    private var metaLine: String {
-        let host = URL(string: story.url ?? "")?.host ?? "news.ycombinator.com"
-        let age = story.createdAt.formatted(.relative(presentation: .numeric))
-        return "by \(story.author) · \(story.score) pts · \(story.commentCount) comments · \(host) · \(age)"
     }
 }
