@@ -1,5 +1,150 @@
 {
   "sourceLanguage" : "en",
-  "strings" : { },
+  "strings" : {
+    "appTitle" : {
+      "comment" : "Navigation title for the app's root screen.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hacker News"
+          }
+        }
+      }
+    },
+    "feedHeaderLastRefreshedNever" : {
+      "comment" : "Substituted into `feedHeaderRefreshedOnly` / `feedHeaderUnreadOfTotal` when the feed has never been refreshed.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "never"
+          }
+        }
+      }
+    },
+    "feedHeaderRefreshedOnly" : {
+      "comment" : "Feed subtitle when no stories have loaded yet. %@ is a time-of-day stamp.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last refreshed: %@"
+          }
+        }
+      }
+    },
+    "feedHeaderUnreadOfTotal" : {
+      "comment" : "Feed subtitle. %1$lld = unread count, %2$lld = total count, %3$@ = time-of-day stamp.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld unread of %2$lld · last refreshed %3$@"
+          }
+        }
+      }
+    },
+    "feedTitle" : {
+      "comment" : "Section header above the front page list.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Front page"
+          }
+        }
+      }
+    },
+    "loadingMore" : {
+      "comment" : "Caption shown while paginating into the next page.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading more…"
+          }
+        }
+      }
+    },
+    "markRead" : {
+      "comment" : "Swipe-action label when the story is currently unread.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mark Read"
+          }
+        }
+      }
+    },
+    "markUnread" : {
+      "comment" : "Swipe-action label when the story is currently read.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mark Unread"
+          }
+        }
+      }
+    },
+    "searchHeader" : {
+      "comment" : "Section header above search results. %@ is the user's query.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Searching for “%@”"
+          }
+        }
+      }
+    },
+    "searchNoResults" : {
+      "comment" : "Empty-state caption when search returns no stories. %@ is the user's query.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No matching stories for “%@”"
+          }
+        }
+      }
+    },
+    "searchPlaceholder" : {
+      "comment" : "Prompt text inside the empty search field.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search Hacker News"
+          }
+        }
+      }
+    },
+    "tryAgain" : {
+      "comment" : "Retry button shown when a load-more fetch fails.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Try again"
+          }
+        }
+      }
+    }
+  },
   "version" : "1.0"
 }
