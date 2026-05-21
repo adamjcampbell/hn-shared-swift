@@ -101,10 +101,10 @@ LazyColumn { items(model.feedStories.kotlin() as List<StoryRow>) { StoryRowView(
 
 ### Row projections
 
-`Model.feedStories` and `Model.searchResults` vend `[StoryRow]` — a
+`Model.feedStories` and `Model.searchResults` vend `[StoryRow]`, a
 value type with the row's display strings baked in. Both platforms
-render row properties directly, so SwiftUI and Compose see identical
-captions for identical state without per-platform formatting.
+render row properties directly, so neither has to format the row
+itself.
 
 ### Sending a `Message`
 
@@ -162,10 +162,10 @@ LaunchedEffect(Unit) {
 
 ### Localized strings
 
-User-visible strings come from a single `Localizable.xcstrings`
-catalog. A generated `Strings` enum exposes typed accessors that
-bridge across SkipFuse, so Compose reads the same source as SwiftUI
-without a parallel Android string store.
+The app's strings come from a single `Localizable.xcstrings` catalog.
+A generated `Strings` enum exposes typed accessors that bridge across
+SkipFuse, so Compose reads the same source as SwiftUI without a
+separate Android string store.
 
 ## Why one Model, one Engine
 
