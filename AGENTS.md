@@ -54,6 +54,11 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 - Drop type prefixes in namespaced modules: `HackerNews.Story`, not
   `HackerNews.HNStory`. Rename consumer-side collisions (`Story` →
   `StoryRow`) rather than reinstating the prefix.
+- Presentation strings live precomputed on `StoryRow`, not in the
+  view. Don't read `Date.now` inside view bodies — projections on
+  `Model` capture `Dependencies.date.now` once per access so both
+  platforms render the same caption for the same input. See
+  [ADR-0017](docs/adr/0017-presenter-rows-in-model.md).
 
 ## Bridge (SkipFuse)
 
@@ -130,6 +135,21 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 - Wrap `URLSession` in `#if canImport(FoundationNetworking)` +
   `import FoundationNetworking` for the Android cross-compile.
 
+## Strings & localization
+
+- User-visible strings are catalog-backed. To add or change one,
+  edit `Sources/HackerNewsReader/Resources/Localizable.xcstrings`
+  and rerun `scripts/generate-strings.swift`. `Strings.swift` is
+  generated; don't hand-edit.
+- `localized(_:default:)` (in `BundleResources.swift`) is the only
+  lookup helper. Don't introduce parallel platform-side string
+  stores (no Android `strings.xml`, no per-platform `tr(...)`).
+- Skip-foundation gaps with `String(localized:bundle:)`,
+  `LocalizationValue`, and `Bundle.module` at argument position are
+  the reason for the indirection — Compose reads the bridged
+  `Strings` enum across SkipFuse. See
+  [ADR-0018](docs/adr/0018-localized-strings-catalog-generator.md).
+
 ## Concurrency & testing
 
 - Inject `clock: any Clock<Duration>` into `Engine`. Production wires
@@ -153,6 +173,10 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   `TestActor`, awaits `engine.cancelAll()` on exit — breaks the
   `listener-Task → Engine` cycle before the next test. Mocks pass
   through `client: .mock(frontPage: …, search: …)`.
+- Pin time with `Dependencies.$date.withValue(.constant(fixed)) { … }`
+  when asserting on `StoryRow.metaLine` / `feedHeaderSubtitle`.
+  `withEngine` opens the binding around `bind()` and the body so
+  listener tasks and projections share the same `now`.
 
 ## State shape
 
