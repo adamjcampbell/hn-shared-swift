@@ -40,15 +40,12 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberSearchBarState
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -324,16 +321,7 @@ private fun StoryRowView(story: StoryRow) {
         Modifier
     }
 
-    val currentToggle by rememberUpdatedState { sendMessage.send(Message.toggleRead(story.id)) }
-    val dismissState = rememberSwipeToDismissBoxState()
-    LaunchedEffect(dismissState) {
-        snapshotFlow { dismissState.currentValue }.collect { value ->
-            if (value == SwipeToDismissBoxValue.StartToEnd) {
-                currentToggle()
-                dismissState.reset()
-            }
-        }
-    }
+    val dismissState = rememberSwipeActionState { sendMessage.send(Message.toggleRead(story.id)) }
 
     SwipeToDismissBox(
         state = dismissState,

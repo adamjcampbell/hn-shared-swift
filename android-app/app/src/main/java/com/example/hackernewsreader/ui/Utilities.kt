@@ -3,6 +3,10 @@ package com.example.hackernewsreader.ui
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -22,6 +26,28 @@ import kotlin.reflect.KMutableProperty0
  */
 @Suppress("UNCHECKED_CAST")
 fun <T> skip.lib.Array<T>.asList(): List<T> = kotlin(nocopy = true) as List<T>
+
+/**
+ * A `SwipeToDismissBoxState` that invokes [onSwipe] when the row settles on a
+ * non-`Settled` value, then animates the row back. Material 3 deprecated
+ * `confirmValueChange` without replacement, so `snapshotFlow` + `reset()`
+ * remains the supported path.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun rememberSwipeActionState(onSwipe: (SwipeToDismissBoxValue) -> Unit): SwipeToDismissBoxState {
+    val state = rememberSwipeToDismissBoxState()
+    val latestOnSwipe by rememberUpdatedState(onSwipe)
+    LaunchedEffect(state) {
+        snapshotFlow { state.currentValue }.collect { value ->
+            if (value != SwipeToDismissBoxValue.Settled) {
+                latestOnSwipe(value)
+                state.reset()
+            }
+        }
+    }
+    return state
+}
 
 /**
  * Compose equivalent of a SwiftUI `Binding<String>` over a `TextFieldState`.
