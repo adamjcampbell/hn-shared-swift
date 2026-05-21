@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Search
@@ -67,7 +66,6 @@ import hacker.news.reader.Message
 import hacker.news.reader.Model
 import hacker.news.reader.SendMessageAction
 import hacker.news.reader.StoryRow
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 private val LocalSendMessage = staticCompositionLocalOf<SendMessageAction> {
@@ -124,16 +122,8 @@ private fun StoriesContent(
     modifier: Modifier = Modifier,
 ) {
     val searchBarState = rememberSearchBarState()
-    val textFieldState = rememberTextFieldState(initialText = model.searchQuery)
+    val textFieldState = rememberBoundTextFieldState(model::searchQuery)
     val scope = rememberCoroutineScope()
-
-    // One-way: textFieldState is the source of truth; nothing in the engine writes
-    // back to model.searchQuery, so no reverse sync is needed.
-    LaunchedEffect(model) {
-        snapshotFlow { textFieldState.text.toString() }
-            .distinctUntilChanged()
-            .collect { model.searchQuery = it }
-    }
 
     val containedSearchBarColors = SearchBarDefaults.containedColors(state = searchBarState)
         .copy(containerColor = MaterialTheme.colorScheme.surface)
@@ -172,7 +162,7 @@ private fun StoriesContent(
             colors = containedSearchBarColors,
         ) {
             SearchResults(
-                query = textFieldState.text.toString(),
+                query = model.searchQuery,
                 results = model.searchResults.asList(),
                 loaded = model.searchLoaded,
                 initialStatus = model.searchInitialStatus,
@@ -465,3 +455,4 @@ private fun formatTimestamp(date: skip.foundation.Date): String {
     val formatter = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
     return formatter.format(java.util.Date((date.timeIntervalSince1970 * 1000.0).toLong()))
 }
+
