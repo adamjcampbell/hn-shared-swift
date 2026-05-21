@@ -101,15 +101,10 @@ LazyColumn { items(model.feedStories.kotlin() as List<StoryRow>) { StoryRowView(
 
 ### Row projections
 
-`Model.feedStories` and `Model.searchResults` vend `[StoryRow]`, not
-raw `Story`s. `StoryRow` is a value type with the presentation
-strings — `metaLine`, `readActionLabel`, `displayHost` — precomputed
-at construction against a reference `now` captured from
-`Dependencies.date.now`. Both platforms consume those strings as
-properties; neither runs `Date.now` or formats a row inside its view
-body. Tests pin time via `Dependencies.$date.withValue(.constant(...)) { … }`;
-the `withEngine` fixture installs a fixed `now` internally. See
-[ADR-0017](docs/adr/0017-presenter-rows-in-model.md).
+`Model.feedStories` and `Model.searchResults` vend `[StoryRow]` — a
+value type with the row's display strings baked in. Both platforms
+render row properties directly, so SwiftUI and Compose see identical
+captions for identical state without per-platform formatting.
 
 ### Sending a `Message`
 
@@ -167,19 +162,10 @@ LaunchedEffect(Unit) {
 
 ### Localized strings
 
-User-visible strings live in
-`HackerNewsReader/Sources/HackerNewsReader/Resources/Localizable.xcstrings`.
-`scripts/generate-strings.swift` regenerates `Strings.swift` from the
-catalog, emitting typed accessors — `Strings.appTitle: String`,
-`Strings.searchHeader(_:) -> String`, and so on — on a bridged
-`public enum Strings`. Compose reads the same enum across the
-SkipFuse bridge; there's no parallel Android `strings.xml`. The
-accessor routes through `localized(_:default:)`, which uses
-`Bundle.localizedString(forKey:value:table:)` directly — Apple's
-`String(localized:bundle:)` ergonomics don't resolve through
-skip-foundation on Android, hence the indirection. To add or change
-a string, edit the catalog and rerun the generator. See
-[ADR-0018](docs/adr/0018-localized-strings-catalog-generator.md).
+User-visible strings come from a single `Localizable.xcstrings`
+catalog. A generated `Strings` enum exposes typed accessors that
+bridge across SkipFuse, so Compose reads the same source as SwiftUI
+without a parallel Android string store.
 
 ## Why one Model, one Engine
 
