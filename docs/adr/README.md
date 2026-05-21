@@ -31,8 +31,10 @@ the old.
 | 0014 | [Pin the bridged `Core` to `@MainActor` on both platforms](0014-mainactor-both-platforms.md)                   | 2026-05-13 | Accepted                                                                        |
 | 0015 | [`Engine` actor borrows host executor via `isolation: any Actor`](0015-engine-borrows-host-executor.md)        | 2026-05-13 | Accepted                                                                        |
 | 0016 | [Single `Engine` actor as sole writer; `Model` is a flat mega-struct](0016-engine-actor-flat-model.md)         | 2026-05-17 | Accepted                                                                        |
+| 0017 | [Presenter rows projected from `Model`; the package owns the view shape](0017-presenter-rows-in-model.md)      | 2026-05-21 | Accepted                                                                        |
+| 0018 | [Localized strings via `Localizable.xcstrings` + a generated `Strings` accessor](0018-localized-strings-catalog-generator.md) | 2026-05-21 | Accepted                                                                        |
 
-ADRs 0001–0003, 0005, 0006, and 0013–0016 together describe the design as it
+ADRs 0001–0003, 0005, 0006, and 0013–0018 together describe the design as it
 stands today. ADRs 0004 and 0007–0012 are the hand-written-bridge evolution
 that ended at SkipFuse adoption; they are preserved as the immutable record
 of what was tried and why each step was replaced.
