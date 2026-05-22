@@ -141,7 +141,7 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   edit `Sources/HackerNewsReader/Resources/Localizable.xcstrings`
   and rerun `scripts/generate-strings.swift`. `Strings.swift` is
   generated; don't hand-edit.
-- `localized(_:default:)` (in `BundleResources.swift`) is the only
+- `localized(_:default:)` (in `Localization.swift`) is the only
   lookup helper. Don't introduce parallel platform-side string
   stores (no Android `strings.xml`, no per-platform `tr(...)`).
 - Skip-foundation gaps with `String(localized:bundle:)`,

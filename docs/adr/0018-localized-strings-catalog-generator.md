@@ -53,8 +53,7 @@ The generator:
   bridge exposes every accessor to Kotlin.
 
 Every accessor routes through `localized(_ key: String, default value:
-String) -> String`, defined alongside the bundle accessor in
-`BundleResources.swift`:
+String) -> String`, defined alongside the bundle accessor:
 
 ```swift
 @inline(__always)
