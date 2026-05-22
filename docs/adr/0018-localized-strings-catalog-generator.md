@@ -21,23 +21,18 @@ through skip-foundation on Android:
   Android — the lookup returns the source string verbatim.
 - `AttributedString(localized:)` has the same gap.
 
-Earlier attempts to ship `String(localized:)` from the cross-platform
-package and read it on Android failed at the bridge; the working note
-in this repo's memory captures the same conclusion
-([feedback_skip_localization_limitations]).
-
 The cross-platform alternatives were:
 
 - **Plain Swift literals everywhere.** No catalog, no localization,
-  but lockstep across platforms. Rejected — the app already wants
+  but lockstep across platforms. Not viable — the app already wants
   localizable copy, and committing to "no localization ever" closes
   off a basic affordance.
 - **Catalogs per platform.** An `xcstrings` on iOS and an Android
-  `strings.xml` written by hand or by a converter. Rejected — two
+  `strings.xml` written by hand or by a converter. Not viable — two
   sources of truth, with the merge burden falling on the author.
 - **Single catalog, generated accessor.** One `xcstrings` drives both
   platforms; the accessor uses primitives that *do* bridge through
-  skip-foundation. Chosen.
+  skip-foundation. Selected.
 
 ## Decision
 
@@ -105,7 +100,7 @@ platform-side `tr(...)` helper) is removed; Compose reads
 - `AttributedString` localization is not supported through this path
   and would need a separate plan if it becomes necessary; nothing in
   the current UI requires it.
-- The chosen primitives are stable: `localizedString(forKey:value:table:)`
-  has been the Foundation lookup since the original API, and Skip's
-  `Bundle(path:)` interception is part of the documented Skip
-  resource story.
+- `localizedString(forKey:value:table:)` is a long-standing Foundation
+  API; `Bundle(path:)` interception is part of Skip's documented
+  resource handling. Both are stable bridge surfaces, which is why
+  the indirection lands on them.
