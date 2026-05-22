@@ -15,7 +15,7 @@ Two pressures were in tension:
 
 The "split each axis into its own type" instinct, applied without restraint, produces a tree of wrappers whose only job is to bundle two or three fields. Cohesion within each wrapper is local; coordination across wrappers leaks back into the top-level dispatch. The mutation logic becomes harder to read, not easier — `state.feed.loadStatus.value = .loading` instead of `state.feedLoadStatus = .loading`.
 
-The semantic-compression bar from Casey Muratori's work on code structure is the relevant heuristic here: a wrapper type earns its keep when it satisfies at least two of (a) operation repetition — the wrapper is used in many places the same way, (b) temporal access coupling — the wrapper's fields are accessed together within the same operation, (c) Carmack-lightweight — the wrapper does something genuinely cheap and self-evident. A wrapper that bundles two fields used together once or twice fails all three.
+The semantic-compression bar from Casey Muratori's work on code structure gives the heuristic used here: a wrapper type is justified only when it satisfies at least two of (a) operation repetition — the wrapper is used in many places the same way, (b) temporal access coupling — the wrapper's fields are accessed together within the same operation, (c) Carmack-lightweight — the wrapper does something genuinely cheap and self-evident. A wrapper that bundles two fields used together once or twice fails all three.
 
 ## Decision
 
@@ -23,12 +23,12 @@ The semantic-compression bar from Casey Muratori's work on code structure is the
 
 `Engine` is a `final actor` (see [ADR-0015](0015-engine-borrows-host-executor.md)) that owns every mutation. The class methods on `Model` are not mutators in the usual sense — there are no setters that encode business logic. `Model` is essentially a public data bag; the rules live on `Engine`. The discipline is explicit: `Engine` is the only writer of `Model`. Do not add mutators on `Model`.
 
-A nested type earns its keep on `Model` when ≥ 2 of the semantic-compression criteria apply. `LoadStatus` (idle/loading/error coexisting during retry) and `LoadedStories` (paginated list + cursor + hasNext) qualify because they are used identically across multiple axes. Wrappers that don't meet the bar — `LoadableStories` was an early candidate — get dissolved into flat `Model` fields.
+A nested type is kept on `Model` only when ≥ 2 of the semantic-compression criteria apply. `LoadStatus` (idle/loading/error coexisting during retry) and `LoadedStories` (paginated list + cursor + hasNext) qualify because they are used identically across multiple axes. Wrappers that don't meet the bar — `LoadableStories` was an early candidate — get dissolved into flat `Model` fields.
 
 ## Consequences
 
 - Mutation logic is concentrated. The `switch` inside `Engine.sendMessage` is one screen for the whole app, top to bottom. A reader can find the entire effect of `.refresh` or `.toggleRead` without traversing a type tree.
-- New state is one line on `Model` plus one arm on the dispatch switch. No new wrapper, no new file.
+- New state is one line on `Model` plus one arm on the dispatch switch.
 - Field names get prefixed where context isn't obvious — `feedLoadStatus`, `searchLoadStatus`, `feedHasNext`, `searchHasNext`. The prefix replaces the namespace a wrapper would have provided. The cost is verbose field names; the benefit is no indirection at the access site.
 - Refactors that would extract a wrapper type are deferred until the bar is met. Until then the additional axis lives as a flat field on `Model`.
 - For tests the flat shape is a feature. `engine.run { engine in let model = engine.model; #expect(model.feedStatus == .loaded(...)) }` reads naturally. A wrapper would force `model.feed.status` or `model.feed.loadStatus`, adding rather than removing noise.
