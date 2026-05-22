@@ -15,7 +15,7 @@ row on either platform needs the title, a meta caption ("by alice ·
 12 points · 4 comments · example.com · 3h ago"), a host extracted from
 the URL, and a swipe-action label that flips on read state. SwiftUI
 could compute those inside the row view; Compose could compute them
-inside its `@Composable`. Two pressures argued against that:
+inside its `@Composable`. Two constraints rule that out:
 
 - **`RelativeDateTimeFormatter` does not bridge through
   skip-foundation.** Any cross-platform relative-age string has to be
@@ -26,15 +26,10 @@ inside its `@Composable`. Two pressures argued against that:
   Recomputing the same caption on both platforms would split a single
   semantic into two implementations that drift.
 
-The "view formats the row" instinct is the typical SwiftUI / Compose
-default, but in a cross-platform Swift-package shape it places the
-formatting logic past the bridge surface — on the platform side,
-twice, in two languages.
-
-A separate concern was test ergonomics. A row's `metaLine` reads "3h
-ago" against a reference `now`. If `now` is wall-clock `Date()`,
-assertions either pin time externally (and become a global concern)
-or test only the time-independent fields.
+Tests have a related constraint. A row's `metaLine` reads "3h ago"
+against a reference `now`. If `now` is wall-clock `Date()`, assertions
+either pin time externally (a global concern) or test only the
+time-independent fields.
 
 ## Decision
 
@@ -86,12 +81,11 @@ flows through the same localization path as the rest of the UI chrome.
   the fixture `withEngine` wraps its body in that binding so listener
   tasks observe the same `now` as the test body. No clock parameter
   threads through Engine signatures purely for presenter time.
-- Equatable `StoryRow` means SwiftUI's per-row diffing and Compose's
-  stability checks both skip unchanged rows naturally. Adding a new
-  presentation field is one stored property + one assignment in the
-  initialiser; consumers don't change.
-- The package now expresses a third surface beyond *state* and
-  *mutation*: a *projection* layer. Future row types (comment row,
-  user row) follow the same pattern — a value type, a `// SKIP
-  @bridgeMembers` annotation, a projection method on `Model`, a
-  `Dependencies.date` capture where time enters.
+- Equatable `StoryRow` lets SwiftUI's per-row diffing and Compose's
+  stability checks skip unchanged rows. Adding a new presentation
+  field is one stored property + one assignment in the initialiser;
+  consumers don't change.
+- Projections sit alongside state and mutation as a third layer in
+  the package. Additional row types use the same shape: a value type
+  with `// SKIP @bridgeMembers`, a projection method on `Model`, and
+  a `Dependencies.date` capture where time enters.
