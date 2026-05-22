@@ -116,6 +116,14 @@ dependencies {
     // bridge initializer reflectively.
     implementation("org.jetbrains.kotlin:kotlin-reflect:2.3.0")
 
+    // SkipFoundation's Bundle.localizedString routes every value through
+    // commonmark to render Markdown-flavored xcstrings entries. The AAR
+    // declares these as implementation() deps in its own build, but
+    // fileTree(...) consumption strips pom-declared transitives, so we
+    // mirror Skip's declaration explicitly.
+    implementation("org.commonmark:commonmark:0.28.0")
+    implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.28.0")
+
     val composeBom = platform("androidx.compose:compose-bom:2026.04.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
