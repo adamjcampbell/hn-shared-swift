@@ -14,6 +14,7 @@ import FoundationNetworking
 public struct Client: Sendable {
     public var frontPage: @Sendable (_ page: Int) async throws -> Page
     public var search: @Sendable (_ query: String, _ page: Int) async throws -> Page
+    public var comments: @Sendable (_ storyID: String) async throws -> [Comment]
 
     /// Builds a client from explicit transport closures.
     ///
@@ -22,12 +23,15 @@ public struct Client: Sendable {
     ///     ranking.
     ///   - search: Resolves a zero-indexed page of search results for
     ///     a query.
+    ///   - comments: Resolves the flattened comment tree for a story.
     public init(
         frontPage: @escaping @Sendable (_ page: Int) async throws -> Page,
-        search: @escaping @Sendable (_ query: String, _ page: Int) async throws -> Page
+        search: @escaping @Sendable (_ query: String, _ page: Int) async throws -> Page,
+        comments: @escaping @Sendable (_ storyID: String) async throws -> [Comment] = { _ in [] }
     ) {
         self.frontPage = frontPage
         self.search = search
+        self.comments = comments
     }
 
     /// Builds a test client whose closures return empty pages by
@@ -36,12 +40,14 @@ public struct Client: Sendable {
     /// - Parameters:
     ///   - frontPage: Front-page closure; defaults to an empty page.
     ///   - search: Search closure; defaults to an empty page.
+    ///   - comments: Comments closure; defaults to an empty tree.
     /// - Returns: A ``Client`` with the supplied closures installed.
     public static func mock(
         frontPage: @escaping @Sendable (_ page: Int) async throws -> Page = { _ in Page(stories: [], totalPages: 0) },
-        search: @escaping @Sendable (_ query: String, _ page: Int) async throws -> Page = { _, _ in Page(stories: [], totalPages: 0) }
+        search: @escaping @Sendable (_ query: String, _ page: Int) async throws -> Page = { _, _ in Page(stories: [], totalPages: 0) },
+        comments: @escaping @Sendable (_ storyID: String) async throws -> [Comment] = { _ in [] }
     ) -> Client {
-        Client(frontPage: frontPage, search: search)
+        Client(frontPage: frontPage, search: search, comments: comments)
     }
 }
 
@@ -72,6 +78,9 @@ extension Client {
                 let request = Client.searchRequest(query: query, page: page)
                 let (data, _) = try await fetch(request)
                 return try Client.decodeAlgoliaSearch(data)
+            },
+            comments: { storyID in
+                try await Client.firebaseComments(storyID: storyID, fetch: fetch)
             }
         )
     }
@@ -167,13 +176,100 @@ private struct FirebaseItem: Decodable {
     let id: Int
     let by: String?
     let title: String?
+    let text: String?
     let url: String?
     let score: Int?
     let descendants: Int?
+    let kids: [Int]?
     let time: TimeInterval
     let type: String?
     let deleted: Bool?
     let dead: Bool?
+}
+
+private extension Client {
+    static func firebaseComments(
+        storyID: String,
+        fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    ) async throws -> [Comment] {
+        guard let id = Int(storyID) else { return [] }
+        let root = try await firebaseItem(id: id, fetch: fetch)
+        return try await firebaseChildComments(ids: root.kids ?? [], depth: 0, fetch: fetch)
+    }
+
+    static func firebaseItem(
+        id: Int,
+        fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    ) async throws -> FirebaseItem {
+        let (data, _) = try await fetch(firebaseItemRequest(id: id))
+        return try firebaseDecoder.decode(FirebaseItem.self, from: data)
+    }
+
+    static func firebaseChildComments(
+        ids: [Int],
+        depth: Int,
+        fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)
+    ) async throws -> [Comment] {
+        let indexed: [(Int, [Comment])] = try await withThrowingTaskGroup(
+            of: (Int, [Comment]).self
+        ) { group in
+            for (idx, id) in ids.enumerated() {
+                group.addTask {
+                    do {
+                        let item = try await firebaseItem(id: id, fetch: fetch)
+                        guard let comment = Comment(firebaseItem: item, depth: depth) else {
+                            return (idx, [])
+                        }
+                        let children = try await firebaseChildComments(
+                            ids: item.kids ?? [], depth: depth + 1, fetch: fetch
+                        )
+                        return (idx, [comment] + children)
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch let urlError as URLError where urlError.code == .cancelled {
+                        throw CancellationError()
+                    } catch {
+                        return (idx, [])
+                    }
+                }
+            }
+            var results: [(Int, [Comment])] = []
+            for try await result in group { results.append(result) }
+            return results
+        }
+
+        return indexed
+            .sorted { $0.0 < $1.0 }
+            .flatMap { $0.1 }
+    }
+}
+
+private extension Comment {
+    init?(firebaseItem item: FirebaseItem, depth: Int) {
+        guard item.deleted != true, item.dead != true else { return nil }
+        guard item.type == nil || item.type == "comment" else { return nil }
+        guard let author = item.by, let text = item.text else { return nil }
+        self.init(
+            id: String(item.id),
+            author: author,
+            text: text.hnPlainText,
+            createdAt: Date(timeIntervalSince1970: item.time),
+            depth: depth
+        )
+    }
+}
+
+private extension String {
+    var hnPlainText: String {
+        replacingOccurrences(of: "&#x27;", with: "'")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "<p>", with: "\n\n")
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 private extension Story {

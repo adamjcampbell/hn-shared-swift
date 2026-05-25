@@ -168,6 +168,10 @@ struct StringsTests {
         #expect(Strings.feedHeaderLastRefreshedNever == "never")
         #expect(Strings.loadingMore == "Loading more…")
         #expect(Strings.tryAgain == "Try again")
+        #expect(Strings.commentsTitle == "Comments")
+        #expect(Strings.commentsNoComments == "No comments")
+        #expect(Strings.commentsMissingStory == "Story not found")
+        #expect(Strings.openArticle == "Open Article")
     }
 
     @Test("searchHeader and searchNoResults interpolate the query")

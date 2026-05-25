@@ -11,7 +11,9 @@ import Foundation
 // SKIP @bridge
 public enum Message: Sendable, Equatable {
     case toggleRead(id: String)
-    case openStory(id: String)
+    case viewStory(id: String)
+    case openStoryURL(id: String)
+    case loadComments(id: String)
     case refresh
     case loadMore
 }

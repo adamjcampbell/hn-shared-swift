@@ -147,6 +147,65 @@ struct FirebaseFrontPageTests {
     }
 }
 
+@Suite("Client.comments (Firebase)")
+struct FirebaseCommentsTests {
+
+    @Test("fetches story kids as flattened comments preserving tree order")
+    func fetchesFlattenedComments() async throws {
+        let client = Client(fetch: firebaseMock(
+            topstories: [],
+            items: [
+                100: itemJSON(id: 100, title: "Story", kids: [1, 2]),
+                1: commentJSON(id: 1, by: "alice", text: "First", kids: [3]),
+                2: commentJSON(id: 2, by: "bob", text: "Second"),
+                3: commentJSON(id: 3, by: "carol", text: "Nested"),
+            ],
+            recordURL: { _ in }
+        ))
+
+        let comments = try await client.comments("100")
+
+        #expect(comments.map(\.id) == ["1", "3", "2"])
+        #expect(comments.map(\.depth) == [0, 1, 0])
+        #expect(comments.map(\.author) == ["alice", "carol", "bob"])
+    }
+
+    @Test("drops deleted, dead, incomplete, and failed comments")
+    func dropsBadComments() async throws {
+        let client = Client(fetch: firebaseMock(
+            topstories: [],
+            items: [
+                100: itemJSON(id: 100, title: "Story", kids: [1, 2, 3, 4, 5]),
+                1: commentJSON(id: 1, by: "alice", text: "Good"),
+                2: commentJSON(id: 2, by: "bob", text: "Deleted", deleted: true),
+                3: commentJSON(id: 3, by: "carol", text: "Dead", dead: true),
+                4: commentJSON(id: 4, by: nil, text: "No author"),
+            ],
+            recordURL: { _ in }
+        ))
+
+        let comments = try await client.comments("100")
+
+        #expect(comments.map(\.id) == ["1"])
+    }
+
+    @Test("decodes minimal HTML entities and tags in comment text")
+    func decodesCommentText() async throws {
+        let client = Client(fetch: firebaseMock(
+            topstories: [],
+            items: [
+                100: itemJSON(id: 100, title: "Story", kids: [1]),
+                1: commentJSON(id: 1, by: "alice", text: "Hello&lt;br&gt;&amp; goodbye<p>&quot;ok&quot;"),
+            ],
+            recordURL: { _ in }
+        ))
+
+        let comment = try #require(try await client.comments("100").first)
+
+        #expect(comment.text == "Hello& goodbye\n\n\"ok\"")
+    }
+}
+
 @Suite("Client.search (Algolia)")
 struct AlgoliaSearchTests {
 
@@ -309,6 +368,7 @@ private func itemJSON(
     descendants: Int = 0,
     url: String? = nil,
     time: TimeInterval = 1_700_000_000,
+    kids: [Int] = [],
     deleted: Bool = false,
     dead: Bool = false
 ) -> String {
@@ -318,8 +378,29 @@ private func itemJSON(
     if let url { fields.append("\"url\":\"\(url)\"") }
     fields.append("\"score\":\(score)")
     fields.append("\"descendants\":\(descendants)")
+    if !kids.isEmpty { fields.append("\"kids\":[\(kids.map(String.init).joined(separator: ","))]") }
     fields.append("\"time\":\(Int(time))")
     fields.append("\"type\":\"story\"")
+    if deleted { fields.append("\"deleted\":true") }
+    if dead { fields.append("\"dead\":true") }
+    return "{\(fields.joined(separator: ","))}"
+}
+
+private func commentJSON(
+    id: Int,
+    by: String?,
+    text: String?,
+    time: TimeInterval = 1_700_000_000,
+    kids: [Int] = [],
+    deleted: Bool = false,
+    dead: Bool = false
+) -> String {
+    var fields: [String] = ["\"id\":\(id)"]
+    if let by { fields.append("\"by\":\"\(by)\"") }
+    if let text { fields.append("\"text\":\"\(text)\"") }
+    if !kids.isEmpty { fields.append("\"kids\":[\(kids.map(String.init).joined(separator: ","))]") }
+    fields.append("\"time\":\(Int(time))")
+    fields.append("\"type\":\"comment\"")
     if deleted { fields.append("\"deleted\":true") }
     if dead { fields.append("\"dead\":true") }
     return "{\(fields.joined(separator: ","))}"

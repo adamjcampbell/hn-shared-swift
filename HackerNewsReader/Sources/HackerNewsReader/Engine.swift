@@ -29,7 +29,7 @@ actor Engine {
         isolation.unownedExecutor
     }
 
-    enum TaskID { case feed, feedMore, search, searchMore, searchListener }
+    enum TaskID: Hashable { case feed, feedMore, search, searchMore, searchListener, comments(String) }
     typealias Tasks = TaskRegistry<TaskID>
     private var tasks = Tasks()
 
@@ -120,12 +120,44 @@ actor Engine {
                 model.readIds.insert(id)
             }
 
-        case .openStory(let id):
+        case .viewStory(let id):
+            guard model.stories[id] != nil else { return }
+            model.readIds.insert(id)
+
+        case .openStoryURL(let id):
             guard let story = model.stories[id] else { return }
             model.readIds.insert(id)
             if let url = story.url {
                 commandsContinuation.yield(.presentURL(value: url))
             }
+
+        case .loadComments(let id):
+            guard model.stories[id] != nil else { return }
+            if model.commentsByStoryID[id] != nil { return }
+            var status = model.commentsStatusByStoryID[id] ?? LoadStatus()
+            guard !status.isLoading else { return }
+            status.startLoading()
+            model.commentsStatusByStoryID[id] = status
+
+            let taskID: TaskID = .comments(id)
+            let task = Task {
+                do {
+                    let comments = try await client.comments(id)
+                    try Task.checkCancellation()
+                    model.commentsByStoryID[id] = comments
+                    var status = model.commentsStatusByStoryID[id] ?? LoadStatus()
+                    status.finishSuccess()
+                    model.commentsStatusByStoryID[id] = status
+                } catch is CancellationError {
+                } catch let urlError as URLError where urlError.code == .cancelled {
+                } catch {
+                    var status = model.commentsStatusByStoryID[id] ?? LoadStatus()
+                    status.finishFailure(error.localizedDescription)
+                    model.commentsStatusByStoryID[id] = status
+                }
+            }
+            tasks[taskID] = task
+            await task.value
 
         case .refresh:
             // Cancel in-flight load-more so its page doesn't append onto the snapshot we're replacing.
