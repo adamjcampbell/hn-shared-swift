@@ -13,6 +13,42 @@
         }
       }
     },
+    "commentsMissingStory" : {
+      "comment" : "Empty-state caption when a comments route points at a story that is not loaded.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Story not found"
+          }
+        }
+      }
+    },
+    "commentsNoComments" : {
+      "comment" : "Empty-state caption when a story has no comments.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No comments"
+          }
+        }
+      }
+    },
+    "commentsTitle" : {
+      "comment" : "Navigation title for a story's comments screen.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comments"
+          }
+        }
+      }
+    },
     "feedHeaderLastRefreshedNever" : {
       "comment" : "Substituted into `feedHeaderRefreshedOnly` / `feedHeaderUnreadOfTotal` when the feed has never been refreshed.",
       "extractionState" : "manual",
@@ -69,6 +105,18 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Loading more…"
+          }
+        }
+      }
+    },
+    "openArticle" : {
+      "comment" : "Toolbar button label that opens the submitted story URL.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Article"
           }
         }
       }

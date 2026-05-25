@@ -4,9 +4,18 @@ import HackerNewsReader
 struct RootView: View {
     let core: Core
     @State private var presented: IdentifiedURL?
+    @State private var path: [Route] = []
 
     var body: some View {
-        NavigationStack { StoriesScreen() }
+        NavigationStack(path: $path) {
+            StoriesScreen()
+                .navigationDestination(for: Route.self) { route in
+                    switch route {
+                    case .comments(let storyID):
+                        CommentsScreen(storyID: storyID)
+                    }
+                }
+        }
             .environment(core.model)
             .environment(\.sendMessage, core.sendMessage)
             .sheet(item: $presented) { item in
@@ -22,6 +31,10 @@ struct RootView: View {
                 }
             }
     }
+}
+
+private enum Route: Hashable {
+    case comments(storyID: String)
 }
 
 private struct StoriesScreen: View {
@@ -219,27 +232,18 @@ private struct StoryRowView: View {
     @Environment(\.sendMessage) private var sendMessage
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if story.url != nil {
-                Button {
-                    sendMessage(.openStory(id: story.id))
-                } label: {
-                    Text(story.title)
-                        .font(.body)
-                        .foregroundStyle(story.isRead ? .secondary : .primary)
-                        .multilineTextAlignment(.leading)
-                }
-                .buttonStyle(.plain)
-            } else {
+        NavigationLink(value: Route.comments(storyID: story.id)) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(story.title)
                     .font(.body)
                     .foregroundStyle(story.isRead ? .secondary : .primary)
+                    .multilineTextAlignment(.leading)
+                Text(story.metaLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Text(story.metaLine)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
             Button(
                 story.readActionLabel,
@@ -248,6 +252,127 @@ private struct StoryRowView: View {
                 sendMessage(.toggleRead(id: story.id))
             }
             .tint(.blue)
+        }
+    }
+}
+
+private struct CommentsScreen: View {
+    let storyID: String
+    @Environment(Model.self) private var model
+    @Environment(\.sendMessage) private var sendMessage
+
+    var body: some View {
+        CommentsContent(storyID: storyID)
+            .navigationTitle(Strings.commentsTitle)
+            .toolbar {
+                if model.storyRow(id: storyID)?.url != nil {
+                    Button(Strings.openArticle, systemImage: "arrow.up.right.square") {
+                        sendMessage(.openStoryURL(id: storyID))
+                    }
+                }
+            }
+            .task(id: storyID) {
+                await sendMessage.run(.viewStory(id: storyID))
+                await sendMessage.run(.loadComments(id: storyID))
+            }
+    }
+}
+
+private struct CommentsContent: View {
+    let storyID: String
+    @Environment(Model.self) private var model
+
+    var body: some View {
+        if let story = model.storyRow(id: storyID) {
+            List {
+                Section { CommentsStoryHeader(story: story) }
+                CommentsSection(storyID: storyID, story: story)
+            }
+            .listStyle(.insetGrouped)
+        } else {
+            ContentUnavailableView(
+                Strings.commentsMissingStory,
+                systemImage: "exclamationmark.triangle"
+            )
+        }
+    }
+}
+
+private struct CommentsStoryHeader: View {
+    let story: StoryRow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(story.title)
+                .font(.headline)
+                .foregroundStyle(story.isRead ? .secondary : .primary)
+            Text(story.metaLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct CommentsSection: View {
+    let storyID: String
+    let story: StoryRow
+    @Environment(Model.self) private var model
+
+    var body: some View {
+        let rows = model.commentRows(storyID: storyID)
+        let status = model.commentsStatus(storyID: storyID)
+        Section {
+            if !rows.isEmpty {
+                ForEach(rows) { row in
+                    CommentRowView(row: row)
+                }
+            } else if status.error != nil {
+                LoadCommentsErrorRow(status: status, storyID: storyID)
+            } else if status.isLoading || story.commentCount > 0 {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                }
+            } else {
+                ContentUnavailableView(
+                    Strings.commentsNoComments,
+                    systemImage: "bubble.left"
+                )
+            }
+        }
+    }
+}
+
+private struct CommentRowView: View {
+    let row: CommentRow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(row.metaLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(row.text)
+                .font(.body)
+        }
+        .padding(.leading, CGFloat(min(row.depth, 8)) * 12)
+    }
+}
+
+private struct LoadCommentsErrorRow: View {
+    let status: LoadStatus
+    let storyID: String
+    @Environment(\.sendMessage) private var sendMessage
+
+    var body: some View {
+        HStack {
+            Text(status.error ?? "")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(Strings.tryAgain) { sendMessage(.loadComments(id: storyID)) }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
         }
     }
 }

@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.Circle
@@ -27,6 +29,7 @@ import androidx.compose.material3.ExpandedFullScreenContainedSearchBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -52,6 +55,11 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.ui.NavDisplay
+import hacker.news.reader.CommentRow
 import hacker.news.reader.Command
 import hacker.news.reader.Core
 import hacker.news.reader.LoadStatus
@@ -62,6 +70,7 @@ import hacker.news.reader.SendMessageAction
 import hacker.news.reader.StoryRow
 import hacker.news.reader.Strings
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 
 private val LocalSendMessage = staticCompositionLocalOf<SendMessageAction> {
     error("LocalSendMessage not provided")
@@ -71,8 +80,8 @@ private val LocalSendMessage = staticCompositionLocalOf<SendMessageAction> {
 @Composable
 fun StoryScreen(core: Core) {
     val context = LocalContext.current
-    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val sendMessage = core.sendMessage
+    val backStack = rememberNavBackStack(StoriesRoute)
 
     LaunchedEffect(Unit) { sendMessage.send(Message.refresh) }
 
@@ -83,6 +92,43 @@ fun StoryScreen(core: Core) {
             }
         }
     }
+
+    CompositionLocalProvider(LocalSendMessage provides sendMessage) {
+        NavDisplay(
+            backStack = backStack,
+            onBack = { backStack.removeLastOrNull() },
+            entryProvider = entryProvider {
+                entry<StoriesRoute> {
+                    StoriesScreen(
+                        model = core.model,
+                        onStoryClick = { storyID -> backStack.add(CommentsRoute(storyID)) },
+                    )
+                }
+                entry<CommentsRoute> { route ->
+                    CommentsScreen(
+                        model = core.model,
+                        storyId = route.storyId,
+                        onBack = { backStack.removeLastOrNull() },
+                    )
+                }
+            },
+        )
+    }
+}
+
+@Serializable
+private data object StoriesRoute : NavKey
+
+@Serializable
+private data class CommentsRoute(val storyId: String) : NavKey
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StoriesScreen(
+    model: Model,
+    onStoryClick: (String) -> Unit,
+) {
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -96,9 +142,67 @@ fun StoryScreen(core: Core) {
             )
         },
     ) { innerPadding ->
-        CompositionLocalProvider(LocalSendMessage provides sendMessage) {
-            StoriesContent(
-                model = core.model,
+        StoriesContent(
+            model = model,
+            onStoryClick = onStoryClick,
+            modifier = Modifier
+                .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
+                .fillMaxSize(),
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CommentsScreen(
+    model: Model,
+    storyId: String,
+    onBack: () -> Unit,
+) {
+    val sendMessage = LocalSendMessage.current
+    val story = model.storyRow(id = storyId)
+
+    LaunchedEffect(storyId) {
+        sendMessage.send(Message.viewStory(storyId))
+        sendMessage.send(Message.loadComments(storyId))
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(Strings.commentsTitle) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                    }
+                },
+                actions = {
+                    if (story?.url != null) {
+                        IconButton(onClick = { sendMessage.send(Message.openStoryURL(storyId)) }) {
+                            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = Strings.openArticle)
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    scrolledContainerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
+        },
+    ) { innerPadding ->
+        if (story == null) {
+            EmptyMessage(
+                text = Strings.commentsMissingStory,
+                modifier = Modifier
+                    .padding(innerPadding)
+                    .consumeWindowInsets(innerPadding)
+                    .fillMaxSize(),
+            )
+        } else {
+            CommentsContent(
+                model = model,
+                storyId = storyId,
+                story = story,
                 modifier = Modifier
                     .padding(innerPadding)
                     .consumeWindowInsets(innerPadding)
@@ -112,6 +216,7 @@ fun StoryScreen(core: Core) {
 @Composable
 private fun StoriesContent(
     model: Model,
+    onStoryClick: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val searchBarState = rememberSearchBarState()
@@ -146,6 +251,7 @@ private fun StoriesContent(
                 initialStatus = model.feedInitialStatus,
                 loadMoreStatus = model.feedLoadMoreStatus,
                 subtitle = model.feedHeaderSubtitle,
+                onStoryClick = onStoryClick,
                 modifier = Modifier.fillMaxWidth().weight(1f),
             )
         }
@@ -161,6 +267,7 @@ private fun StoriesContent(
                 loaded = model.searchLoaded,
                 initialStatus = model.searchInitialStatus,
                 loadMoreStatus = model.searchLoadMoreStatus,
+                onStoryClick = onStoryClick,
             )
         }
     }
@@ -174,6 +281,7 @@ private fun FeedList(
     initialStatus: LoadStatus,
     loadMoreStatus: LoadStatus,
     subtitle: String,
+    onStoryClick: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val sendMessage = LocalSendMessage.current
@@ -189,7 +297,7 @@ private fun FeedList(
                     loadError = initialStatus.error,
                 )
             }
-            storyRows(stories)
+            storyRows(stories, onStoryClick)
             if (loaded?.hasMore == true) {
                 item(key = "load-more") { LoadMoreRow(status = loadMoreStatus) }
             }
@@ -204,6 +312,7 @@ private fun SearchResults(
     loaded: LoadedStories?,
     initialStatus: LoadStatus,
     loadMoreStatus: LoadStatus,
+    onStoryClick: (String) -> Unit,
 ) {
     val isLoading = initialStatus.isLoading
     Box(Modifier.fillMaxSize()) {
@@ -211,7 +320,7 @@ private fun SearchResults(
             item(key = "search-header") {
                 SearchHeader(query = query, isLoading = isLoading, error = initialStatus.error)
             }
-            storyRows(results)
+            storyRows(results, onStoryClick)
             if (loaded?.hasMore == true) {
                 item(key = "search-load-more") { LoadMoreRow(status = loadMoreStatus) }
             }
@@ -222,9 +331,9 @@ private fun SearchResults(
     }
 }
 
-private fun LazyListScope.storyRows(stories: List<StoryRow>) {
+private fun LazyListScope.storyRows(stories: List<StoryRow>, onStoryClick: (String) -> Unit) {
     items(stories, key = { it.id }) { story ->
-        StoryRowView(story = story)
+        StoryRowView(story = story, onClick = { onStoryClick(story.id) })
     }
 }
 
@@ -305,17 +414,12 @@ private fun SearchHeader(
 }
 
 @Composable
-private fun StoryRowView(story: StoryRow) {
+private fun StoryRowView(story: StoryRow, onClick: () -> Unit) {
     val sendMessage = LocalSendMessage.current
     val contentColor = if (story.isRead) {
         MaterialTheme.colorScheme.onSurfaceVariant
     } else {
         MaterialTheme.colorScheme.onSurface
-    }
-    val rowModifier = if (story.url != null) {
-        Modifier.clickable { sendMessage.send(Message.openStory(story.id)) }
-    } else {
-        Modifier
     }
 
     val dismissState = rememberSwipeActionState { sendMessage.send(Message.toggleRead(story.id)) }
@@ -340,7 +444,7 @@ private fun StoryRowView(story: StoryRow) {
         },
     ) {
         ListItem(
-            modifier = rowModifier,
+            modifier = Modifier.clickable(onClick = onClick),
             headlineContent = { Text(story.title) },
             supportingContent = {
                 Text(
@@ -353,6 +457,134 @@ private fun StoryRowView(story: StoryRow) {
                 headlineColor = contentColor,
                 supportingColor = contentColor,
             ),
+        )
+    }
+}
+
+@Composable
+private fun CommentsContent(
+    model: Model,
+    storyId: String,
+    story: StoryRow,
+    modifier: Modifier = Modifier,
+) {
+    val rows = model.commentRows(storyID = storyId).asList()
+    val status = model.commentsStatus(storyID = storyId)
+
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(top = 8.dp, bottom = 16.dp),
+    ) {
+        item(key = "story") { CommentsStoryHeader(story = story) }
+        when {
+            rows.isNotEmpty() -> items(rows, key = { it.id }) { row -> CommentRowView(row = row) }
+            status.error != null -> item(key = "error") { LoadCommentsErrorRow(status = status, storyId = storyId) }
+            status.isLoading || story.commentCount > 0 -> item(key = "loading") { LoadingRow() }
+            else -> item(key = "empty") { EmptyMessage(text = Strings.commentsNoComments) }
+        }
+    }
+}
+
+@Composable
+private fun CommentsStoryHeader(story: StoryRow) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                text = story.title,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (story.isRead) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = story.metaLine,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CommentRowView(row: CommentRow) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(
+                start = 16.dp + (minOf(row.depth, 8) * 12).dp,
+                top = 12.dp,
+                end = 16.dp,
+                bottom = 12.dp,
+            ),
+    ) {
+        Text(
+            text = row.metaLine,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = row.text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+@Composable
+private fun LoadingRow() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator()
+    }
+}
+
+@Composable
+private fun LoadCommentsErrorRow(status: LoadStatus, storyId: String) {
+    val sendMessage = LocalSendMessage.current
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = status.error ?: "",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.weight(1f),
+        )
+        Button(onClick = { sendMessage.send(Message.loadComments(storyId)) }) {
+            Text(Strings.tryAgain)
+        }
+    }
+}
+
+@Composable
+private fun EmptyMessage(text: String, modifier: Modifier = Modifier.fillMaxWidth()) {
+    Box(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.background)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -412,4 +644,3 @@ private fun EmptyResultsOverlay(query: String) {
         )
     }
 }
-

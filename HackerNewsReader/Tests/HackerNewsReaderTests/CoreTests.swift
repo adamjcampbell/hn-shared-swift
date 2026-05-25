@@ -23,17 +23,31 @@ private let storyC = Story(
     url: "https://example.com/c",
     createdAt: Date(timeIntervalSince1970: 3)
 )
+private let commentA = Comment(
+    id: "200", author: "dave", text: "First comment",
+    createdAt: Date(timeIntervalSince1970: 4), depth: 0
+)
+private let commentB = Comment(
+    id: "201", author: "erin", text: "Nested comment",
+    createdAt: Date(timeIntervalSince1970: 5), depth: 1
+)
 
 /// Records the queries (and pages) the mock client was called with.
 private struct CallRecorder {
-    private struct State { var frontPageCalls: [Int] = []; var searchCalls: [(String, Int)] = [] }
+    private struct State {
+        var frontPageCalls: [Int] = []
+        var searchCalls: [(String, Int)] = []
+        var commentsCalls: [String] = []
+    }
     private let lock = OSAllocatedUnfairLock<State>(initialState: State())
 
     var frontPageCalls: [Int] { lock.withLock { $0.frontPageCalls } }
     var searchCalls: [(String, Int)] { lock.withLock { $0.searchCalls } }
+    var commentsCalls: [String] { lock.withLock { $0.commentsCalls } }
 
     func recordFrontPage(page: Int) { lock.withLock { $0.frontPageCalls.append(page) } }
     func recordSearch(_ query: String, page: Int) { lock.withLock { $0.searchCalls.append((query, page)) } }
+    func recordComments(storyID: String) { lock.withLock { $0.commentsCalls.append(storyID) } }
 }
 
 /// Strictly-increasing Date source; `next()` yields a later Date each call.
@@ -125,8 +139,27 @@ struct CoreTests {
         }
     }
 
-    @Test("openStory marks read and emits presentURL command")
-    func openStory_marksReadAndEmitsPresentURL() async throws {
+    @Test("viewStory marks read without emitting a URL command")
+    func viewStory_marksReadOnly() async throws {
+        try await withEngine(
+            client: .mock(frontPage: { _ in page([storyA, storyC]) })
+        ) { engine in
+            await engine.run { await $0.sendMessage(.refresh) }
+
+            var iterator = engine.commands.makeAsyncIterator()
+            await engine.run { engine in
+                let model = engine.model
+                await engine.sendMessage(.viewStory(id: storyA.id))
+                #expect(model.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
+                await engine.sendMessage(.openStoryURL(id: storyC.id))
+            }
+            let command = await iterator.next()
+            #expect(command == .presentURL(value: storyC.url!))
+        }
+    }
+
+    @Test("openStoryURL marks read and emits presentURL command")
+    func openStoryURL_marksReadAndEmitsPresentURL() async throws {
         try await withEngine(
             client: .mock(frontPage: { _ in page([storyA, storyB]) })
         ) { engine in
@@ -135,7 +168,7 @@ struct CoreTests {
             var iterator = engine.commands.makeAsyncIterator()
             await engine.run { engine in
                 let model = engine.model
-                await engine.sendMessage(.openStory(id: storyA.id))
+                await engine.sendMessage(.openStoryURL(id: storyA.id))
                 #expect(model.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
             }
             let command = await iterator.next()
@@ -143,19 +176,18 @@ struct CoreTests {
         }
     }
 
-    @Test("openStory on a story without a URL marks read but emits nothing")
-    func openStory_withoutURL_marksReadOnly() async throws {
+    @Test("openStoryURL on a story without a URL marks read but emits nothing")
+    func openStoryURL_withoutURL_marksReadOnly() async throws {
         try await withEngine(
             client: .mock(frontPage: { _ in page([storyA, storyB]) })
         ) { engine in
             await engine.run { await $0.sendMessage(.refresh) }
 
-            // First emission we observe is storyA's — proves storyB emitted nothing.
             var iterator = engine.commands.makeAsyncIterator()
             await engine.run { engine in
                 let model = engine.model
-                await engine.sendMessage(.openStory(id: storyB.id))
-                await engine.sendMessage(.openStory(id: storyA.id))
+                await engine.sendMessage(.openStoryURL(id: storyB.id))
+                await engine.sendMessage(.openStoryURL(id: storyA.id))
                 #expect(model.feedStories.first(where: { $0.id == storyB.id })?.isRead == true)
             }
             let command = await iterator.next()
@@ -163,8 +195,8 @@ struct CoreTests {
         }
     }
 
-    @Test("openStory with unknown id is a no-op")
-    func openStory_unknownId_isNoop() async throws {
+    @Test("story actions with unknown ids are no-ops")
+    func storyActions_unknownId_areNoops() async throws {
         try await withEngine(
             client: .mock(frontPage: { _ in page([storyA]) })
         ) { engine in
@@ -173,12 +205,78 @@ struct CoreTests {
                 let model = engine.model
                 await engine.sendMessage(.refresh)
                 let readBefore = model.readIds
-                await engine.sendMessage(.openStory(id: "does-not-exist"))
-                await engine.sendMessage(.openStory(id: storyA.id))
+                await engine.sendMessage(.viewStory(id: "does-not-exist"))
+                await engine.sendMessage(.openStoryURL(id: "does-not-exist"))
+                await engine.sendMessage(.openStoryURL(id: storyA.id))
                 #expect(model.readIds == readBefore.union([storyA.id]))
             }
             let command = await iterator.next()
             #expect(command == .presentURL(value: storyA.url!))
+        }
+    }
+
+    @Test("loadComments populates comment rows and status")
+    func loadComments_populatesRowsAndStatus() async throws {
+        try await withEngine(
+            client: .mock(
+                frontPage: { _ in page([storyA]) },
+                comments: { id in
+                    #expect(id == storyA.id)
+                    return [commentA, commentB]
+                }
+            )
+        ) { engine in
+            await engine.run { engine in
+                let model = engine.model
+                await engine.sendMessage(.refresh)
+                await engine.sendMessage(.loadComments(id: storyA.id))
+
+                #expect(model.commentRows(storyID: storyA.id).map(\.id) == ["200", "201"])
+                #expect(model.commentRows(storyID: storyA.id).map(\.depth) == [0, 1])
+                #expect(model.commentsStatus(storyID: storyA.id).isLoading == false)
+                #expect(model.commentsStatus(storyID: storyA.id).error == nil)
+            }
+        }
+    }
+
+    @Test("loadComments is idempotent once comments are loaded")
+    func loadComments_loadedStoryDoesNotRefetch() async throws {
+        let calls = CallRecorder()
+        try await withEngine(
+            client: .mock(
+                frontPage: { _ in page([storyA]) },
+                comments: { id in
+                    calls.recordComments(storyID: id)
+                    return [commentA]
+                }
+            )
+        ) { engine in
+            await engine.run { engine in
+                await engine.sendMessage(.refresh)
+                await engine.sendMessage(.loadComments(id: storyA.id))
+                await engine.sendMessage(.loadComments(id: storyA.id))
+            }
+            #expect(calls.commentsCalls == [storyA.id])
+        }
+    }
+
+    @Test("loadComments records an error on failure")
+    func loadComments_recordsErrorOnFailure() async throws {
+        struct Boom: Error {}
+        try await withEngine(
+            client: .mock(
+                frontPage: { _ in page([storyA]) },
+                comments: { _ in throw Boom() }
+            )
+        ) { engine in
+            await engine.run { engine in
+                let model = engine.model
+                await engine.sendMessage(.refresh)
+                await engine.sendMessage(.loadComments(id: storyA.id))
+                #expect(model.commentRows(storyID: storyA.id).isEmpty)
+                #expect(model.commentsStatus(storyID: storyA.id).isLoading == false)
+                #expect(model.commentsStatus(storyID: storyA.id).error != nil)
+            }
         }
     }
 

@@ -43,10 +43,15 @@ public final class Model {
     public internal(set) var searchInitialStatus: LoadStatus = LoadStatus()
     public internal(set) var searchLoadMoreStatus: LoadStatus = LoadStatus()
 
+    // MARK: Comments surface — keyed by story id
+
+    public internal(set) var commentsStatusByStoryID: [String: LoadStatus] = [:]
+
     // MARK: Entity store (internal)
 
     /// Normalised entity store; both surfaces project ids through it.
     var stories: [String: Story] = [:]
+    var commentsByStoryID: [String: [Comment]] = [:]
     var readIds: Set<String> = []
 
     // MARK: searchQuery event stream
@@ -66,6 +71,20 @@ public final class Model {
     public var feedStories: [StoryRow] { project(ids: feedLoaded?.ids) }
 
     public var searchResults: [StoryRow] { project(ids: searchLoaded?.ids) }
+
+    public func storyRow(id: String) -> StoryRow? {
+        let now = Dependencies.date.now
+        return stories[id].map { StoryRow(story: $0, isRead: readIds.contains(id), now: now) }
+    }
+
+    public func commentRows(storyID: String) -> [CommentRow] {
+        let now = Dependencies.date.now
+        return (commentsByStoryID[storyID] ?? []).map { CommentRow(comment: $0, now: now) }
+    }
+
+    public func commentsStatus(storyID: String) -> LoadStatus {
+        commentsStatusByStoryID[storyID] ?? LoadStatus()
+    }
 
     private func project(ids: [String]?) -> [StoryRow] {
         let now = Dependencies.date.now

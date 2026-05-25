@@ -13,6 +13,21 @@ public enum Strings {
         localized("appTitle", default: "Hacker News")
     }
 
+    /// Empty-state caption when a comments route points at a story that is not loaded.
+    public static var commentsMissingStory: String {
+        localized("commentsMissingStory", default: "Story not found")
+    }
+
+    /// Empty-state caption when a story has no comments.
+    public static var commentsNoComments: String {
+        localized("commentsNoComments", default: "No comments")
+    }
+
+    /// Navigation title for a story's comments screen.
+    public static var commentsTitle: String {
+        localized("commentsTitle", default: "Comments")
+    }
+
     /// Substituted into `feedHeaderRefreshedOnly` / `feedHeaderUnreadOfTotal` when the feed has never been refreshed.
     public static var feedHeaderLastRefreshedNever: String {
         localized("feedHeaderLastRefreshedNever", default: "never")
@@ -46,6 +61,11 @@ public enum Strings {
     /// Swipe-action label when the story is currently read.
     public static var markUnread: String {
         localized("markUnread", default: "Mark Unread")
+    }
+
+    /// Toolbar button label that opens the submitted story URL.
+    public static var openArticle: String {
+        localized("openArticle", default: "Open Article")
     }
 
     /// Section header above search results. %@ is the user's query.

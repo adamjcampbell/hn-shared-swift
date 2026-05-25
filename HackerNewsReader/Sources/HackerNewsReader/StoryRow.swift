@@ -1,6 +1,23 @@
 import Foundation
 import HackerNews
 
+/// Pure-Swift relative-age bucket shared by presenter rows —
+/// `Foundation.RelativeDateTimeFormatter` isn't bridged through
+/// skip-foundation, so both platforms read this materialised value.
+func presenterRelativeAge(from past: Date, to now: Date) -> String {
+    let seconds = Int(now.timeIntervalSince(past))
+    if seconds < 60 { return "just now" }
+    let minutes = seconds / 60
+    if minutes < 60 { return "\(minutes)m ago" }
+    let hours = minutes / 60
+    if hours < 24 { return "\(hours)h ago" }
+    let days = hours / 24
+    if days < 7 { return "\(days)d ago" }
+    let weeks = days / 7
+    if weeks < 52 { return "\(weeks)w ago" }
+    return "\(days / 365)y ago"
+}
+
 /// View row — `Story` fields plus the per-user `isRead` flag projected
 /// from `Model.readIds`, with presentation strings precomputed against
 /// a `now` snapshot supplied by the projection.
@@ -52,26 +69,9 @@ public struct StoryRow: Sendable, Identifiable, Equatable {
         self.displayHost = host
         self.readActionLabel = isRead ? Strings.markUnread : Strings.markRead
 
-        let age = StoryRow.relativeAge(from: story.createdAt, to: now)
+        let age = presenterRelativeAge(from: story.createdAt, to: now)
         let scorePart = story.score == 1 ? "1 point" : "\(story.score) points"
         let commentPart = story.commentCount == 1 ? "1 comment" : "\(story.commentCount) comments"
         self.metaLine = "by \(story.author) · \(scorePart) · \(commentPart) · \(host) · \(age)"
-    }
-
-    /// Pure-Swift relative-age bucket — `Foundation.RelativeDateTimeFormatter`
-    /// isn't bridged through skip-foundation, so the wall-time delta
-    /// is bucketed manually to keep both platforms in lockstep.
-    private static func relativeAge(from past: Date, to now: Date) -> String {
-        let seconds = Int(now.timeIntervalSince(past))
-        if seconds < 60 { return "just now" }
-        let minutes = seconds / 60
-        if minutes < 60 { return "\(minutes)m ago" }
-        let hours = minutes / 60
-        if hours < 24 { return "\(hours)h ago" }
-        let days = hours / 24
-        if days < 7 { return "\(days)d ago" }
-        let weeks = days / 7
-        if weeks < 52 { return "\(weeks)w ago" }
-        return "\(days / 365)y ago"
     }
 }
