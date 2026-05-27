@@ -56,7 +56,7 @@ struct DebugSnapshotTests {
             client: .mock(frontPage: { _ in page([storyA, storyB]) }),
             now: { fixedNow }
         ) { engine in
-            await engine.run { await $0.sendMessage(.refresh) }
+            await engine.sendMessage(.refresh)
 
             var commands = engine.commands.makeAsyncIterator()
             await engine.run { engine in

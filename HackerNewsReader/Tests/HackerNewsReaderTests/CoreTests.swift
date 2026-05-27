@@ -297,7 +297,7 @@ struct CoreTests {
             // Pin projection time so the untouched feedStories is byte-identical — its absence from changes: proves the feed survived.
             now: { fixedNow }
         ) { engine in
-            await engine.run { await $0.sendMessage(.refresh) }
+            await engine.sendMessage(.refresh)
             let frontPageBefore = calls.frontPageCalls.count
             try await commitSearch("rust", on: engine)
             // Premise: the debounced search populated — #require so a broken fetch fails here, not as a confusing diff mismatch.
@@ -306,9 +306,10 @@ struct CoreTests {
             try await engine.run { engine in
                 try await expect(engine.model) {
                     engine.model.searchQuery = ""
-                    // Drain twice — the listener's clear arrives via AsyncStream, whose resume can outlast a single runPending.
-                    try await engine.testActor.runPending()
-                    try await engine.testActor.runPending()
+                    // The clear arrives via AsyncStream delivery, which can outlast a single runPending; settle until it lands (bounded, so a real stall fails the assertion rather than hanging).
+                    for _ in 0..<10 where engine.model.searchLoaded != nil {
+                        try await engine.testActor.runPending()
+                    }
                 } changes: {
                     $0.searchQuery = ""
                     $0.searchResults = []
