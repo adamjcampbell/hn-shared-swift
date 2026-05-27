@@ -114,12 +114,12 @@ struct FeedHeaderSubtitleTests {
     func populated_unreadOfTotal() {
         withPinnedNow {
             let model = Model()
-            model.stories = [
+            model._stories = [
                 "1": makeStory(id: "1"),
                 "2": makeStory(id: "2"),
                 "3": makeStory(id: "3"),
             ]
-            model.readIds = ["2"]
+            model._readIds = ["2"]
             model.feedLoaded = LoadedStories(
                 ids: ["1", "2", "3"],
                 page: 0,
@@ -138,11 +138,11 @@ struct FeedHeaderSubtitleTests {
     func populated_singularUnread() {
         withPinnedNow {
             let model = Model()
-            model.stories = [
+            model._stories = [
                 "1": makeStory(id: "1"),
                 "2": makeStory(id: "2"),
             ]
-            model.readIds = ["1"]
+            model._readIds = ["1"]
             model.feedLoaded = LoadedStories(
                 ids: ["1", "2"],
                 page: 0,

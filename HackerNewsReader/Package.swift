@@ -30,6 +30,11 @@ let package = Package(
         // 250 ms search debounce doesn't translate into 250 ms of
         // real-clock waiting per test.
         .package(url: "https://github.com/pointfreeco/swift-clocks", from: "1.0.0"),
+        // `@DebugSnapshot` on `Model` + `expect` exhaustive state
+        // assertions. Macro expansions aren't bridged, so this never
+        // reaches the Kotlin surface; the Android build only has to
+        // compile the expansion.
+        .package(url: "https://github.com/pointfreeco/swift-debug-snapshots", from: "0.1.0"),
     ],
     targets: [
         .target(
@@ -46,6 +51,7 @@ let package = Package(
                 "HackerNews",
                 .product(name: "SkipFuse", package: "skip-fuse"),
                 .product(name: "SkipModel", package: "skip-model"),
+                .product(name: "DebugSnapshots", package: "swift-debug-snapshots"),
             ],
             resources: [.process("Resources")],
             swiftSettings: sharedSettings,
@@ -63,6 +69,7 @@ let package = Package(
             dependencies: [
                 "HackerNewsReader",
                 .product(name: "Clocks", package: "swift-clocks"),
+                .product(name: "DebugSnapshots", package: "swift-debug-snapshots"),
             ],
             swiftSettings: sharedSettings
         ),

@@ -1,8 +1,48 @@
 import Clocks
+import DebugSnapshots
 import Foundation
 import Testing
 @testable import HackerNewsReader
 import HackerNews
+
+extension ChangeLogger {
+    /// Snapshots `Model` before/after each unit of work and logs the
+    /// diff via DebugSnapshots (`os.Logger` subsystem `DebugSnapshots` on
+    /// Apple, `print` elsewhere). `quiet: true` suppresses no-change work.
+    static let logging = ChangeLogger { model in
+        let before = snap(model)
+        return { label in _logChanges(before, snap(model), label, quiet: true) }
+    }
+}
+
+/// Fixed reference time. Pins `Dependencies.date` (via `withEngine(now:)`)
+/// so `StoryRow.metaLine` is deterministic — required when a snapshot
+/// captures the `feedStories` / `searchResults` projections.
+let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+
+let storyA = Story(
+    id: "100", title: "Top story", author: "alice",
+    score: 50, commentCount: 10,
+    url: "https://example.com/a",
+    createdAt: Date(timeIntervalSince1970: 1)
+)
+let storyB = Story(
+    id: "101", title: "Second story", author: "bob",
+    score: 20, commentCount: 3,
+    url: nil,
+    createdAt: Date(timeIntervalSince1970: 2)
+)
+let storyC = Story(
+    id: "102", title: "Page-1 story", author: "carol",
+    score: 9, commentCount: 1,
+    url: "https://example.com/c",
+    createdAt: Date(timeIntervalSince1970: 3)
+)
+
+/// Convenience: a single-page response.
+func page(_ stories: [Story], totalPages: Int = 1) -> Page {
+    Page(stories: stories, totalPages: totalPages)
+}
 
 extension Engine {
     /// Tests construct `Engine` with `TestActor` isolation and (by
@@ -64,8 +104,11 @@ func withEngine<R>(
     let result: Result<R, Error>
     do {
         result = .success(try await Dependencies.$date.withValue(DateGenerator(now)) {
-            await engine.bind()
-            return try await body(engine)
+            // Logging on by default for tests; the injected logger diffs each message and search commit.
+            try await Dependencies.$changeLogger.withValue(.logging) {
+                await engine.bind()
+                return try await body(engine)
+            }
         })
     } catch { result = .failure(error) }
     await engine.cancelAll()

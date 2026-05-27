@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import HackerNews
 import SkipFuse
+import DebugSnapshots
 
 /// Source of truth for the app — observable state for the feed,
 /// search, and read-tracking surfaces.
@@ -9,7 +10,7 @@ import SkipFuse
 /// Stories live in one normalised `[id: Story]` dictionary; the feed
 /// and search surfaces project that store through their own ordered
 /// id lists, so a story shared by both surfaces is stored once and a
-/// toggle of `readIds` reaches both projections without sync. The
+/// toggle of `_readIds` reaches both projections without sync. The
 /// `@Observable` conformance gives SwiftUI fine-grained per-property
 /// tracking on iOS; SkipFuse routes the same tracking through
 /// Compose's snapshot system on Android.
@@ -20,6 +21,7 @@ import SkipFuse
 /// by `Engine` and read by the UI.
 // SKIP @bridgeMembers
 @Observable
+@DebugSnapshot
 public final class Model {
 
     // MARK: Search input
@@ -46,31 +48,40 @@ public final class Model {
     // MARK: Entity store (internal)
 
     /// Normalised entity store; both surfaces project ids through it.
-    var stories: [String: Story] = [:]
-    var readIds: Set<String> = []
+    /// Underscore-prefixed so the `@DebugSnapshot` macro ignores them by
+    /// rule — the snapshot is the observable surface, not the raw store —
+    /// and to mark them reachable only via `@testable`.
+    var _stories: [String: Story] = [:]
+    var _readIds: Set<String> = []
 
     // MARK: searchQuery event stream
 
     /// Stream of ``searchQuery`` writes; `bufferingNewest(1)` so a
     /// slow consumer sees only the latest value.
+    @DebugSnapshotIgnored
     let searchQueryChanges: AsyncStream<String>
     private let searchQueryEvents: AsyncStream<String>.Continuation
 
     // MARK: Derived view rows
 
-    /// View rows for the feed — ids resolved against `stories` and
-    /// tagged with `readIds`. The reference time is captured once per
+    /// View rows for the feed — ids resolved against `_stories` and
+    /// tagged with `_readIds`. The reference time is captured once per
     /// access from `Dependencies.date` so a row's `metaLine` is
     /// consistent within one snapshot; tests override via
     /// `Dependencies.$date.withValue(.constant(_:))`.
+    ///
+    /// `@DebugSnapshotTracked` opts the projection into the snapshot —
+    /// computed properties are ignored by default.
+    @DebugSnapshotTracked
     public var feedStories: [StoryRow] { project(ids: feedLoaded?.ids) }
 
+    @DebugSnapshotTracked
     public var searchResults: [StoryRow] { project(ids: searchLoaded?.ids) }
 
     private func project(ids: [String]?) -> [StoryRow] {
         let now = Dependencies.date.now
         return (ids ?? []).compactMap { id in
-            stories[id].map { StoryRow(story: $0, isRead: readIds.contains(id), now: now) }
+            _stories[id].map { StoryRow(story: $0, isRead: _readIds.contains(id), now: now) }
         }
     }
 
@@ -79,7 +90,7 @@ public final class Model {
     /// Caption under `Front page` — unread/total counts plus the time
     /// of the most recent refresh. Reads `feedStories` (via the
     /// projection above), so `@Observable` tracking refires on any
-    /// change to ``feedLoaded``, the entity store, or ``readIds``.
+    /// change to ``feedLoaded``, the entity store, or `_readIds`.
     public var feedHeaderSubtitle: String {
         let stamp: String = (feedLoaded?.loadedAt).map {
             $0.formatted(date: .omitted, time: .standard)
