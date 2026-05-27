@@ -1,6 +1,7 @@
 import Clocks
 import DebugSnapshots
 import Foundation
+import Observation
 import Testing
 @testable import HackerNewsReader
 import HackerNews
@@ -70,6 +71,21 @@ extension Engine {
         _ body: sending @Sendable (isolated Engine) async throws(Failure) -> R
     ) async throws(Failure) -> R {
         try await body(self)
+    }
+
+    /// Suspends until `condition` holds for `model`, then returns.
+    ///
+    /// `onChange` fires in the mutation's `willSet`, but the resumed
+    /// continuation runs after the mutation completes (FIFO on the
+    /// executor `self` shares with its writers), so the re-check sees the
+    /// new value. Deterministic, no polling, no `runPending`. A condition
+    /// that never holds hangs until the test's time limit — by design.
+    func waitUntil(_ condition: @Sendable @escaping (isolated Engine) -> Bool) async {
+        while !condition(self) {
+            await withCheckedContinuation { continuation in
+                withObservationTracking { _ = condition(self) } onChange: { continuation.resume() }
+            }
+        }
     }
 }
 

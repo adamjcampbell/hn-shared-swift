@@ -32,12 +32,17 @@ private struct MonotonicDates {
 /// Drive the listener-debounced search to commit. Inline the steps
 /// instead when asserting mid-flight. Requires the test's `Engine`
 /// to hold a `TestClock`; `#require` throws otherwise.
+///
+/// `waitUntil` covers the observable transitions (listener pickup, then
+/// the commit). The lone `runPending` is irreducible: it drains the fetch
+/// `Task` to its `clock.sleep` so the `advance` lands on a parked sleeper
+/// — there's no observable signal for "the task is now sleeping".
 private func commitSearch(_ query: String, on engine: Engine) async throws {
-    try await engine.testActor.runPending()
-    await engine.run { core in core.model.searchQuery = query }
+    await engine.run { $0.model.searchQuery = query }
+    await engine.waitUntil { $0.model.searchInitialStatus.isLoading }
     try await engine.testActor.runPending()
     try await engine.testClock.advance(by: Engine.searchDebounce)
-    try await engine.testActor.runPending()
+    await engine.waitUntil { $0.model.searchLoaded != nil }
 }
 
 @Suite("Core")
@@ -306,10 +311,7 @@ struct CoreTests {
             try await engine.run { engine in
                 try await expect(engine.model) {
                     engine.model.searchQuery = ""
-                    // The clear arrives via AsyncStream delivery, which can outlast a single runPending; settle until it lands (bounded, so a real stall fails the assertion rather than hanging).
-                    for _ in 0..<10 where engine.model.searchLoaded != nil {
-                        try await engine.testActor.runPending()
-                    }
+                    await engine.waitUntil { $0.model.searchLoaded == nil }
                 } changes: {
                     $0.searchQuery = ""
                     $0.searchResults = []
@@ -527,8 +529,7 @@ struct CoreTests {
             let loadMore = Task { [engine] in
                 await engine.run { await $0.sendMessage(.loadMore) }
             }
-            try await engine.testActor.runPending()
-            await engine.run { engine in #expect(engine.model.feedLoadMoreStatus.isLoading == true) }
+            await engine.waitUntil { $0.model.feedLoadMoreStatus.isLoading }
 
             await engine.run { await $0.sendMessage(.refresh) }
             await loadMore.value
