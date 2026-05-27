@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import HackerNews
 
-/// The surfaces the UI consumes — the observable `Model`, a one-shot
+/// The surfaces the UI consumes: the observable `Model`, a one-shot
 /// command stream, and an `Equatable` send-message capability.
 // SKIP @bridgeMembers
 @MainActor
@@ -15,24 +15,24 @@ public struct Core {
 /// Builds the ``Engine`` and returns the ``Core`` handle for the UI
 /// to consume.
 ///
-/// Call once at app scope — iOS holds it as `@State` on the `App`,
-/// Android stashes it on `Application` in `onCreate` — and keep the
-/// handle for the process lifetime.
+/// Call once at app scope and keep the handle for the process
+/// lifetime: iOS holds it as `@State` on the `App`, Android stashes
+/// it on `Application` in `onCreate`.
 ///
 /// - Returns: A handle bundling the model, the command stream, and
 ///   the send-message capability.
 // SKIP @bridge
 @MainActor public func makeCore() -> Core {
-    // Engine borrows MainActor's executor; Model only ever lives on MainActor.
-    // Unchecked opts out of `assumeIsolated`'s Sendable-return check.
-    struct Unchecked<Value>: @unchecked Sendable {
-        let value: Value; init(_ value: Value) { self.value = value }
-    }
-
+    // Engine borrows MainActor's executor, so Model stays in MainActor's
+    // isolation region. assumeIsolated asserts that at runtime; the
+    // nonisolated(unsafe) rebind then carries Model into this scope.
     let engine = Engine(isolation: MainActor.shared)
-    engine.assumeIsolated { $0.bind() }
+    nonisolated(unsafe) var model: Model!
 
-    var model: Model { engine.assumeIsolated { Unchecked($0.model) }.value }
+    engine.assumeIsolated { engine in
+        engine.bind()
+        model = engine.model
+    }
 
     return Core(
         model: model,

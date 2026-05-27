@@ -4,18 +4,16 @@ import HackerNews
 import FoundationNetworking
 #endif
 
-/// Message-handling workhorse — the internal coordinator behind
+/// Message-handling workhorse, the internal coordinator behind
 /// ``Core``.
 ///
-/// Borrows the host's `unownedExecutor`, so all methods and Tasks
-/// run in the host's isolation region — `MainActor` in production,
-/// a per-test `TestActor` in tests. ``Model`` is non-`Sendable`
-/// but is only ever touched on this borrowed executor.
+/// Borrows the host's executor, so its methods and Tasks run in the
+/// host's isolation region: `MainActor` in production, a `TestActor`
+/// in tests. ``Model`` is non-`Sendable` and never leaves that region.
 ///
-/// - Note: Long-running listener Tasks are bootstrapped externally
-///   via `bind()` after `init` returns — `makeCore` reaches it
-///   sync via `assumeIsolated`; tests `await` it through the actor
-///   hop.
+/// - Note: Listener Tasks are bootstrapped externally via `bind()`
+///   after `init` returns; `makeCore` reaches it synchronously with
+///   `assumeIsolated`, tests through the actor hop.
 actor Engine {
     let model: Model
 
