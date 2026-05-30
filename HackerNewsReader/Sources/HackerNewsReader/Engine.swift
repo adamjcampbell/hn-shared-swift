@@ -64,11 +64,13 @@ actor Engine {
         tasks[.searchListener] = Task {
             for await query in model.searchQueryChanges {
                 if query.isEmpty {
+                    let finishLog = Dependencies.changeLogger.capture(model)
                     tasks[.search] = nil
                     tasks[.searchMore] = nil
                     model.searchLoaded = nil
                     model.searchInitialStatus = LoadStatus()
                     model.searchLoadMoreStatus = LoadStatus()
+                    finishLog?("search(cleared)")
                     continue
                 }
 
@@ -82,12 +84,15 @@ actor Engine {
                 }
 
                 tasks[.search] = Task {
+                    // Cancel-and-replace losers skip the log — their before/after would be a spurious diff.
+                    let finishLog = Dependencies.changeLogger.capture(model)
+                    defer { if !Task.isCancelled { finishLog?("search(\(query))") } }
                     do {
                         let page = try await fetch(debounce: Self.searchDebounce) {
                             try await $0.search(query, 0)
                         }
                         try Task.checkCancellation()
-                        for story in page.stories { model.stories[story.id] = story }
+                        for story in page.stories { model._stories[story.id] = story }
                         let ids = page.stories.map(\.id)
                         model.searchLoaded = LoadedStories(
                             ids: ids, page: 0, totalPages: page.totalPages, loadedAt: Dependencies.date.now
@@ -109,18 +114,22 @@ actor Engine {
     ///
     /// - Parameter message: The message to dispatch.
     func sendMessage(_ message: Message) async {
+        // Per-message `Model` diff via the injected logger; the defer runs after the awaited fetch.
+        let finishLog = Dependencies.changeLogger.capture(model)
+        defer { finishLog?("\(message)") }
+
         switch message {
 
         case .toggleRead(let id):
-            if model.readIds.contains(id) {
-                model.readIds.remove(id)
+            if model._readIds.contains(id) {
+                model._readIds.remove(id)
             } else {
-                model.readIds.insert(id)
+                model._readIds.insert(id)
             }
 
         case .openStory(let id):
-            guard let story = model.stories[id] else { return }
-            model.readIds.insert(id)
+            guard let story = model._stories[id] else { return }
+            model._readIds.insert(id)
             if let url = story.url {
                 commandsContinuation.yield(.presentURL(value: url))
             }
@@ -135,7 +144,7 @@ actor Engine {
                 do {
                     let page = try await fetch(debounce: nil) { try await $0.frontPage(0) }
                     try Task.checkCancellation()
-                    for story in page.stories { model.stories[story.id] = story }
+                    for story in page.stories { model._stories[story.id] = story }
                     let ids = page.stories.map(\.id)
                     model.feedLoaded = LoadedStories(
                         ids: ids, page: 0, totalPages: page.totalPages, loadedAt: Dependencies.date.now
@@ -160,7 +169,7 @@ actor Engine {
                 do {
                     let page = try await fetch(debounce: nil) { try await $0.frontPage(next) }
                     try Task.checkCancellation()
-                    for story in page.stories { model.stories[story.id] = story }
+                    for story in page.stories { model._stories[story.id] = story }
                     let ids = page.stories.map(\.id)
                     model.feedLoaded?.appendPage(ids, totalPages: page.totalPages)
                     model.feedLoadMoreStatus.finishSuccess()
@@ -183,7 +192,7 @@ actor Engine {
                 do {
                     let page = try await fetch(debounce: nil) { try await $0.search(query, next) }
                     try Task.checkCancellation()
-                    for story in page.stories { model.stories[story.id] = story }
+                    for story in page.stories { model._stories[story.id] = story }
                     let ids = page.stories.map(\.id)
                     model.searchLoaded?.appendPage(ids, totalPages: page.totalPages)
                     model.searchLoadMoreStatus.finishSuccess()

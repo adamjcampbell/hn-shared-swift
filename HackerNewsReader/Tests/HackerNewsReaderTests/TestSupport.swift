@@ -1,8 +1,49 @@
 import Clocks
+import DebugSnapshots
 import Foundation
+import Observation
 import Testing
 @testable import HackerNewsReader
 import HackerNews
+
+extension ChangeLogger {
+    /// Snapshots `Model` before/after each unit of work and logs the
+    /// diff via DebugSnapshots (`os.Logger` subsystem `DebugSnapshots` on
+    /// Apple, `print` elsewhere). `quiet: true` suppresses no-change work.
+    static let logging = ChangeLogger { model in
+        let before = snap(model)
+        return { label in _logChanges(before, snap(model), label, quiet: true) }
+    }
+}
+
+/// Fixed reference time. Pins `Dependencies.date` (via `withEngine(now:)`)
+/// so `StoryRow.metaLine` is deterministic — required when a snapshot
+/// captures the `feedStories` / `searchResults` projections.
+let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+
+let storyA = Story(
+    id: "100", title: "Top story", author: "alice",
+    score: 50, commentCount: 10,
+    url: "https://example.com/a",
+    createdAt: Date(timeIntervalSince1970: 1)
+)
+let storyB = Story(
+    id: "101", title: "Second story", author: "bob",
+    score: 20, commentCount: 3,
+    url: nil,
+    createdAt: Date(timeIntervalSince1970: 2)
+)
+let storyC = Story(
+    id: "102", title: "Page-1 story", author: "carol",
+    score: 9, commentCount: 1,
+    url: "https://example.com/c",
+    createdAt: Date(timeIntervalSince1970: 3)
+)
+
+/// Convenience: a single-page response.
+func page(_ stories: [Story], totalPages: Int = 1) -> Page {
+    Page(stories: stories, totalPages: totalPages)
+}
 
 extension Engine {
     /// Tests construct `Engine` with `TestActor` isolation and (by
@@ -30,6 +71,21 @@ extension Engine {
         _ body: sending @Sendable (isolated Engine) async throws(Failure) -> R
     ) async throws(Failure) -> R {
         try await body(self)
+    }
+
+    /// Suspends until `condition` holds for `model`, then returns.
+    ///
+    /// `onChange` fires in the mutation's `willSet`, but the resumed
+    /// continuation runs after the mutation completes (FIFO on the
+    /// executor `self` shares with its writers), so the re-check sees the
+    /// new value. Deterministic, no polling, no `runPending`. A condition
+    /// that never holds hangs until the test's time limit — by design.
+    func waitUntil(_ condition: @Sendable @escaping (isolated Engine) -> Bool) async {
+        while !condition(self) {
+            await withCheckedContinuation { continuation in
+                withObservationTracking { _ = condition(self) } onChange: { continuation.resume() }
+            }
+        }
     }
 }
 
@@ -64,8 +120,11 @@ func withEngine<R>(
     let result: Result<R, Error>
     do {
         result = .success(try await Dependencies.$date.withValue(DateGenerator(now)) {
-            await engine.bind()
-            return try await body(engine)
+            // Logging on by default for tests; the injected logger diffs each message and search commit.
+            try await Dependencies.$changeLogger.withValue(.logging) {
+                await engine.bind()
+                return try await body(engine)
+            }
         })
     } catch { result = .failure(error) }
     await engine.cancelAll()

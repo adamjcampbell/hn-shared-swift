@@ -13,7 +13,7 @@ kotlin {
 
 android {
     namespace = "com.example.hackernewsreader"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.hackernewsreader"

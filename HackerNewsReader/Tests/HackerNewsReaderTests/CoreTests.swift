@@ -1,28 +1,10 @@
 import Clocks
+import DebugSnapshots
 import Foundation
 import Testing
 import os
 @testable import HackerNewsReader
 import HackerNews
-
-private let storyA = Story(
-    id: "100", title: "Top story", author: "alice",
-    score: 50, commentCount: 10,
-    url: "https://example.com/a",
-    createdAt: Date(timeIntervalSince1970: 1)
-)
-private let storyB = Story(
-    id: "101", title: "Second story", author: "bob",
-    score: 20, commentCount: 3,
-    url: nil,
-    createdAt: Date(timeIntervalSince1970: 2)
-)
-private let storyC = Story(
-    id: "102", title: "Page-1 story", author: "carol",
-    score: 9, commentCount: 1,
-    url: "https://example.com/c",
-    createdAt: Date(timeIntervalSince1970: 3)
-)
 
 /// Records the queries (and pages) the mock client was called with.
 private struct CallRecorder {
@@ -47,20 +29,20 @@ private struct MonotonicDates {
     }
 }
 
-/// Convenience: a single-page response.
-private func page(_ stories: [Story], totalPages: Int = 1) -> Page {
-    Page(stories: stories, totalPages: totalPages)
-}
-
 /// Drive the listener-debounced search to commit. Inline the steps
 /// instead when asserting mid-flight. Requires the test's `Engine`
 /// to hold a `TestClock`; `#require` throws otherwise.
+///
+/// `waitUntil` covers the observable transitions (listener pickup, then
+/// the commit). The lone `runPending` is irreducible: it drains the fetch
+/// `Task` to its `clock.sleep` so the `advance` lands on a parked sleeper
+/// — there's no observable signal for "the task is now sleeping".
 private func commitSearch(_ query: String, on engine: Engine) async throws {
-    try await engine.testActor.runPending()
-    await engine.run { core in core.model.searchQuery = query }
+    await engine.run { $0.model.searchQuery = query }
+    await engine.waitUntil { $0.model.searchInitialStatus.isLoading }
     try await engine.testActor.runPending()
     try await engine.testClock.advance(by: Engine.searchDebounce)
-    try await engine.testActor.runPending()
+    await engine.waitUntil { $0.model.searchLoaded != nil }
 }
 
 @Suite("Core")
@@ -116,11 +98,11 @@ struct CoreTests {
 
                 await engine.sendMessage(.toggleRead(id: storyA.id))
                 #expect(model.feedStories.first?.isRead == true)
-                #expect(model.readIds.contains(storyA.id))
+                #expect(model._readIds.contains(storyA.id))
 
                 await engine.sendMessage(.toggleRead(id: storyA.id))
                 #expect(model.feedStories.first?.isRead == false)
-                #expect(model.readIds.contains(storyA.id) == false)
+                #expect(model._readIds.contains(storyA.id) == false)
             }
         }
     }
@@ -172,10 +154,10 @@ struct CoreTests {
             await engine.run { engine in
                 let model = engine.model
                 await engine.sendMessage(.refresh)
-                let readBefore = model.readIds
+                let readBefore = model._readIds
                 await engine.sendMessage(.openStory(id: "does-not-exist"))
                 await engine.sendMessage(.openStory(id: storyA.id))
-                #expect(model.readIds == readBefore.union([storyA.id]))
+                #expect(model._readIds == readBefore.union([storyA.id]))
             }
             let command = await iterator.next()
             #expect(command == .presentURL(value: storyA.url!))
@@ -190,7 +172,7 @@ struct CoreTests {
             await engine.run { engine in
                 let model = engine.model
                 await engine.sendMessage(.toggleRead(id: "100"))
-                #expect(model.readIds.contains("100"))
+                #expect(model._readIds.contains("100"))
                 #expect(model.feedStories.isEmpty)
 
                 await engine.sendMessage(.refresh)
@@ -302,7 +284,7 @@ struct CoreTests {
         }
     }
 
-    @Test("clearing the search query cancels the search, clears results, and does not refetch the feed")
+    @Test("clearing the query cancels the search, clears results, and leaves the feed untouched")
     func clearingSearchQuery_cancelsAndClearsResults() async throws {
         let calls = CallRecorder()
         try await withEngine(
@@ -316,34 +298,29 @@ struct CoreTests {
                     return page([storyA])
                 }
             ),
-            clock: TestClock()
+            clock: TestClock(),
+            // Pin projection time so the untouched feedStories is byte-identical — its absence from changes: proves the feed survived.
+            now: { fixedNow }
         ) { engine in
-            let feedBefore = await engine.run { engine in
-                await engine.sendMessage(.refresh)
-                return engine.model.feedStories.map(\.id)
-            }
+            await engine.sendMessage(.refresh)
             let frontPageBefore = calls.frontPageCalls.count
-
             try await commitSearch("rust", on: engine)
-            await engine.run { engine in
-                let model = engine.model
-                #expect(model.searchResults.map(\.id) == ["100"])
-                model.searchQuery = ""
-            }
-            try await engine.testActor.runPending()
+            // Premise: the debounced search populated — #require so a broken fetch fails here, not as a confusing diff mismatch.
+            try await engine.run { try #require($0.model.searchResults.map(\.id) == ["100"]) }
 
-            await engine.run { engine in
-                let model = engine.model
-                #expect(model.searchResults.isEmpty)
-                #expect(model.searchInitialStatus.error == nil)
-                #expect(model.searchInitialStatus.isLoading == false)
-                #expect(model.searchLoaded == nil)
-                #expect(model.feedStories.map(\.id) == feedBefore)
+            try await engine.run { engine in
+                try await expect(engine.model) {
+                    engine.model.searchQuery = ""
+                    await engine.waitUntil { $0.model.searchLoaded == nil }
+                } changes: {
+                    $0.searchQuery = ""
+                    $0.searchResults = []
+                    $0.searchLoaded = nil
+                }
             }
-            let frontPageAfter = calls.frontPageCalls.count
-            #expect(frontPageAfter == frontPageBefore)
-            let searchCalls = calls.searchCalls
-            #expect(searchCalls.map(\.0) == ["rust"])
+
+            #expect(calls.frontPageCalls.count == frontPageBefore)
+            #expect(calls.searchCalls.map(\.0) == ["rust"])
         }
     }
 
@@ -552,8 +529,7 @@ struct CoreTests {
             let loadMore = Task { [engine] in
                 await engine.run { await $0.sendMessage(.loadMore) }
             }
-            try await engine.testActor.runPending()
-            await engine.run { engine in #expect(engine.model.feedLoadMoreStatus.isLoading == true) }
+            await engine.waitUntil { $0.model.feedLoadMoreStatus.isLoading }
 
             await engine.run { await $0.sendMessage(.refresh) }
             await loadMore.value
