@@ -3,7 +3,7 @@
 An example of cross-platform `@Observable` ↔ Compose via
 [SkipFuse](https://skip.dev): one Swift `@Observable` model drives
 native SwiftUI on iOS and native Jetpack Compose on Android. The Swift
-core is compiled natively to `.so` for Android and bridged to Kotlin —
+core is compiled natively to `.so` for Android and bridged to Kotlin.
 Compose reads `@Observable` properties inside `@Composable`s, mutations
 recompose, `async` functions become `suspend`, `AsyncStream` becomes
 `Flow`.
@@ -17,29 +17,29 @@ read indicator. Networking lives in Swift via `URLSession`.
 
 Skip's tagline is **One Swift Codebase. Two Native Platforms.** This
 approach differs: only the model and engine ship as Swift on both
-platforms. The UIs are written per platform — SwiftUI on iOS, Jetpack
+platforms. The UIs are written per platform: SwiftUI on iOS, Jetpack
 Compose on Android.
 
 ## Architecture in brief
 
 A single observable `Model` is the source of truth, user inputs flow
-in as `Message`s, and one-shot side-effects flow out as `Command`s —
+in as `Message`s, and one-shot side-effects flow out as `Command`s,
 names borrowed from Elm.
 
 Mutations are written in **idiomatic Swift, made concurrency-safe by
 an `actor`**. A single `Engine` actor owns every write to `Model`, so
 the `@Observable` class itself stays a nonisolated mutable data bag
-while race-free access is enforced by Swift 6's isolation system.
+while race-free access is enforced by Swift 6's region-based isolation.
 
-The `Engine` borrows its host's executor — `MainActor` in production,
-a per-test `TestActor` in tests. Reads on the UI thread stay
-synchronous, the actor hop only serialises writes, and nothing
-crosses an isolation boundary.
+The `Engine` borrows its host's executor: `MainActor` in production, a
+`TestActor` in tests. Reads on the UI thread stay synchronous, the
+actor hop only serialises writes, and nothing crosses an isolation
+boundary.
 
 ## Consuming the `Core`
 
 `Core` is a `@MainActor` struct that exposes the surfaces the UI
-consumes while hiding the `Engine` actor — actors aren't part of the
+consumes while hiding the `Engine` actor. Actors aren't part of the
 Swift-to-Kotlin bridge surface.
 
 `makeCore()` runs once per process and returns a `Core` value with
@@ -188,7 +188,7 @@ as procedures that act on data. So:
 `Model` is our data and `Engine` hosts the procedures that act on
 it. Two pieces, not a tree of objects split by feature, so there's
 no up and down communication between them. Data and procedures are
-separate concerns, and the actor isolation `Engine` provides keeps
+separate concerns, and the isolation region `Engine` provides keeps
 `Model`'s mutations race free. Each `Message`'s handling reads top
 to bottom in one place leaning into *Locality of Behaviour*.
 

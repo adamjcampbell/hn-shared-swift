@@ -34,7 +34,7 @@ Production constructs `Engine` with `MainActor.shared` as the isolation — `Eng
 
 Tests construct `Engine` via a `withEngine { engine in ... }` fixture that passes a `TestActor`. `TestActor` installs a `DispatchSerialQueue` as its `unownedExecutor`. Each test gets its own actor, its own queue, its own deterministic drain helper (`engine.testActor.runPending()`).
 
-A `nonisolated(unsafe)` rebind is used at one point to hand the non-`Sendable` `Model` into `Engine`'s init under region isolation (SE-0414). The rebind is scoped to `makeCore` and documented in the code that owns it; no other use of `nonisolated(unsafe)` exists in the core target ([ADR-0005](0005-strict-swift6-concurrency.md)).
+A `nonisolated(unsafe)` rebind is used at one point to read the non-`Sendable` `Model` out of the actor's isolation region (SE-0414) into the `@MainActor` `Core`. The read happens inside `assumeIsolated`, which asserts the executors coincide. The rebind is scoped to `makeCore` and documented in the code that owns it; no other use of `nonisolated(unsafe)` exists in the core target ([ADR-0005](0005-strict-swift6-concurrency.md)).
 
 ## Consequences
 
