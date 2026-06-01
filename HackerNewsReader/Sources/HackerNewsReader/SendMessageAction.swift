@@ -36,8 +36,14 @@ public struct SendMessageAction: Sendable, Equatable {
 
     /// Dispatches a message fire-and-forget on an unstructured `Task`.
     ///
+    /// The `@MainActor` closure makes concurrent `send`s enqueue onto
+    /// `MainActor` in call order; a bare `Task { await … }` infers
+    /// `@concurrent`, starts on the shared executor, and does not preserve
+    /// order. Order holds up to each handler's first suspension point;
+    /// ``run(_:)`` awaits the whole handler.
+    ///
     /// - Parameter message: The message to dispatch.
-    public func send(_ message: Message) { Task { await sendMessage(message) } }
+    public func send(_ message: Message) { Task { @MainActor in await sendMessage(message) } }
 
     /// Awaitable counterpart of ``send(_:)``; suspends until the
     /// handler completes. Use from `.refreshable` so the spinner
