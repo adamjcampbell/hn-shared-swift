@@ -72,7 +72,6 @@ func makeCore(
             applySearchQuery(
                 query,
                 to: state,
-                commands: commandsContinuation,
                 tasks: &tasks
             )
         }
@@ -197,13 +196,10 @@ func apply(
 /// - Parameters:
 ///   - query: The current search query.
 ///   - state: The model to mutate.
-///   - commands: Continuation for one-shot UI commands (unused today;
-///     kept for symmetry with ``apply(_:to:commands:tasks:isolation:)``).
 ///   - tasks: Registry that owns the search fetch's cancellation.
 func applySearchQuery(
     _ query: String,
     to state: Model,
-    commands: AsyncStream<Command>.Continuation,
     tasks: inout TaskRegistry<TaskID>,
     isolation: isolated any Actor = #isolation
 ) {
