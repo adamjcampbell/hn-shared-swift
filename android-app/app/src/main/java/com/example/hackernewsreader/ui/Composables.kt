@@ -53,7 +53,6 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import hacker.news.reader.Command
-import hacker.news.reader.Core
 import hacker.news.reader.LoadStatus
 import hacker.news.reader.LoadedStories
 import hacker.news.reader.Message
@@ -61,6 +60,7 @@ import hacker.news.reader.Model
 import hacker.news.reader.SendMessageAction
 import hacker.news.reader.StoryRow
 import hacker.news.reader.Strings
+import hacker.news.reader.UICore
 import kotlinx.coroutines.launch
 
 private val LocalSendMessage = staticCompositionLocalOf<SendMessageAction> {
@@ -69,7 +69,7 @@ private val LocalSendMessage = staticCompositionLocalOf<SendMessageAction> {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StoryScreen(core: Core) {
+fun StoryScreen(core: UICore) {
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val sendMessage = core.sendMessage
