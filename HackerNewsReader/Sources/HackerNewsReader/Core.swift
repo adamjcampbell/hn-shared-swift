@@ -49,11 +49,11 @@ struct Core {
 
 /// Composes the inner core: builds the command stream and task
 /// registry, spawns the search listener, and returns the ``Core``
-/// handle. Each spawned `Task` and the `sendMessage` closure reference
-/// `isolation` in its body, which captures the isolated parameter so the
-/// work runs on the host actor; a `Task` that omitted the reference would
-/// infer `@concurrent` and fail to compile against the non-`Sendable`
-/// `Model` capture.
+/// handle. Each spawned `Task` references `isolation` so it captures the
+/// isolated parameter and runs on the host actor; without that reference a
+/// `Task` infers `@concurrent` and fails to compile against the
+/// non-`Sendable` `Model` capture. (The `sendMessage` closure references it
+/// for a different reason — see its definition below.)
 ///
 /// The listener `Task`, the `sendMessage` closure, and `cancelAll` all
 /// close over the one local `var tasks`. It stays a captured local
