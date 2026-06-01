@@ -4,17 +4,29 @@ import Foundation
 /// SwiftUI environment as `\.sendMessage` and mirroring the
 /// ergonomic of `DismissAction`.
 ///
-/// `Equatable` is implemented as identity comparison on the held
-/// ``Engine`` so SwiftUI's environment diff treats the action as
-/// stable across parent re-evaluations.
+/// `Equatable` is an identity comparison on the owning ``Model`` (via
+/// its `ObjectIdentifier`) so SwiftUI's environment diff treats the
+/// action as stable across parent re-evaluations. The no-op action
+/// keys on `Self` instead, so previews/defaults never compare equal to
+/// a live action.
 // SKIP @bridgeMembers
 public struct SendMessageAction: Sendable, Equatable {
-    private let engine: Engine?
+    typealias SendMessage = @MainActor (Message) async -> Void
+
+    private let id: ObjectIdentifier
+    private let sendMessage: SendMessage
 
     /// Creates a no-op action — the default environment value and
     /// the value used in previews.
-    public init() { self.engine = nil }
-    init(_ engine: Engine) { self.engine = engine }
+    public init() {
+        self.id = ObjectIdentifier(Self.self)
+        self.sendMessage = { _ in }
+    }
+
+    init(id: ObjectIdentifier, sendMessage: @escaping SendMessage) {
+        self.id = id
+        self.sendMessage = sendMessage
+    }
 
     /// SwiftUI ergonomic equivalent of ``send(_:)``.
     ///
@@ -34,11 +46,5 @@ public struct SendMessageAction: Sendable, Equatable {
     /// - Parameter message: The message to dispatch.
     public func run(_ message: Message) async { await sendMessage(message) }
 
-    public static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.engine === rhs.engine
-    }
-
-    private func sendMessage(_ message: Message) async {
-        if let engine { await engine.sendMessage(message) }
-    }
+    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 }

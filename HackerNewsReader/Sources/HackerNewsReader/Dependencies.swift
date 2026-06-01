@@ -5,14 +5,15 @@ import Foundation
 /// Modelled on `pointfreeco/swift-dependencies` (`DateGenerator`,
 /// `@Dependency(\.date.now)`) without adopting the library itself —
 /// the macros and runtime infrastructure don't fit Skip's Android
-/// Swift target. The TaskLocal approach has the same ergonomics for
-/// our single use case (`Date` injection in tests) at the cost of one
+/// Swift target. The TaskLocal approach has the same ergonomics for the
+/// single use case here (`Date` injection in tests) at the cost of one
 /// type and one stored `@TaskLocal`.
 ///
 /// Reads at production sites default to wall-clock `Date()`. Tests
 /// override via `Dependencies.$date.withValue(.constant(pinned)) { … }`
-/// — `withEngine` does this internally so test bodies see a stable
-/// `now` across `bind()`-spawned listener tasks and message handlers.
+/// — `withCore` does this internally so test bodies see a stable
+/// `now` across the search listener and message handlers `makeCore`
+/// spawns.
 enum Dependencies {
     @TaskLocal static var date = DateGenerator { Date() }
 }
