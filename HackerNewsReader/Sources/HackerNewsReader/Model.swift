@@ -60,15 +60,15 @@ public final class Model {
 
     /// View rows for the feed — ids resolved against `stories` and
     /// tagged with `readIds`. The reference time is captured once per
-    /// access from `Dependencies.date` so a row's `metaLine` is
-    /// consistent within one snapshot; tests override via
-    /// `Dependencies.$date.withValue(.constant(_:))`.
+    /// access from `Dependencies.current.date` so a row's `metaLine` is
+    /// consistent within one snapshot; tests pin it by overriding the
+    /// `date` field of ``Dependencies``.
     public var feedStories: [StoryRow] { project(ids: feedLoaded?.ids) }
 
     public var searchResults: [StoryRow] { project(ids: searchLoaded?.ids) }
 
     private func project(ids: [String]?) -> [StoryRow] {
-        let now = Dependencies.date.now
+        let now = Dependencies.current.date.now
         return (ids ?? []).compactMap { id in
             stories[id].map { StoryRow(story: $0, isRead: readIds.contains(id), now: now) }
         }

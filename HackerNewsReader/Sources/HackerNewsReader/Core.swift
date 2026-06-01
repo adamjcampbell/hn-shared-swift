@@ -56,13 +56,9 @@ struct Core {
 ///
 /// - Parameters:
 ///   - model: The observable state; defaults to a fresh ``Model``.
-///   - client: The HackerNews API client.
-///   - clock: Time source for the search debounce.
 /// - Returns: The inner ``Core`` handle.
 func makeCore(
     model: sending Model = Model(),
-    client: Client = Client(),
-    clock: any Clock<Duration> = ContinuousClock(),
     isolation: isolated any Actor = #isolation
 ) -> Core {
     let state = model
@@ -77,9 +73,7 @@ func makeCore(
                 query,
                 to: state,
                 commands: commandsContinuation,
-                tasks: &tasks,
-                client: client,
-                clock: clock
+                tasks: &tasks
             )
         }
     }
@@ -94,9 +88,7 @@ func makeCore(
                 message,
                 to: state,
                 commands: commandsContinuation,
-                tasks: &tasks,
-                client: client,
-                clock: clock
+                tasks: &tasks
             )?.value
         },
         cancelAll: { tasks.cancelAll() }
@@ -119,8 +111,6 @@ func makeCore(
 ///   - state: The model to mutate.
 ///   - commands: Continuation for one-shot UI commands.
 ///   - tasks: Registry that owns cancellation of in-flight fetches.
-///   - client: The HackerNews API client.
-///   - clock: Time source passed to ``fetch(debounce:client:clock:isolation:body:)``.
 /// - Returns: The spawned fetch `Task` for `.refresh` / `.loadMore`
 ///   (so `.refreshable` can hold its spinner), `nil` otherwise.
 @discardableResult
@@ -129,8 +119,6 @@ func apply(
     to state: Model,
     commands: AsyncStream<Command>.Continuation,
     tasks: inout TaskRegistry<TaskID>,
-    client: Client,
-    clock: any Clock<Duration>,
     isolation: isolated any Actor = #isolation
 ) -> Task<Void, Never>? {
     switch message {
@@ -157,11 +145,11 @@ func apply(
         state.feedLoadMoreStatus = LoadStatus()
         state.feedInitialStatus.startLoading()
 
-        let task = loadTask(into: state, status: \.feedInitialStatus, client: client, clock: clock) {
+        let task = loadTask(into: state, status: \.feedInitialStatus) {
             try await $0.frontPage(0)
         } commit: { page, ids in
             state.feedLoaded = LoadedStories(
-                ids: ids, page: 0, totalPages: page.totalPages, loadedAt: Dependencies.date.now
+                ids: ids, page: 0, totalPages: page.totalPages, loadedAt: Dependencies.current.date.now
             )
         }
         tasks[.feed] = task
@@ -173,7 +161,7 @@ func apply(
         let next = loaded.nextPage
         state.feedLoadMoreStatus.startLoading()
 
-        let task = loadTask(into: state, status: \.feedLoadMoreStatus, client: client, clock: clock) {
+        let task = loadTask(into: state, status: \.feedLoadMoreStatus) {
             try await $0.frontPage(next)
         } commit: { page, ids in
             state.feedLoaded?.appendPage(ids, totalPages: page.totalPages)
@@ -188,7 +176,7 @@ func apply(
         let next = loaded.nextPage
         state.searchLoadMoreStatus.startLoading()
 
-        let task = loadTask(into: state, status: \.searchLoadMoreStatus, client: client, clock: clock) {
+        let task = loadTask(into: state, status: \.searchLoadMoreStatus) {
             try await $0.search(query, next)
         } commit: { page, ids in
             state.searchLoaded?.appendPage(ids, totalPages: page.totalPages)
@@ -202,7 +190,7 @@ func apply(
 /// on an empty query, otherwise marks loading and spawns the search
 /// fetch into `tasks[.search]`.
 ///
-/// Synchronous for the same reason as ``apply(_:to:commands:tasks:client:clock:isolation:)``:
+/// Synchronous for the same reason as ``apply(_:to:commands:tasks:isolation:)``:
 /// the listener invokes it inside its `for await` loop, so it must not
 /// hold the `tasks` access across a suspension.
 ///
@@ -210,17 +198,13 @@ func apply(
 ///   - query: The current search query.
 ///   - state: The model to mutate.
 ///   - commands: Continuation for one-shot UI commands (unused today;
-///     kept for symmetry with ``apply(_:to:commands:tasks:client:clock:isolation:)``).
+///     kept for symmetry with ``apply(_:to:commands:tasks:isolation:)``).
 ///   - tasks: Registry that owns the search fetch's cancellation.
-///   - client: The HackerNews API client.
-///   - clock: Time source for the debounce sleep.
 func applySearchQuery(
     _ query: String,
     to state: Model,
     commands: AsyncStream<Command>.Continuation,
     tasks: inout TaskRegistry<TaskID>,
-    client: Client,
-    clock: any Clock<Duration>,
     isolation: isolated any Actor = #isolation
 ) {
     if query.isEmpty {
@@ -243,12 +227,12 @@ func applySearchQuery(
 
     tasks[.search] = loadTask(
         into: state, status: \.searchInitialStatus,
-        debounce: Core.searchDebounce, client: client, clock: clock
+        debounce: Core.searchDebounce
     ) {
         try await $0.search(query, 0)
     } commit: { page, ids in
         state.searchLoaded = LoadedStories(
-            ids: ids, page: 0, totalPages: page.totalPages, loadedAt: Dependencies.date.now
+            ids: ids, page: 0, totalPages: page.totalPages, loadedAt: Dependencies.current.date.now
         )
     }
 }
@@ -262,8 +246,6 @@ func applySearchQuery(
 ///
 /// - Parameters:
 ///   - debounce: Delay before invoking `body`, or `nil` for none.
-///   - client: The client passed to `body`.
-///   - clock: Time source for the debounce sleep.
 ///   - body: Closure that issues the page fetch.
 /// - Returns: The page produced by `body`.
 /// - Throws: Whatever `body` throws, plus `CancellationError` if the
@@ -273,17 +255,15 @@ func applySearchQuery(
 ///   callers can match cancellation the same way regardless of transport.
 func fetch(
     debounce: Duration?,
-    client: Client,
-    clock: any Clock<Duration>,
     isolation: isolated any Actor = #isolation,
     body: @Sendable (Client) async throws -> Page
 ) async throws -> Page {
     if let debounce {
-        try await clock.sleep(for: debounce)
+        try await Dependencies.current.clock.sleep(for: debounce)
     }
     try Task.checkCancellation()
     do {
-        return try await body(client)
+        return try await body(Dependencies.current.client)
     } catch let urlError as URLError where urlError.code == .cancelled {
         throw CancellationError()
     }
@@ -300,8 +280,6 @@ func fetch(
 ///   - status: Key path to the `LoadStatus` field carrying this load's
 ///     success/failure.
 ///   - debounce: Delay before the fetch, or `nil`.
-///   - client: The HackerNews API client.
-///   - clock: Time source for the debounce.
 ///   - request: Issues the page fetch.
 ///   - commit: Records the fetched page (and its story ids) into `state`
 ///     — a fresh `LoadedStories` for an initial load, `appendPage` for
@@ -311,8 +289,6 @@ func loadTask(
     into state: Model,
     status: ReferenceWritableKeyPath<Model, LoadStatus>,
     debounce: Duration? = nil,
-    client: Client,
-    clock: any Clock<Duration>,
     isolation: isolated any Actor = #isolation,
     request: @escaping @Sendable (Client) async throws -> Page,
     commit: @escaping (Page, [String]) -> Void
@@ -321,7 +297,7 @@ func loadTask(
         _ = isolation
 
         do {
-            let page = try await fetch(debounce: debounce, client: client, clock: clock, body: request)
+            let page = try await fetch(debounce: debounce, body: request)
             try Task.checkCancellation()
             for story in page.stories { state.stories[story.id] = story }
             commit(page, page.stories.map(\.id))

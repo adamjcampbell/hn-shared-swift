@@ -21,8 +21,11 @@ import HackerNews
 /// `clock: TestClock()` when the test asserts on debounce timing, and
 /// pass the same clock to ``commitSearch(_:core:clock:isolation:)``.
 ///
-/// - Note: `makeCore` runs inside `Dependencies.$date.withValue` so the
-///   listener `Task` it spawns inherits the pinned `now`.
+/// - Note: `client` / `clock` / `now` are bound into ``Dependencies`` and
+///   `makeCore` runs *inside* the `withValue`, so the listener `Task` it
+///   spawns — and every fetch the body triggers — inherits these deps.
+///   (The clock is ambient for the core; the test still holds its own
+///   `TestClock` reference to call `advance(_:)`.)
 func withCore<R>(
     model: sending Model = Model(),
     client: Client = .mock(),
@@ -31,10 +34,11 @@ func withCore<R>(
     isolation: isolated TestActor = TestActor(),
     body: @Sendable (isolated TestActor, Core) async throws -> R
 ) async throws -> R {
-    let core = makeCore(model: model, client: client, clock: clock)
-    defer { core.cancelAll() }
-    return try await Dependencies.$date.withValue(DateGenerator(now)) {
-        try await body(isolation, core)
+    let dependencies = Dependencies(date: DateGenerator(now), client: client, clock: clock)
+    return try await Dependencies.$current.withValue(dependencies) {
+        let core = makeCore(model: model)
+        defer { core.cancelAll() }
+        return try await body(isolation, core)
     }
 }
 
