@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-05-13).
+Superseded by [ADR-0019](0019-core-free-functions-uicore-split.md) on 2026-06-01. The `Engine` actor and its borrowed executor are gone; isolation is threaded through free functions via `#isolation` and packaged at the `@MainActor` boundary in `makeUICore`.
 
 ## Context
 
