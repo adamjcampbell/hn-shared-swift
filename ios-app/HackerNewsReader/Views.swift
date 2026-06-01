@@ -2,7 +2,7 @@ import SwiftUI
 import HackerNewsReader
 
 struct RootView: View {
-    let core: Core
+    let core: UICore
     @State private var presented: IdentifiedURL?
 
     var body: some View {
