@@ -44,17 +44,23 @@ private func page(_ stories: [Story], totalPages: Int = 1) -> Page {
 /// Drives the listener-debounced search to commit. Inline the steps
 /// instead when asserting mid-flight. Pass the same `TestClock` the
 /// fixture was given so the debounce sleep can be advanced.
+///
+/// `waitUntil` covers the two observable transitions — the listener
+/// picking up the query (`isLoading`) and the commit (`searchLoaded`).
+/// The lone `runPending` is irreducible: it drains the fetch `Task` to
+/// its `clock.sleep` so `advance` lands on a parked sleeper, and "the
+/// task is now sleeping" has no observable signal.
 private func commitSearch(
     _ query: String,
     core: Core,
     clock: TestClock<Duration>,
     isolation: isolated TestActor
 ) async {
-    await settle(isolation)
     core.model.searchQuery = query
-    await settle(isolation)
+    await waitUntil { core.model.searchInitialStatus.isLoading }
+    await isolation.runPending()
     await clock.advance(by: Core.searchDebounce)
-    await settle(isolation)
+    await waitUntil { core.model.searchLoaded != nil }
 }
 
 @Suite("Core")
@@ -216,16 +222,16 @@ struct CoreTests {
             client: .mock(search: { _, _ in page([storyA]) }),
             clock: clock
         ) { actor, core in
-            await settle(actor)
             let model = core.model
             #expect(model.searchInitialStatus.isLoading == false)
             model.searchQuery = "r"
-            await settle(actor)
+            await waitUntil { model.searchInitialStatus.isLoading }
 
             #expect(model.searchInitialStatus.isLoading == true)
 
+            await actor.runPending()
             await clock.advance(by: Core.searchDebounce)
-            await settle(actor)
+            await waitUntil { !model.searchInitialStatus.isLoading }
 
             #expect(model.searchInitialStatus.isLoading == false)
         }
@@ -305,7 +311,7 @@ struct CoreTests {
             let model = core.model
             #expect(model.searchResults.map(\.id) == ["100"])
             model.searchQuery = ""
-            await settle(actor)
+            await waitUntil { model.searchLoaded == nil }
 
             #expect(model.searchResults.isEmpty)
             #expect(model.searchInitialStatus.error == nil)
@@ -355,17 +361,14 @@ struct CoreTests {
             ),
             clock: clock
         ) { actor, core in
-            // Let the listener suspend on `for await` before the first write.
-            await settle(actor)
-
             core.model.searchQuery = "rust"
-            await settle(actor)
+            await waitUntil { core.model.searchInitialStatus.isLoading }
 
+            // Backspace to empty before the debounce elapses: the listener cancels
+            // the in-flight "rust" fetch (still parked on its sleep, never reaching
+            // the client) and resets the status.
             core.model.searchQuery = ""
-            await settle(actor)
-
-            await clock.advance(by: Core.searchDebounce)
-            await settle(actor)
+            await waitUntil { !core.model.searchInitialStatus.isLoading }
 
             let model = core.model
             #expect(model.searchResults.isEmpty)
@@ -514,7 +517,7 @@ struct CoreTests {
             #expect(model.feedLoaded?.page == 0)
 
             let loadMore = Task { _ = actor; await core.sendMessage(.loadMore) }
-            await settle(actor)
+            await waitUntil { model.feedLoadMoreStatus.isLoading }
             #expect(model.feedLoadMoreStatus.isLoading == true)
 
             await core.sendMessage(.refresh)
@@ -588,12 +591,12 @@ struct CoreTests {
             #expect(core.model.searchLoaded?.hasMore == true)
 
             let loadMore = Task { _ = actor; await core.sendMessage(.loadMore) }
-            await settle(actor)
+            await waitUntil { core.model.searchLoadMoreStatus.isLoading }
             #expect(core.model.searchLoadMoreStatus.isLoading == true)
 
             core.model.searchQuery = ""
             await loadMore.value
-            await settle(actor)
+            await waitUntil { core.model.searchLoaded == nil }
 
             let model = core.model
             #expect(model.searchLoaded == nil)

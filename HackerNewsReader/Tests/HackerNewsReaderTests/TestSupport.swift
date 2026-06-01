@@ -1,5 +1,6 @@
 import Clocks
 import Foundation
+import Observation
 import Testing
 @testable import HackerNewsReader
 import HackerNews
@@ -16,26 +17,12 @@ import HackerNews
 ///
 /// Default clock is `ImmediateClock`: the only `clock.sleep` in
 /// production is the search debounce, and tests that don't validate
-/// timing run faster (and need fewer `runPending` calls) with that
-/// sleep elided. Override with `clock: TestClock()` when the test
-/// asserts on debounce timing, and pass the same clock to
-/// ``commitSearch(_:core:clock:isolation:)``.
+/// timing run faster with that sleep elided. Override with
+/// `clock: TestClock()` when the test asserts on debounce timing, and
+/// pass the same clock to ``commitSearch(_:core:clock:isolation:)``.
 ///
 /// - Note: `makeCore` runs inside `Dependencies.$date.withValue` so the
 ///   listener `Task` it spawns inherits the pinned `now`.
-/// Drains the actor's queue twice. A `model.searchQuery` write resumes
-/// the listener suspended on `searchQueryChanges`, but `AsyncStream`
-/// schedules that resume as a *new* job behind the one already running,
-/// so a single `runPending()` returns before the listener has run. The
-/// second drain runs the listener job (and `applySearchQuery`, which is
-/// synchronous, completes within it). Two is the minimal deterministic
-/// count for "write a query, then observe its effect" — this is serial-
-/// queue job ordering, not a data race, so it does not depend on load.
-func settle(_ isolation: isolated TestActor) async {
-    await isolation.runPending()
-    await isolation.runPending()
-}
-
 func withCore<R>(
     model: sending Model = Model(),
     client: Client = .mock(),
@@ -49,4 +36,36 @@ func withCore<R>(
     return try await Dependencies.$date.withValue(DateGenerator(now)) {
         try await body(isolation, core)
     }
+}
+
+/// Suspends until `condition` holds, re-arming `withObservationTracking`
+/// on whatever `Model` properties it reads — so a test waits on the
+/// actual observable transition (a status flips, a `LoadedStories`
+/// populates or clears) instead of guessing how many `runPending()`
+/// drains it takes.
+///
+/// `onChange` fires in the mutation's `willSet`, but the resumed
+/// continuation runs after the mutation completes (FIFO on the
+/// `TestActor` the writer shares), so the re-check sees the new value;
+/// the loop re-arms if not. Deterministic, no polling. A condition that
+/// never holds hangs until the test's time limit, by design.
+func waitUntil(isolation: isolated any Actor = #isolation, _ condition: () -> Bool) async {
+    while !condition() {
+        await withCheckedContinuation { continuation in
+            withObservationTracking { _ = condition() } onChange: { continuation.resume() }
+        }
+    }
+}
+
+/// Drains the actor's queue twice — the synchronisation of last resort
+/// for the few steps with no observable transition to ``waitUntil(isolation:_:)``
+/// on: a listener processing a keystroke that leaves `Model` unchanged
+/// (`isLoading` already true), or a cancel-and-replace through parked
+/// sleeps. A `model.searchQuery` write resumes the listener as a new job
+/// behind the one already running, so a single `runPending()` can return
+/// before it runs; the second drain runs it. Prefer ``waitUntil(isolation:_:)``
+/// wherever there is a state change to wait on.
+func settle(_ isolation: isolated TestActor) async {
+    await isolation.runPending()
+    await isolation.runPending()
 }
