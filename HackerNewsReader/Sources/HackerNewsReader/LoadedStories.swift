@@ -25,8 +25,11 @@ public struct LoadedStories: Sendable, Equatable {
     ///   - ids: Story ids in display order.
     ///   - page: Zero-indexed current page.
     ///   - totalPages: Total page count reported by the transport.
-    ///   - loadedAt: Time of the load; defaults to `Date()`.
-    public init(ids: [String], page: Int, totalPages: Int, loadedAt: Date = Date()) {
+    ///   - loadedAt: Time of the load. Passed explicitly (from
+    ///     `Dependencies.current.date.now`) rather than defaulted, so a
+    ///     loaded-stories value never captures wall-clock time behind the
+    ///     ambient `date` dependency.
+    public init(ids: [String], page: Int, totalPages: Int, loadedAt: Date) {
         self.ids = ids
         self.page = page
         self.totalPages = totalPages
