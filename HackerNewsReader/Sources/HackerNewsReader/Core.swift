@@ -24,13 +24,18 @@ struct Core {
 
     let commands: AsyncStream<Command>
 
-    /// `@isolated(any)`: the closure carries the host actor it was
-    /// formed on, so every `await sendMessage(_:)` hops there before
-    /// touching `Model` / the task registry. Concurrent callers (a UI
-    /// fire-and-forget plus a `.refreshable`, or two tasks in a test)
-    /// therefore serialise on one actor without the caller having to be
-    /// isolated to it.
-    let sendMessage: @isolated(any) (Message) async -> Void
+    /// Applies a `Message` to the model. Non-`Sendable` — it captures the
+    /// `Model` and the task registry — so the type system confines every
+    /// caller to the region `makeCore` was formed on, and the body runs
+    /// there: `MainActor` in production (via ``makeUICore``), a `TestActor`
+    /// in tests. The listener `Task` and the fetch work share that same
+    /// isolation, so every `Model` / registry write stays serialised.
+    ///
+    /// Concurrent UI entry points (a fire-and-forget tap plus a
+    /// `.refreshable`) serialise at the `@MainActor` ``SendMessageAction``
+    /// that wraps this; the synchronous ``apply(_:to:commands:tasks:isolation:)``
+    /// keeps each handler's read-modify-write atomic against actor reentrancy.
+    let sendMessage: (Message) async -> Void
 
     /// Cancels the listener and any in-flight fetch. Production is
     /// process-lifetime and never calls this; tests call it on fixture
@@ -44,9 +49,11 @@ struct Core {
 
 /// Composes the inner core: builds the command stream and task
 /// registry, spawns the search listener, and returns the ``Core``
-/// handle. Threads `isolation` into every spawned `Task` via
-/// `@_inheritActorContext`, so model and registry writes stay isolated
-/// to the host actor.
+/// handle. Each spawned `Task` and the `sendMessage` closure reference
+/// `isolation` in its body, which captures the isolated parameter so the
+/// work runs on the host actor; a `Task` that omitted the reference would
+/// infer `@concurrent` and fail to compile against the non-`Sendable`
+/// `Model` capture.
 ///
 /// The listener `Task`, the `sendMessage` closure, and `cancelAll` all
 /// close over the one local `var tasks`. It stays a captured local
@@ -81,6 +88,8 @@ func makeCore(
         model: state,
         commands: commands,
         sendMessage: { message in
+            // Resolves `#isolation` in `apply` to the host actor; a closure
+            // that dropped this would pass `nil` to its isolated parameter.
             _ = isolation
 
             await apply(
