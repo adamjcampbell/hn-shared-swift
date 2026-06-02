@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-05-17).
+Superseded by [ADR-0019](0019-core-free-functions-uicore-split.md) on 2026-06-01. The flat-`Model` decision carries forward unchanged; the sole writer is now the `apply` free functions composed in `makeCore` rather than an `Engine` actor.
 
 ## Context
 

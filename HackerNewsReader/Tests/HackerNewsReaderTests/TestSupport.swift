@@ -1,73 +1,75 @@
 import Clocks
 import Foundation
+import Observation
 import Testing
 @testable import HackerNewsReader
 import HackerNews
 
-extension Engine {
-    /// Tests construct `Engine` with `TestActor` isolation and (by
-    /// default) an `ImmediateClock`; these accessors reach the
-    /// test-specific instance without threading it as a separate local.
-    /// `#require` makes a misuse (production isolation in a test, or a
-    /// non-`TestClock` where one is needed) surface as a graceful test
-    /// failure, not a trap.
-    nonisolated var testActor: TestActor {
-        get throws { try #require(isolation as? TestActor) }
-    }
-    nonisolated var testClock: TestClock<Duration> {
-        get throws { try #require(clock as? TestClock<Duration>) }
-    }
-
-    /// Batches multiple reads and `sendMessage(_:)` calls into one
-    /// isolation hop with a consistent snapshot — no other Task can
-    /// interleave between statements inside the block.
-    ///
-    /// - Parameter body: Closure that runs while isolated to the
-    ///   actor; receives `self` as its only argument.
-    /// - Returns: Whatever `body` returns.
-    /// - Throws: Whatever `body` throws.
-    func run<R, Failure: Error>(
-        _ body: sending @Sendable (isolated Engine) async throws(Failure) -> R
-    ) async throws(Failure) -> R {
-        try await body(self)
-    }
-}
-
-/// Per-test ``Engine`` fixture. Builds the actor (with its
-/// `TestActor` isolation, the supplied `Client` / clock / now), runs
-/// `body`, and awaits `engine.cancelAll()` on exit so the listener
-/// Task is cancelled deterministically before the next test starts.
+/// Per-test ``Core`` fixture. Isolated to a fresh ``TestActor`` so
+/// `makeCore` (and the whole `body`) run on it: `#isolation` binds
+/// there, and every model / registry write stays serialised onto that
+/// actor's queue. Cancels the listener on exit so the `Task → Model`
+/// references release before the next test starts.
+///
+/// The body runs isolated to the `TestActor`, so reads and
+/// `core.sendMessage(_:)` calls share a consistent snapshot between
+/// suspension points — no separate `run { … }` batching is needed.
 ///
 /// Default clock is `ImmediateClock`: the only `clock.sleep` in
 /// production is the search debounce, and tests that don't validate
-/// timing run faster (and need fewer `runPending` calls) with that
-/// sleep elided. Override with `clock: TestClock()` when the test
-/// asserts on debounce timing.
+/// timing run faster with that sleep elided. Override with
+/// `clock: TestClock()` when the test asserts on debounce timing, and
+/// pass the same clock to ``commitSearch(_:core:clock:isolation:)``.
 ///
-/// - Note: The body's outcome is captured as a `Result` so the
-///   teardown runs on a single path before rethrowing via `.get()`;
-///   `defer` can't `await`. The stdlib's async
-///   `Result.init(catching:)` requires a `@concurrent` closure, but
-///   this body captures task-isolated state, so the catch is manual.
-func withEngine<R>(
+/// - Note: `client` / `clock` / `now` are bound into ``Dependencies`` and
+///   `makeCore` runs *inside* the `withValue`, so the listener `Task` it
+///   spawns — and every fetch the body triggers — inherits these deps.
+///   (The clock is ambient for the core; the test still holds its own
+///   `TestClock` reference to call `advance(_:)`.)
+func withCore<R>(
     model: sending Model = Model(),
     client: Client = .mock(),
     clock: any Clock<Duration> = ImmediateClock(),
     now: @escaping @Sendable () -> Date = Date.init,
-    body: (Engine) async throws -> R
+    isolation: isolated TestActor = TestActor(),
+    body: @Sendable (isolated TestActor, Core) async throws -> R
 ) async throws -> R {
-    // Engine construction is outside `withValue` so the non-`Sendable`
-    // `model` parameter consumes without crossing the closure's
-    // concurrent region. `bind()` and `body` run inside the binding so
-    // the listener `Task` spawned by `bind()` inherits the pinned `now`.
-    let engine = Engine(model: model, client: client, clock: clock, isolation: TestActor())
-    let result: Result<R, Error>
-    do {
-        result = .success(try await Dependencies.$date.withValue(DateGenerator(now)) {
-            await engine.bind()
-            return try await body(engine)
-        })
-    } catch { result = .failure(error) }
-    await engine.cancelAll()
-    return try result.get()
+    let dependencies = Dependencies(date: DateGenerator(now), client: client, clock: clock)
+    return try await Dependencies.$current.withValue(dependencies) {
+        let core = makeCore(model: model)
+        defer { core.cancelAll() }
+        return try await body(isolation, core)
+    }
+}
+
+/// Suspends until `condition` holds, re-arming `withObservationTracking`
+/// on whatever `Model` properties it reads — so a test waits on the
+/// actual observable transition (a status flips, a `LoadedStories`
+/// populates or clears) instead of guessing how many `runPending()`
+/// drains it takes.
+///
+/// `onChange` fires in the mutation's `willSet`, but the resumed
+/// continuation runs after the mutation completes (FIFO on the
+/// `TestActor` the writer shares), so the re-check sees the new value;
+/// the loop re-arms if not. Deterministic, no polling. A condition that
+/// never holds hangs until the test's time limit, by design.
+func waitUntil(isolation: isolated any Actor = #isolation, _ condition: () -> Bool) async {
+    while !condition() {
+        await withCheckedContinuation { continuation in
+            withObservationTracking { _ = condition() } onChange: { continuation.resume() }
+        }
+    }
+}
+
+/// Drains the actor's queue twice — the synchronisation of last resort
+/// for the few steps with no observable transition to ``waitUntil(isolation:_:)``
+/// on: a listener processing a keystroke that leaves `Model` unchanged
+/// (`isLoading` already true), or a cancel-and-replace through parked
+/// sleeps. A `model.searchQuery` write resumes the listener as a new job
+/// behind the one already running, so a single `runPending()` can return
+/// before it runs; the second drain runs it. Prefer ``waitUntil(isolation:_:)``
+/// wherever there is a state change to wait on.
+func settle(_ isolation: isolated TestActor) async {
+    await isolation.runPending()
+    await isolation.runPending()
 }

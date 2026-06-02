@@ -72,7 +72,10 @@ private val LocalSendMessage = staticCompositionLocalOf<SendMessageAction> {
 fun StoryScreen(core: Core) {
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
-    val sendMessage = core.sendMessage
+    // Built once from the process-lifetime `core`: `staticCompositionLocalOf`
+    // propagates on peer-object identity, so a fresh instance per recomposition
+    // would recompose the whole subtree.
+    val sendMessage = remember(core) { SendMessageAction(core) }
 
     LaunchedEffect(Unit) { sendMessage.send(Message.refresh) }
 

@@ -8,7 +8,7 @@ struct RootView: View {
     var body: some View {
         NavigationStack { StoriesScreen() }
             .environment(core.model)
-            .environment(\.sendMessage, core.sendMessage)
+            .environment(\.sendMessage, SendMessageAction(core))
             .sheet(item: $presented) { item in
                 SafariView(url: item.url)
                     .ignoresSafeArea()
