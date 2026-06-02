@@ -16,9 +16,9 @@ read indicator. Networking lives in Swift via `URLSession`.
 ## How Skip is used
 
 Skip's tagline is **One Swift Codebase. Two Native Platforms.** This
-approach differs: only the model and engine ship as Swift on both
-platforms. The UIs are written per platform: SwiftUI on iOS, Jetpack
-Compose on Android.
+approach differs: only the model and its mutation logic ship as Swift
+on both platforms. The UIs are written per platform: SwiftUI on iOS,
+Jetpack Compose on Android.
 
 ## Architecture in brief
 
@@ -27,34 +27,37 @@ in as `Message`s, and one-shot side-effects flow out as `Command`s,
 names borrowed from Elm.
 
 Mutations are written in **idiomatic Swift, made concurrency-safe by
-an `actor`**. A single `Engine` actor owns every write to `Model`, so
-the `@Observable` class itself stays a nonisolated mutable data bag
-while race-free access is enforced by Swift 6's region-based isolation.
+region-based isolation**. The mutation logic is a set of free functions,
+not an object: `makeCore` threads its caller's actor through `#isolation`,
+so the host actor owns every write to `Model`. The `@Observable` class
+itself stays a nonisolated mutable data bag, and Swift 6's region-based
+isolation keeps the non-`Sendable` `Model` from ever leaving that region.
 
-The `Engine` borrows its host's executor: `MainActor` in production, a
-`TestActor` in tests. Reads on the UI thread stay synchronous, the
-actor hop only serialises writes, and nothing crosses an isolation
-boundary.
+The host actor is `MainActor` in production (via `makeAppCore()`) and a
+`TestActor` in tests. Reads on the UI thread stay synchronous, only writes
+serialise onto the host actor, and nothing crosses an isolation boundary.
 
 ## Consuming the `Core`
 
-`Core` is a `@MainActor` struct that exposes the surfaces the UI
-consumes while hiding the `Engine` actor. Actors aren't part of the
-Swift-to-Kotlin bridge surface.
+`Core` is a plain struct holding the surfaces the UI consumes. `model`
+and `commands` are the two surfaces that cross the Swift-to-Kotlin
+bridge; the send entry and the teardown hook stay internal.
 
-`makeCore()` runs once per process and returns a `Core` value with
-three surfaces:
+`makeAppCore()` runs once per process on `MainActor` and returns a
+`Core`. The UI reads two surfaces directly:
 
 - `model` — the `@Observable` source of truth.
-- `sendMessage` — an `Equatable` capability for dispatching `Message`s.
 - `commands` — an `AsyncStream<Command>` of one-shot side-effects.
 
-Both UIs consume the same `Core`.
+For dispatching `Message`s, the send capability is composed at the app
+boundary from the handle: `SendMessageAction(core)` wraps `Core`'s
+internal send entry in an `Equatable` action. Both UIs consume the same
+`Core`.
 
 ```swift
 // iOS — HackerNewsReaderApp.swift
 @main struct HackerNewsReaderApp: App {
-    @State private var core = makeCore()
+    @State private var core = makeAppCore()
     var body: some Scene { WindowGroup { RootView(core: core) } }
 }
 ```
@@ -66,7 +69,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         ProcessInfo.launch(applicationContext)
-        core = makeCore()
+        core = makeAppCore()
     }
 }
 ```
@@ -122,7 +125,7 @@ Button("Mark read") { sendMessage(.toggleRead(id: story.id)) }
 
 ```kotlin
 // Android — same shape: .send(...) and suspend .run(...).
-val sendMessage = core.sendMessage
+val sendMessage = remember(core) { SendMessageAction(core) }
 
 LaunchedEffect(Unit) { sendMessage.send(Message.refresh) }
 PullToRefreshBox(onRefresh = { scope.launch { sendMessage.run(Message.refresh) } }) { … }
@@ -167,7 +170,7 @@ A generated `Strings` enum exposes typed accessors that bridge across
 SkipFuse, so Compose reads the same source as SwiftUI without a
 separate Android string store.
 
-## Why one Model, one Engine
+## Why one Model, free functions
 
 Common app architectures often leave me feeling unsatisfied. It is
 standard procedure to separate screens, features, etc, into
@@ -185,12 +188,13 @@ and Jetpack Compose allow us to model our application as pure state
 that is observed. This allows a natural fit for modelling behaviour
 as procedures that act on data. So:
 
-`Model` is our data and `Engine` hosts the procedures that act on
+`Model` is the data and free functions are the procedures that act on
 it. Two pieces, not a tree of objects split by feature, so there's
 no up and down communication between them. Data and procedures are
-separate concerns, and the isolation region `Engine` provides keeps
-`Model`'s mutations race free. Each `Message`'s handling reads top
-to bottom in one place leaning into *Locality of Behaviour*.
+separate concerns, and the host actor's isolation region, threaded
+through `#isolation`, keeps `Model`'s mutations race free. Each
+`Message`'s handling reads top to bottom in one place leaning into
+*Locality of Behaviour*.
 
 `Model` holds both the source of truth and its derivations. The
 entity store, the feed and search load state, read tracking, and
@@ -248,13 +252,14 @@ Outside that overhead, app complexity could be much lower.
   product (`.library(name: "HackerNewsReader")`).
   - `HackerNews` — API client and entity types: `Client`, `Story`,
     `Page`. Self-contained Hacker News SDK.
-  - `HackerNewsReader` — `Model` + `Engine` + the bridged factory
-    `makeCore() -> Core`, plus `Message`, `Command`,
-    `SendMessageAction`, `StoryRow`, `LoadStatus`, `LoadedStories`,
-    `Dependencies` (the `@TaskLocal` `Date` seam), and the bridged
-    `Strings` enum generated from `Resources/Localizable.xcstrings`
-    by `scripts/generate-strings.swift`. Depends on `HackerNews`;
-    Skip transitively packages `HackerNews` into the AAR set.
+  - `HackerNewsReader` — `Model` plus the free-function core (`makeCore`
+    and the bridged `makeAppCore() -> Core` production entry), plus
+    `Message`, `Command`, `SendMessageAction`, `StoryRow`, `LoadStatus`,
+    `LoadedStories`, `Dependencies` (the ambient `@TaskLocal` for
+    `date` / `client` / `clock`), and the bridged `Strings` enum
+    generated from `Resources/Localizable.xcstrings` by
+    `scripts/generate-strings.swift`. Depends on `HackerNews`; Skip
+    transitively packages `HackerNews` into the AAR set.
 - `ios-app/` — SwiftUI app generated from `project.yml` by
   [`xcodegen`](https://github.com/yonaskolb/XcodeGen).
 - `android-app/` — Gradle project consuming the SkipFuse-exported AARs

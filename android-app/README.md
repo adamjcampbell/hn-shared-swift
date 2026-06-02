@@ -45,12 +45,12 @@ The first `skipExport` invocation takes a few minutes (Swift toolchain
 ## How the model reaches the UI
 
 `App.onCreate` bootstraps the Swift runtime via
-`skip.foundation.ProcessInfo.launch(...)` and calls `makeCore()` once,
-holding the resulting `Core` for the process lifetime.
+`skip.foundation.ProcessInfo.launch(...)` and calls `makeAppCore()`
+once, holding the resulting `Core` for the process lifetime.
 `MainActivity` reads it off the `Application` and passes it into
-`StoryScreen`, which consumes `core.model`, `core.commands`, and
-`core.sendMessage`. Architecture and concurrency details live in
-[`AGENTS.md`](../AGENTS.md).
+`StoryScreen`, which consumes `core.model` and `core.commands` and
+composes `SendMessageAction(core)` for dispatch. Architecture and
+concurrency details live in [`AGENTS.md`](../AGENTS.md).
 
 ## Caveats
 
