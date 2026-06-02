@@ -44,11 +44,12 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 
 - `HackerNews` is a thin SDK: `Client` + `Story` + `Page` + private
   Firebase / Algolia decoders. No app state, no loading lifecycle.
-- `HackerNewsReader` owns the presentation lifecycle: `Model`, `Engine`,
-  `Core`, `SendMessageAction`, `Message`, `Command`, plus `StoryRow`,
-  `LoadStatus`, `LoadedStories`.
-- `Engine` (workhorse `actor`) is the only writer of `Model`. Don't add
-  mutators on `Model`.
+- `HackerNewsReader` owns the presentation lifecycle: `Model`, `Core`,
+  `SendMessageAction`, `Message`, `Command`, plus `StoryRow`,
+  `LoadStatus`, `LoadedStories`, and the free functions that build and
+  mutate the core (`makeCore` / `makeAppCore`, `apply`, `applySearchQuery`).
+- `apply` and `applySearchQuery` are the only writers of `Model`. Don't
+  add mutators on `Model`.
 - `Message` is UI → core; `Command` is core → UI. Don't name a new type
   `Effect` — reserved for a possible future TCA-style reducer.
 - Drop type prefixes in namespaced modules: `HackerNews.Story`, not
@@ -56,7 +57,7 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   `StoryRow`) rather than reinstating the prefix.
 - Presentation strings live precomputed on `StoryRow`, not in the
   view. Don't read `Date.now` inside view bodies — projections on
-  `Model` capture `Dependencies.date.now` once per access so both
+  `Model` capture `Dependencies.current.date.now` once per access so both
   platforms render the same caption for the same input. See
   [ADR-0017](docs/adr/0017-presenter-rows-in-model.md).
 
@@ -68,8 +69,9 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 - Use `// SKIP @bridgeMembers` (type-level) for whole-type bridging.
   `// SKIP @bridge` at the type level alone drops field accessors —
   don't reach for it. Use `// SKIP @nobridge` for per-member opt-out.
-- `Engine` is intentionally not bridged and `internal`. The Kotlin
-  surface is the `Core` returned from `makeCore()`.
+- `Core.sendMessage` and `cancelAll` are intentionally `internal` and
+  `// SKIP @nobridge`. The bridged Kotlin surface is the `Core` returned
+  from `makeAppCore()`: its `model` and `commands`.
 - `AsyncStream<T>` → `Flow<T>` via `.kotlin()` on the Kotlin side.
 - Kotlin toolchain must match SkipFuse's exported AAR metadata
   (currently 2.3.0). `kotlin-reflect` is required at runtime.
@@ -152,31 +154,46 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 
 ## Concurrency & testing
 
-- Inject `clock: any Clock<Duration>` into `Engine`. Production wires
-  `ContinuousClock()`; `withEngine` defaults to `ImmediateClock()`.
-  Reach for `TestClock` only when asserting on debounce timing.
-- `TestActor` installs a `DispatchSerialQueue` as `unownedExecutor`;
-  `Engine` borrows it via `isolation:`. Recover it inside a test with
-  `engine.testActor` (test-target extension force-casts `isolation`).
-- `engine.testActor.runPending()` drains pending jobs deterministically
-  — use instead of `Task.megaYield()`.
+- `clock` / `client` / `date` are ambient via the `@TaskLocal`
+  `Dependencies`, not injected into a type. Production reads the live
+  defaults (`ContinuousClock()`, `Client()`, `Date()`); `withCore`
+  defaults `clock` to `ImmediateClock()`. Reach for `TestClock` only
+  when asserting on debounce timing, and pass the same clock to
+  `commitSearch(_:core:clock:isolation:)`.
+- `TestActor` installs a `DispatchSerialQueue` as `unownedExecutor`.
+  `withCore` is isolated to a fresh `TestActor`, so `makeCore`'s
+  `#isolation` binds there; the body receives that actor as its first
+  parameter, no force-cast needed.
+- `await waitUntil { core.model.<cond> }` is the default
+  synchronisation: it re-arms `withObservationTracking` and waits on the
+  real observable transition (a status flips, a `LoadedStories`
+  populates or clears). `settle(_:)` drains the actor's queue twice for
+  the few steps with no transition to wait on (a keystroke that leaves
+  `Model` unchanged, a cancel-and-replace through parked sleeps); it is
+  the last resort. `TestActor.runPending()` is the underlying single
+  drain, used directly only where a drain is irreducible (e.g. parking a
+  fetch on its `clock.sleep` before `advance`).
 - Use `try` (not `try?`) on `clock.sleep` so cancellation propagates;
   swallowing it lets cancelled tasks fall through to the live fetch.
-- Batch into one `engine.run { engine in … }` per test. Split only
-  across real suspension boundaries (`runPending`, `clock.advance`,
-  `Task.value`, `iterator.next`). Alias `let model = engine.model` at
-  the top — the body is `@Sendable`.
+- No `core.run` batching: the `withCore` body is one isolated scope, so
+  write reads and `await core.sendMessage(...)` flat. Split only across
+  real suspension boundaries (`waitUntil` / `settle`, `clock.advance`,
+  `Task.value`, `iterator.next`). Alias `let model = core.model` at the
+  top.
 - Park mocks with `try await clock.sleep(for: .seconds(Int.max))`.
   `.infinity` / `.greatestFiniteMagnitude` compile but trap (Double →
   Int128).
-- Wrap test setup in `withEngine { engine in … }`. Builds a fresh
-  `TestActor`, awaits `engine.cancelAll()` on exit — breaks the
-  `listener-Task → Engine` cycle before the next test. Mocks pass
-  through `client: .mock(frontPage: …, search: …)`.
-- Pin time with `Dependencies.$date.withValue(.constant(fixed)) { … }`
-  when asserting on `StoryRow.metaLine` / `feedHeaderSubtitle`.
-  `withEngine` opens the binding around `bind()` and the body so
-  listener tasks and projections share the same `now`.
+- Wrap test setup in `withCore { actor, core in … }`. It binds
+  `Dependencies.$current.withValue(...)` and runs `makeCore` inside that
+  binding, so the listener `Task` and every fetch inherit the pinned
+  deps, then `core.cancelAll()`s on exit to break the
+  `listener-Task → Model` cycle before the next test. Mocks pass through
+  `client: .mock(frontPage: …, search: …)`.
+- Pin time with `withCore(now:)`, or `Dependencies.$current.withValue`
+  (copy and mutate `Dependencies.current` to override a subset), when
+  asserting on `StoryRow.metaLine` / `feedHeaderSubtitle`. `withCore`
+  opens the binding around `makeCore` and the body so listener tasks and
+  projections share the same `now`.
 
 ## State shape
 
@@ -193,7 +210,8 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   `[ID: Entity]` store plus per-view `[ID]` lists over parallel
   denormalised arrays.
 - Trust the boundary dedupe (bridge / SwiftUI diffing). Don't sprinkle
-  `if !state.x.contains(...)` whack-a-mole guards inside `Engine`.
+  `if !state.x.contains(...)` whack-a-mole guards inside `apply` /
+  `applySearchQuery`.
 
 ## Doc & comment style
 
