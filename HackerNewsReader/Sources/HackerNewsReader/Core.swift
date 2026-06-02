@@ -5,49 +5,58 @@ import HackerNews
 import FoundationNetworking
 #endif
 
-// MARK: - Inner core (isolation-generic)
+// MARK: - Core (isolation-generic, bridged)
 
 /// Identities for the in-flight Tasks ``makeCore`` coordinates through
 /// a single ``TaskRegistry``.
 enum TaskID { case feed, feedMore, search, searchMore, searchListener }
 
-/// The isolation-generic surfaces behind the UI: the observable
-/// ``Model``, the one-shot command stream, an async send-message entry,
-/// and a teardown hook.
+/// The single handle behind the UI: the observable ``Model``, the
+/// one-shot command stream, an async send-message entry, and a teardown
+/// hook. One `Core` serves every consumer — `MainActor` production (built
+/// via ``makeAppCore``) and `TestActor` tests (built via ``makeCore``).
 ///
 /// ``makeCore`` threads `isolation` through `#isolation`, so the host
-/// actor owns every mutation — `MainActor` in production (via
-/// ``makeUICore``), a `TestActor` in tests. ``Model`` is non-`Sendable`
-/// and never leaves that region.
-struct Core {
-    let model: Model
+/// actor owns every mutation. ``Model`` is non-`Sendable` and never leaves
+/// that region. Production wraps ``sendMessage`` in a `@MainActor`
+/// ``SendMessageAction`` at the app boundary (`SendMessageAction(core)`);
+/// only ``model`` and ``commands`` cross JNI.
+// SKIP @bridgeMembers
+public struct Core {
+    public let model: Model
 
-    let commands: AsyncStream<Command>
+    public let commands: AsyncStream<Command>
 
     /// Applies a `Message` to the model. Non-`Sendable` — it captures the
     /// `Model` and the task registry — so the type system confines every
     /// caller to the region `makeCore` was formed on, and the body runs
-    /// there: `MainActor` in production (via ``makeUICore``), a `TestActor`
-    /// in tests. The listener `Task` and the fetch work share that same
-    /// isolation, so every `Model` / registry write stays serialised.
+    /// there: `MainActor` in production, a `TestActor` in tests. The
+    /// listener `Task` and the fetch work share that same isolation, so
+    /// every `Model` / registry write stays serialised.
     ///
-    /// Concurrent UI entry points (a fire-and-forget tap plus a
-    /// `.refreshable`) serialise at the `@MainActor` ``SendMessageAction``
-    /// that wraps this; the synchronous ``apply(_:to:commands:tasks:isolation:)``
-    /// keeps each handler's read-modify-write atomic against actor reentrancy.
+    /// `internal` so app code reaches it only through the `@MainActor`
+    /// ``SendMessageAction`` that wraps it; tests in-module call it
+    /// directly on their `TestActor`. Concurrent UI entry points (a
+    /// fire-and-forget tap plus a `.refreshable`) serialise at that
+    /// `@MainActor` boundary; the synchronous
+    /// ``apply(_:to:commands:tasks:isolation:)`` keeps each handler's
+    /// read-modify-write atomic against actor reentrancy.
+    // SKIP @nobridge
     let sendMessage: (Message) async -> Void
 
     /// Cancels the listener and any in-flight fetch. Production is
     /// process-lifetime and never calls this; tests call it on fixture
     /// exit so the `Task → Model` references release.
+    // SKIP @nobridge
     let cancelAll: () -> Void
 
     /// Debounce window between a `model.searchQuery` write and the
     /// resulting search fetch.
+    // SKIP @nobridge
     static let searchDebounce: Duration = .milliseconds(250)
 }
 
-/// Composes the inner core: builds the command stream and task
+/// Composes the core: builds the command stream and task
 /// registry, spawns the search listener, and returns the ``Core``
 /// handle. Each spawned `Task` references `isolation` so it captures the
 /// isolated parameter and runs on the host actor; without that reference a
@@ -63,7 +72,7 @@ struct Core {
 ///
 /// - Parameters:
 ///   - model: The observable state; defaults to a fresh ``Model``.
-/// - Returns: The inner ``Core`` handle.
+/// - Returns: The ``Core`` handle.
 func makeCore(
     model: sending Model = Model(),
     isolation: isolated any Actor = #isolation
@@ -314,37 +323,20 @@ func loadTask(
     }
 }
 
-// MARK: - Outer core (@MainActor, bridged)
+// MARK: - Production entry (@MainActor, bridged)
 
-/// The `@MainActor` surfaces iOS, Android, and the SkipFuse bridge
-/// consume: the observable ``Model``, the one-shot command stream, and
-/// an `Equatable` send-message capability.
-// SKIP @bridgeMembers
-@MainActor
-public struct UICore {
-    public let model: Model
-    public let commands: AsyncStream<Command>
-    public let sendMessage: SendMessageAction
-}
-
-/// Builds the core on `MainActor` and returns the ``UICore`` handle for
-/// the UI to consume.
+/// Builds the core on `MainActor` and returns the ``Core`` handle for the
+/// UI to consume. The bridged production entry point: pins `#isolation` to
+/// `MainActor`, so the returned handle's `sendMessage` and fetch work run
+/// there, and is the only function that crosses JNI.
 ///
 /// Call once at app scope and keep the handle for the process lifetime:
 /// iOS holds it as `@State` on the `App`, Android stashes it on
-/// `Application` in `onCreate`.
+/// `Application` in `onCreate`. App code builds the send capability from
+/// the handle with `SendMessageAction(core)`.
 ///
-/// - Returns: A handle bundling the model, the command stream, and the
-///   send-message capability.
+/// - Returns: The ``Core`` handle.
 // SKIP @bridge
-@MainActor public func makeUICore() -> UICore {
-    let core = makeCore()
-
-    return UICore(
-        model: core.model,
-        commands: core.commands,
-        sendMessage: SendMessageAction(id: ObjectIdentifier(core.model)) { @MainActor in
-            await core.sendMessage($0)
-        }
-    )
+@MainActor public func makeAppCore() -> Core {
+    makeCore()
 }

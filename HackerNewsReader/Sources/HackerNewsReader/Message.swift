@@ -4,10 +4,11 @@ import Foundation
 /// half of the Elm-shaped pair (``Command`` is outbound). Named for
 /// Elm's `Msg`, expanded to a full word.
 ///
-/// Both platforms route through the ``SendMessageAction`` returned
-/// inside ``UICore``: iOS reads it via `@Environment(\.sendMessage)`
-/// and calls `sendMessage(.toggleRead(id:))`; Android holds the
-/// handle on `Application` and calls `core.sendMessage.send(...)`.
+/// Both platforms build a ``SendMessageAction`` from the ``Core``
+/// (`SendMessageAction(core)`): iOS installs it via
+/// `@Environment(\.sendMessage)` and calls `sendMessage(.toggleRead(id:))`;
+/// Android holds the `Core` on `Application` and calls
+/// `sendMessage.send(...)`.
 // SKIP @bridge
 public enum Message: Sendable, Equatable {
     case toggleRead(id: String)

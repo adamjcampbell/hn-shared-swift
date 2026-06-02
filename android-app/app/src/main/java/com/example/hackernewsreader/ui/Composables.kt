@@ -53,6 +53,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import hacker.news.reader.Command
+import hacker.news.reader.Core
 import hacker.news.reader.LoadStatus
 import hacker.news.reader.LoadedStories
 import hacker.news.reader.Message
@@ -60,7 +61,6 @@ import hacker.news.reader.Model
 import hacker.news.reader.SendMessageAction
 import hacker.news.reader.StoryRow
 import hacker.news.reader.Strings
-import hacker.news.reader.UICore
 import kotlinx.coroutines.launch
 
 private val LocalSendMessage = staticCompositionLocalOf<SendMessageAction> {
@@ -69,10 +69,13 @@ private val LocalSendMessage = staticCompositionLocalOf<SendMessageAction> {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StoryScreen(core: UICore) {
+fun StoryScreen(core: Core) {
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
-    val sendMessage = core.sendMessage
+    // Built once from the process-lifetime `core`: `staticCompositionLocalOf`
+    // propagates on peer-object identity, so a fresh instance per recomposition
+    // would recompose the whole subtree.
+    val sendMessage = remember(core) { SendMessageAction(core) }
 
     LaunchedEffect(Unit) { sendMessage.send(Message.refresh) }
 

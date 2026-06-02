@@ -1,18 +1,18 @@
 package com.example.hackernewsreader
 
 import android.app.Application
-import hacker.news.reader.UICore
-import hacker.news.reader.makeUICore
+import hacker.news.reader.Core
+import hacker.news.reader.makeAppCore
 import skip.foundation.ProcessInfo
 
-/** `UICore` lives in Application scope so its model and task registry survive Activity recreation. */
+/** `Core` lives in Application scope so its model and task registry survive Activity recreation. */
 class App : Application() {
-    lateinit var core: UICore
+    lateinit var core: Core
         private set
 
     override fun onCreate() {
         super.onCreate()
         ProcessInfo.launch(applicationContext)
-        core = makeUICore()
+        core = makeAppCore()
     }
 }

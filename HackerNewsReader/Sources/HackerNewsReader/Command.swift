@@ -6,7 +6,7 @@ import Foundation
 /// iOS, a Chrome Custom Tab on Android) whose lifetime doesn't
 /// belong in ``Model``.
 ///
-/// Delivered through ``UICore/commands``. iOS consumes it with
+/// Delivered through ``Core/commands``. iOS consumes it with
 /// `for await` from a long-lived `.task`; Android collects via
 /// `core.commands.kotlin().collect { ... }` (SkipFuse bridges
 /// `AsyncStream<T>` to `Flow<T>`).
