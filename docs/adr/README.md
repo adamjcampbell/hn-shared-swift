@@ -35,6 +35,7 @@ the old.
 | 0018 | [Localized strings via `Localizable.xcstrings` + a generated `Strings` accessor](0018-localized-strings-catalog-generator.md) | 2026-05-21 | Accepted                                                                        |
 | 0019 | [Core from isolation-threaded free functions; vend one `Core`, compose `SendMessageAction` at the app boundary](0019-core-free-functions-uicore-split.md) | 2026-06-01 | Accepted (rev. 2026-06-02)                                                      |
 | 0020 | [Ambient `Dependencies` struct; read `date`/`client`/`clock` at the call site](0020-ambient-dependencies-struct.md) | 2026-06-01 | Accepted                                                                        |
+| 0021 | [Bind isolation once into a spawn-owning `TaskRegistry`; drop the threaded `isolated` parameters](0021-spawn-owning-task-registry.md) | 2026-06-12 | Proposed                                                                        |
 
 ADRs 0001–0003, 0005, 0006, 0013, 0014, and 0017–0020 together describe the
 design as it stands today. ADRs 0004 and 0007–0012 are the hand-written-bridge
