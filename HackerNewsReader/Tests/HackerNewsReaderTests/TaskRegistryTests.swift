@@ -1,6 +1,8 @@
 import Clocks
 import Foundation
+import Observation
 import Testing
+import os
 @testable import HackerNewsReader
 
 /// `@MainActor` so `#isolation` in ``makeRegistry(isolation:)`` binds the
@@ -105,6 +107,26 @@ struct TaskRegistryTests {
         #expect(taskA.isCancelled)
         #expect(!taskB.isCancelled)
         #expect(!replacementA.isCancelled)
+    }
+
+    @Test("registration and self-removal are observable through the subscript")
+    func mutationsAreObservable() async {
+        let registry = makeRegistry()
+
+        let fired = OSAllocatedUnfairLock(initialState: false)
+        withObservationTracking {
+            _ = registry[.a]
+        } onChange: {
+            fired.withLock { $0 = true }
+        }
+
+        let task = registry.run(.a) {}
+        #expect(fired.withLock { $0 })
+        #expect(registry[.a] == task)
+
+        // Completion vacates the slot — the transition `waitUntil` rides on.
+        await task.value
+        #expect(registry[.a] == nil)
     }
 
     @Test("cancelAll cancels every in-flight task")

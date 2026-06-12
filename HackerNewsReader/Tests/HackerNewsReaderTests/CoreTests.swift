@@ -268,16 +268,22 @@ struct CoreTests {
             ),
             clock: clock
         ) { actor, core in
-            await settle(actor)
             core.model.searchQuery = "ru"
-            await settle(actor)
+            await waitUntil { core.tasks[.search] != nil }
+            // Drain the spawned fetch to its debounce sleep so advance lands on it.
+            await actor.runPending()
             await clock.advance(by: Core.searchDebounce)
-            await settle(actor)
+            // Drain the resumed fetch into the mock, where it parks on the hung sleep.
+            await actor.runPending()
 
+            let ruFetch = core.tasks[.search]
             core.model.searchQuery = "rust"
-            await settle(actor)
+            // The listener cancels "ru" mid-client-call (the URLError path
+            // under test) and registers the replacement fetch.
+            await waitUntil { core.tasks[.search] != ruFetch }
+            await actor.runPending()
             await clock.advance(by: Core.searchDebounce)
-            await settle(actor)
+            await waitUntil { core.model.searchLoaded != nil }
 
             let model = core.model
             #expect(model.searchInitialStatus.error == nil)
@@ -392,18 +398,25 @@ struct CoreTests {
             ),
             clock: clock
         ) { actor, core in
-            // Let the listener suspend on `for await` before the first write.
-            await settle(actor)
-
+            // Waiting on the registry after each write proves the listener
+            // processed that keystroke before the next lands — replacing the
+            // earlier `settle` drains. `Task` equality makes each
+            // cancel-and-replace an assertable transition, not a hope.
             core.model.searchQuery = "r"
-            await settle(actor)
-            core.model.searchQuery = "ru"
-            await settle(actor)
-            core.model.searchQuery = "rust"
-            await settle(actor)
+            await waitUntil { core.tasks[.search] != nil }
 
+            let rFetch = core.tasks[.search]
+            core.model.searchQuery = "ru"
+            await waitUntil { core.tasks[.search] != rFetch }
+
+            let ruFetch = core.tasks[.search]
+            core.model.searchQuery = "rust"
+            await waitUntil { core.tasks[.search] != ruFetch }
+
+            // Drain the surviving fetch to its debounce sleep so advance lands on it.
+            await actor.runPending()
             await clock.advance(by: Core.searchDebounce)
-            await settle(actor)
+            await waitUntil { core.model.searchLoaded != nil }
 
             let recorded = calls.searchCalls
             #expect(recorded.map(\.0) == ["rust"])

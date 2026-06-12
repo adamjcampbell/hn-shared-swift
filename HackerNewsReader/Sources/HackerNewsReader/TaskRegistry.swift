@@ -1,3 +1,5 @@
+import Observation
+
 /// Keyed store of in-flight `Task`s that also owns the ability to spawn
 /// them.
 ///
@@ -12,6 +14,14 @@
 /// replacement that has since taken it over. That self-removal is what
 /// keeps ``run(_:strategy:work:)``'s `.joinInFlight` honest: an id with
 /// an entry is an id with live work.
+///
+/// `@Observable` so membership is a watchable signal: tests read
+/// ``subscript(_:)`` inside `withObservationTracking` (via `waitUntil`)
+/// and wait for a task to be registered, replaced (`Task` is
+/// `Equatable`, so identity comparison detects cancel-and-replace), or
+/// removed — instead of draining the actor's queue a guessed number of
+/// times.
+@Observable
 final class TaskRegistry<ID: Hashable> {
     /// What ``run(_:strategy:work:)`` does when the id already has an
     /// in-flight task.
@@ -26,7 +36,16 @@ final class TaskRegistry<ID: Hashable> {
     }
 
     private var entries: [ID: Task<Void, Never>] = [:]
-    private let spawn: (@escaping () async -> Void) -> Task<Void, Never>
+    @ObservationIgnored private let spawn: (@escaping () async -> Void) -> Task<Void, Never>
+
+    /// The in-flight task for `id`, or `nil` when the slot is vacant.
+    /// Read-only — mutation goes through ``run(_:strategy:work:)`` /
+    /// ``cancel(_:)`` so the spawn and self-removal bookkeeping can't be
+    /// bypassed. An observable read: `waitUntil { tasks[.search] != before }`
+    /// suspends until the slot's occupant changes.
+    subscript(id: ID) -> Task<Void, Never>? {
+        entries[id]
+    }
 
     /// - Parameter spawn: Creates the `Task` for each ``run(_:strategy:work:)``.
     ///   Must enqueue onto the host actor rather than run `work` inline —

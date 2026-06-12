@@ -43,10 +43,12 @@ func withCore<R>(
 }
 
 /// Suspends until `condition` holds, re-arming `withObservationTracking`
-/// on whatever `Model` properties it reads — so a test waits on the
-/// actual observable transition (a status flips, a `LoadedStories`
-/// populates or clears) instead of guessing how many `runPending()`
-/// drains it takes.
+/// on whatever observable properties it reads — `Model` fields (a status
+/// flips, a `LoadedStories` populates or clears) or `core.tasks` slots
+/// (a fetch is registered, replaced, or removed; `Task` is `Equatable`,
+/// so `tasks[.search] != before` waits for a cancel-and-replace) — so a
+/// test waits on the actual transition instead of guessing how many
+/// `runPending()` drains it takes.
 ///
 /// `onChange` fires in the mutation's `willSet`, but the resumed
 /// continuation runs after the mutation completes (FIFO on the
@@ -59,17 +61,4 @@ func waitUntil(isolation: isolated any Actor = #isolation, _ condition: () -> Bo
             withObservationTracking { _ = condition() } onChange: { continuation.resume() }
         }
     }
-}
-
-/// Drains the actor's queue twice — the synchronisation of last resort
-/// for the few steps with no observable transition to ``waitUntil(isolation:_:)``
-/// on: a listener processing a keystroke that leaves `Model` unchanged
-/// (`isLoading` already true), or a cancel-and-replace through parked
-/// sleeps. A `model.searchQuery` write resumes the listener as a new job
-/// behind the one already running, so a single `runPending()` can return
-/// before it runs; the second drain runs it. Prefer ``waitUntil(isolation:_:)``
-/// wherever there is a state change to wait on.
-func settle(_ isolation: isolated TestActor) async {
-    await isolation.runPending()
-    await isolation.runPending()
 }

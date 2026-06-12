@@ -51,6 +51,15 @@ public struct Core {
     // SKIP @nobridge
     let cancelAll: () -> Void
 
+    /// The registry behind the handle. `internal` for tests, which
+    /// observe it (`@Observable`) to wait for fetch work being
+    /// registered, replaced, or removed — a synchronisation signal for
+    /// steps that leave ``Model`` unchanged. Production code never
+    /// touches it; the registry is non-`Sendable`, so any caller is
+    /// confined to the host region like ``sendMessage``'s.
+    // SKIP @nobridge
+    let tasks: TaskRegistry<TaskID>
+
     /// Debounce window between a `model.searchQuery` write and the
     /// resulting search fetch.
     // SKIP @nobridge
@@ -107,7 +116,8 @@ func makeCore(
                 tasks: tasks
             )?.value
         },
-        cancelAll: { tasks.cancelAll() }
+        cancelAll: { tasks.cancelAll() },
+        tasks: tasks
     )
 }
 
