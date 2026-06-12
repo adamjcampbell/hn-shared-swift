@@ -12,7 +12,7 @@ After ADR-0021 every one of those invisible steps does leave a trace — in the 
 
 ## Decision
 
-**`TaskRegistry` is `@Observable`.** Its `entries` dictionary is the tracked state (the `spawn` closure is `@ObservationIgnored`); a read-only `subscript(id:) -> Task<Void, Never>?` is the observable read. Mutation stays behind `run` / `cancel` / `cancelAll`, so the spawn and self-removal bookkeeping cannot be bypassed.
+**`TaskRegistry` is `@Observable`.** Its `entries` dictionary is the tracked state; a read-only `subscript(id:) -> Task<Void, Never>?` is the observable read. Mutation stays behind `replace` / `vacate` / `cancel` / `cancelAll` (the post-revision ADR-0021 surface), so the registration and self-removal bookkeeping cannot be bypassed.
 
 **`Core` exposes the registry as `internal // SKIP @nobridge let tasks`** — the same visibility treatment as `sendMessage` and `cancelAll`: tests in-module reach it, app code and JNI never see it, and its non-`Sendability` confines any caller to the host region.
 
@@ -34,7 +34,16 @@ After ADR-0021 every one of those invisible steps does leave a trace — in the 
 
 ## Alternatives considered
 
-**An `AsyncStream` of registry events (`added` / `replaced` / `removed`).** Mirrors `Model.searchQueryChanges`, and would carry payloads (which id, which task). Rejected: it is a second eventing system beside Observation for the same information, consumers must manage iterator lifetimes per test, and `waitUntil` condition-polling already expresses every wait the suite needs — including identity comparisons the event payload would have to re-encode.
+**An `AsyncStream` of spawn emissions instead of `@Observable`** (investigated in depth 2026-06-12, probe-verified). The registry yields `(id, task)` through a lazily-created continuation — `spawnsContinuation?.yield(…)` — so production, which never asks for the stream, pays one nil check per `run` and no observation registrar. A receiver gets each spawned task delivered directly, in order, exactly once: a real spawn *log*, which is the one thing observation cannot reconstruct (a state read can miss intermediate occupants; an emission cannot be missed). The probe confirmed the shape compiles and behaves on stable features.
+
+Rejected nonetheless, on fit rather than mechanics:
+
+- *State questions outnumber event questions.* The registry's own tests assert "the slot is vacant after completion", "the joined task **is** the in-flight one", "the survivor is not cancelled" — present-tense reads a log cannot answer without the consumer replaying it into state, which is the subscript reinvented.
+- *One idiom.* `waitUntil` over an observable read covers `Model` and registry with the same mechanism and the same FIFO-resume reasoning; a stream reintroduces a second synchronisation idiom (iterator lifecycle, created-before-trigger or buffered-with-history, one consumer per stream) for one test's benefit — after ADR-0023, only the keystroke-collapse test waits on registry transitions at all.
+- *The first emission is the listener.* `makeCore` registers `.searchListener` through the same path as every fetch, so every consumer starts by filtering noise, or the registry grows an emission policy.
+- *Conditions self-heal; consumption doesn't.* The transient-nil subtlety found during the ADR-0023 conversion was fixed by strengthening a condition (`!= nil && != before`) — spurious wake-ups re-arm for free. A log consumer confronted with an unexpected emission needs protocol, not a stronger predicate.
+
+The criteria that would flip this: tests start asserting spawn order or counts across ids (the log is then the honest signal), or production grows a consumer for in-flight events. The lazy-continuation pattern is recorded here for that day.
 
 **Exposing the `entries` dictionary directly.** Smaller diff, but hands tests (and future in-module code) a mutable path around `run`'s cancel/replace/self-removal bookkeeping. The get-only subscript keeps the write surface where the invariants live.
 

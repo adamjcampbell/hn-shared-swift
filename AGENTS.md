@@ -154,37 +154,39 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 
 ## Concurrency & testing
 
-- `clock` / `client` / `date` are ambient via the `@TaskLocal`
+- `searchDebounce` / `client` / `date` are ambient via the `@TaskLocal`
   `Dependencies`, not injected into a type. Production reads the live
-  defaults (`ContinuousClock()`, `Client()`, `Date()`); `withCore`
-  defaults `clock` to `ImmediateClock()`. Reach for `TestClock` only
-  when asserting on debounce timing, and pass the same clock to
-  `commitSearch(_:core:clock:isolation:)`.
+  defaults (250 ms, `Client()`, `Date()`); `withCore` defaults
+  `debounce` to `.zero` so a search runs straight through to commit.
+  There is no clock dependency and no `TestClock`: tests control time
+  by controlling the *amount* — pass `debounceNeverElapses` to hold the
+  debounce window open and assert mid-window behaviour (the parked
+  sleep releases via cancellation on fixture exit).
 - `TestActor` installs a `DispatchSerialQueue` as `unownedExecutor`.
   `withCore` is isolated to a fresh `TestActor`, so `makeCore`'s
   `#isolation` binds there; the body receives that actor as its first
   parameter, no force-cast needed.
-- `await waitUntil { <cond> }` is the only synchronisation: it re-arms
-  `withObservationTracking` and waits on a real observable transition —
-  a `Model` field (a status flips, a `LoadedStories` populates or
-  clears) or a `core.tasks` registry slot (`TaskRegistry` is
-  `@Observable`; `Task` is `Equatable`, so
-  `core.tasks[.search] != before` waits for a cancel-and-replace, and
-  `!= nil` for the listener registering a fetch). There is no `settle`;
-  registry observation replaced it. `TestActor.runPending()` is a single
-  drain, used only where the needed signal is execution progress the
-  registry can't see (parking a fetch on its `clock.sleep` before
-  `advance`), with a comment naming the reason.
-- Use `try` (not `try?`) on `clock.sleep` so cancellation propagates;
-  swallowing it lets cancelled tasks fall through to the live fetch.
+- `await waitUntil { <cond> }` is the default synchronisation: it
+  re-arms `withObservationTracking` and waits on a real observable
+  transition — a `Model` field (a status flips, a `LoadedStories`
+  populates or clears) or a `core.tasks` registry slot (`TaskRegistry`
+  is `@Observable`; `Task` is `Equatable`). For a cancel-and-replace,
+  the condition is "a different task is registered":
+  `core.tasks[.search] != nil && core.tasks[.search] != before` — a
+  cancelled fetch self-removes on its own schedule, so `!= before`
+  alone can return on a transiently empty slot. There is no `settle`
+  and no `runPending`; nothing drains queues by count.
+- To interrupt a fetch mid-call, park the mock on a `Gate`: the mock
+  `await`s `gate.arrive()` (signals, then parks), the test `await`s
+  `gate.arrival()` to know the fetch is inside the client, then
+  triggers the interruption. The park releases on cancellation; check
+  `Task.isCancelled` / `Task.checkCancellation()` after `arrive()`
+  to surface it the way the transport would.
 - No `core.run` batching: the `withCore` body is one isolated scope, so
   write reads and `await core.sendMessage(...)` flat. Split only across
-  real suspension boundaries (`waitUntil`, `clock.advance`,
-  `runPending`, `Task.value`, `iterator.next`). Alias
-  `let model = core.model` at the top.
-- Park mocks with `try await clock.sleep(for: .seconds(Int.max))`.
-  `.infinity` / `.greatestFiniteMagnitude` compile but trap (Double →
-  Int128).
+  real suspension boundaries (`waitUntil`, `gate.arrival`,
+  `Task.value`, `iterator.next`). Alias `let model = core.model` at
+  the top.
 - Wrap test setup in `withCore { actor, core in … }`. It binds
   `Dependencies.$current.withValue(...)` and runs `makeCore` inside that
   binding, so the listener `Task` and every fetch inherit the pinned
