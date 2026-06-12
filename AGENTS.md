@@ -164,22 +164,24 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   `withCore` is isolated to a fresh `TestActor`, so `makeCore`'s
   `#isolation` binds there; the body receives that actor as its first
   parameter, no force-cast needed.
-- `await waitUntil { core.model.<cond> }` is the default
-  synchronisation: it re-arms `withObservationTracking` and waits on the
-  real observable transition (a status flips, a `LoadedStories`
-  populates or clears). `settle(_:)` drains the actor's queue twice for
-  the few steps with no transition to wait on (a keystroke that leaves
-  `Model` unchanged, a cancel-and-replace through parked sleeps); it is
-  the last resort. `TestActor.runPending()` is the underlying single
-  drain, used directly only where a drain is irreducible (e.g. parking a
-  fetch on its `clock.sleep` before `advance`).
+- `await waitUntil { <cond> }` is the only synchronisation: it re-arms
+  `withObservationTracking` and waits on a real observable transition —
+  a `Model` field (a status flips, a `LoadedStories` populates or
+  clears) or a `core.tasks` registry slot (`TaskRegistry` is
+  `@Observable`; `Task` is `Equatable`, so
+  `core.tasks[.search] != before` waits for a cancel-and-replace, and
+  `!= nil` for the listener registering a fetch). There is no `settle`;
+  registry observation replaced it. `TestActor.runPending()` is a single
+  drain, used only where the needed signal is execution progress the
+  registry can't see (parking a fetch on its `clock.sleep` before
+  `advance`), with a comment naming the reason.
 - Use `try` (not `try?`) on `clock.sleep` so cancellation propagates;
   swallowing it lets cancelled tasks fall through to the live fetch.
 - No `core.run` batching: the `withCore` body is one isolated scope, so
   write reads and `await core.sendMessage(...)` flat. Split only across
-  real suspension boundaries (`waitUntil` / `settle`, `clock.advance`,
-  `Task.value`, `iterator.next`). Alias `let model = core.model` at the
-  top.
+  real suspension boundaries (`waitUntil`, `clock.advance`,
+  `runPending`, `Task.value`, `iterator.next`). Alias
+  `let model = core.model` at the top.
 - Park mocks with `try await clock.sleep(for: .seconds(Int.max))`.
   `.infinity` / `.greatestFiniteMagnitude` compile but trap (Double →
   Int128).

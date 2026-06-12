@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-06-12). Amends [ADR-0019](0019-core-free-functions-uicore-split.md): replaces the isolation-threaded free-function composition with a registry that owns task creation. ADR-0019's other decisions — one isolation-generic `Core` handle, the `@MainActor` `SendMessageAction` boundary, free functions as the sole `Model` writers — stand unchanged.
+Accepted (2026-06-12). Amends [ADR-0019](0019-core-free-functions-uicore-split.md): replaces the isolation-threaded free-function composition with a registry that owns task creation. ADR-0019's other decisions — one isolation-generic `Core` handle, the `@MainActor` `SendMessageAction` boundary, free functions as the sole `Model` writers — stand unchanged.
 
 ## Context
 
