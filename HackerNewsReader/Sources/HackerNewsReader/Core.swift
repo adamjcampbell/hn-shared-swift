@@ -16,9 +16,9 @@ enum TaskID { case feed, feedMore, search, searchMore, searchListener }
 /// hook. One `Core` serves every consumer — `MainActor` production (built
 /// via ``makeAppCore``) and `TestActor` tests (built via ``makeCore``).
 ///
-/// ``makeCore`` binds its `isolation` parameter into the ``TaskRegistry``'s
-/// spawn closure, so the host actor owns every mutation. ``Model`` is
-/// non-`Sendable` and never leaves that region. Production wraps
+/// ``makeCore`` threads its `isolation` parameter through the message
+/// handlers into the ``TaskRegistry``, so the host actor owns every
+/// mutation. ``Model`` is non-`Sendable` and never leaves that region. Production wraps
 /// ``sendMessage`` in a `@MainActor` ``SendMessageAction`` at the app
 /// boundary (`SendMessageAction(core)`); only ``model`` and ``commands``
 /// cross JNI.
@@ -40,7 +40,7 @@ public struct Core {
     /// directly on their `TestActor`. Concurrent UI entry points (a
     /// fire-and-forget tap plus a `.refreshable`) serialise at that
     /// `@MainActor` boundary; the synchronous
-    /// ``apply(_:to:commands:tasks:)`` keeps each handler's
+    /// ``apply(_:to:commands:tasks:isolation:)`` keeps each handler's
     /// read-modify-write atomic against actor reentrancy.
     // SKIP @nobridge
     let sendMessage: (Message) async -> Void
@@ -59,24 +59,22 @@ public struct Core {
     /// confined to the host region like ``sendMessage``'s.
     // SKIP @nobridge
     let tasks: TaskRegistry<TaskID>
-
-    /// Debounce window between a `model.searchQuery` write and the
-    /// resulting search fetch.
-    // SKIP @nobridge
-    static let searchDebounce: Duration = .milliseconds(250)
 }
 
 /// Composes the core: builds the command stream and the task registry,
 /// spawns the search listener, and returns the ``Core`` handle.
 ///
-/// `isolation` appears here and nowhere else. It is bound once, into the
-/// registry's spawn closure: the spawned `Task` references the isolated
-/// parameter (`_ = isolation`) so it captures it and runs on the host
-/// actor — without that reference a `Task` infers `@concurrent` and
-/// fails to compile against the non-`Sendable` captures. Every other
-/// function in this file is synchronous (runs where it is called) or
-/// `nonisolated(nonsending)` async (runs on its caller's actor), and all
-/// callers trace back to this region, so no further threading is needed.
+/// `isolation` is threaded from here through
+/// ``apply(_:to:commands:tasks:isolation:)`` into ``load``, where each
+/// fetch's `Task` literal captures it and spawns on the host actor.
+/// The threading — and keeping every suspending body *textually inside*
+/// such a literal — is load-bearing: a suspending closure passed as a
+/// value can resume off the host actor after an internal `await`, even
+/// when it captures the isolated parameter (observed on Swift 6.3.1,
+/// surfaced by TSan as off-actor `Model` and registry writes plus a
+/// lost `withObservationTracking` wake-up). Only code written directly
+/// in an isolated function's capturing `Task` literal stays reliably
+/// pinned across suspensions.
 ///
 /// The listener, the send closure, and `cancelAll` all capture the one
 /// ``TaskRegistry``; the registry, the `Model`, and both closures are
@@ -87,28 +85,36 @@ public struct Core {
 ///   - model: The observable state; defaults to a fresh ``Model``.
 /// - Returns: The ``Core`` handle.
 func makeCore(
-    model: sending Model = Model(),
+    model: Model = Model(),
     isolation: isolated any Actor = #isolation
 ) -> Core {
     let state = model
     let (commands, commandsContinuation) = AsyncStream<Command>.makeStream()
-    let tasks = TaskRegistry<TaskID> { work in
-        Task {
-            _ = isolation
-            await work()
-        }
-    }
+    let tasks = TaskRegistry<TaskID>()
 
-    tasks.run(.searchListener) {
+    // A direct `Task` literal, not a closure handed to the registry: the
+    // literal captures the isolated parameter, which is what pins each
+    // `for await` resumption — and the `applySearchQuery` writes — to
+    // the host actor. The same code passed to the registry as a work
+    // closure resumed on the global executor after `next()`, racing
+    // every Model and registry access (TSan).
+    tasks.replace(.searchListener, with: Task {
+        _ = isolation
+
         for await query in state.searchQueryChanges {
             applySearchQuery(query, to: state, tasks: tasks)
         }
-    }
+    })
 
     return Core(
         model: state,
         commands: commands,
         sendMessage: { message in
+            // Pins this closure to the host actor and resolves `#isolation`
+            // inside `apply` to it; a closure that dropped this would pass
+            // `nil` to apply's isolated parameter.
+            _ = isolation
+
             await apply(
                 message,
                 to: state,
@@ -139,8 +145,8 @@ func makeCore(
 ///   - message: The message to apply.
 ///   - state: The model to mutate.
 ///   - commands: Continuation for one-shot UI commands.
-///   - tasks: Registry that spawns the fetch work and owns its
-///     cancellation.
+///   - tasks: Registry that tracks the in-flight fetch work and owns
+///     its cancellation.
 /// - Returns: The spawned fetch `Task` for `.refresh` / `.loadMore`
 ///   (so `.refreshable` can hold its spinner), `nil` otherwise.
 @discardableResult
@@ -148,7 +154,8 @@ func apply(
     _ message: Message,
     to state: Model,
     commands: AsyncStream<Command>.Continuation,
-    tasks: TaskRegistry<TaskID>
+    tasks: TaskRegistry<TaskID>,
+    isolation: isolated any Actor = #isolation
 ) -> Task<Void, Never>? {
     switch message {
 
@@ -213,7 +220,7 @@ func apply(
 /// on an empty query, otherwise marks loading and spawns the search
 /// fetch into the registry's `.search` slot.
 ///
-/// Synchronous for the same reason as ``apply(_:to:commands:tasks:)``:
+/// Synchronous for the same reason as ``apply(_:to:commands:tasks:isolation:)``:
 /// the listener invokes it inside its `for await` loop, so the
 /// read-modify-write must not span a suspension.
 ///
@@ -225,7 +232,8 @@ func apply(
 func applySearchQuery(
     _ query: String,
     to state: Model,
-    tasks: TaskRegistry<TaskID>
+    tasks: TaskRegistry<TaskID>,
+    isolation: isolated any Actor = #isolation
 ) {
     if query.isEmpty {
         tasks.cancel(.search)
@@ -247,7 +255,7 @@ func applySearchQuery(
 
     load(
         .search, into: state, status: \.searchInitialStatus, tasks: tasks,
-        debounce: Core.searchDebounce
+        debounce: Dependencies.current.searchDebounce
     ) {
         try await $0.search(query, 0)
     } commit: { page, ids in
@@ -259,10 +267,11 @@ func applySearchQuery(
 
 /// Sleeps for `debounce` (if set), then runs `body`.
 ///
-/// `nonisolated(nonsending)`, so the debounce sleep and its post-sleep
-/// continuation resume on the calling task's actor — tests drive a
-/// `TestClock` and drain the actor's queue deterministically, which only
-/// works because the sleeper resumes there.
+/// `nonisolated(nonsending)`, so the post-sleep continuation resumes on
+/// the calling task's actor. The sleep rides the real clock; tests
+/// control it through the ambient `Dependencies.searchDebounce` amount
+/// (`.zero` to run straight through, huge to hold the window open)
+/// rather than a fake clock.
 ///
 /// - Parameters:
 ///   - debounce: Delay before invoking `body`, or `nil` for none.
@@ -278,7 +287,7 @@ func fetch(
     body: @Sendable (Client) async throws -> Page
 ) async throws -> Page {
     if let debounce {
-        try await Dependencies.current.clock.sleep(for: debounce)
+        try await Task.sleep(for: debounce)
     }
     try Task.checkCancellation()
     do {
@@ -300,7 +309,8 @@ func fetch(
 ///   - state: The model to mutate.
 ///   - status: Key path to the `LoadStatus` field carrying this load's
 ///     success/failure.
-///   - tasks: Registry that spawns the work onto the host actor.
+///   - tasks: Registry that tracks the in-flight load and owns its
+///     cancellation.
 ///   - debounce: Delay before the fetch, or `nil`.
 ///   - request: Issues the page fetch.
 ///   - commit: Records the fetched page (and its story ids) into `state`
@@ -314,10 +324,18 @@ func load(
     status: ReferenceWritableKeyPath<Model, LoadStatus>,
     tasks: TaskRegistry<TaskID>,
     debounce: Duration? = nil,
+    isolation: isolated any Actor = #isolation,
     request: @escaping @Sendable (Client) async throws -> Page,
     commit: @escaping (Page, [String]) -> Void
 ) -> Task<Void, Never> {
-    tasks.run(id) {
+    var handle: Task<Void, Never>?
+    // The whole load lives in this literal: it captures the isolated
+    // parameter, so the post-fetch continuation — the entity merge,
+    // `commit`, the status write, and the vacate — stays pinned to the
+    // host actor. `handle` is assigned before the enqueued body can run.
+    let task = Task {
+        _ = isolation
+
         do {
             let page = try await fetch(debounce: debounce, body: request)
             try Task.checkCancellation()
@@ -328,7 +346,11 @@ func load(
         } catch {
             state[keyPath: status].finishFailure(error.localizedDescription)
         }
+        tasks.vacate(id, ifStill: handle)
     }
+    handle = task
+    tasks.replace(id, with: task)
+    return task
 }
 
 // MARK: - Production entry (@MainActor, bridged)
