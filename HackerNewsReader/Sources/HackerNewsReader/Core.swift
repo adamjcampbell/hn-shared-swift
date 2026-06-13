@@ -92,13 +92,10 @@ func makeCore(
     let (commands, commandsContinuation) = AsyncStream<Command>.makeStream()
     let tasks = TaskRegistry<TaskID>()
 
-    // A direct `Task` literal, not a closure handed to the registry: the
-    // literal captures the isolated parameter, which is what pins each
-    // `for await` resumption — and the `applySearchQuery` writes — to
-    // the host actor. The same code passed to the registry as a work
-    // closure resumed on the global executor after `next()`, racing
-    // every Model and registry access (TSan).
-    tasks.replace(.searchListener, with: Task {
+    // PROBE: laundered work — the @isolated(any) value carries this
+    // function's isolation, so the registry's Task(operation:) runs and
+    // resumes the for-await on the host actor.
+    tasks.run(.searchListener, launder {
         _ = isolation
 
         for await query in state.searchQueryChanges {
@@ -328,12 +325,14 @@ func load(
     request: @escaping @Sendable (Client) async throws -> Page,
     commit: @escaping (Page, [String]) -> Void
 ) -> Task<Void, Never> {
-    var handle: Task<Void, Never>?
-    // The whole load lives in this literal: it captures the isolated
-    // parameter, so the post-fetch continuation — the entity merge,
-    // `commit`, the status write, and the vacate — stays pinned to the
-    // host actor. `handle` is assigned before the enqueued body can run.
-    let task = Task {
+    // PROBE: laundered work. The value carries `isolation`, so the whole
+    // body — including the post-fetch continuation and the vacate —
+    // runs on the host actor regardless of where the registry spawns it.
+    // The box (not a captured var) carries the handle into the tail
+    // without a mutated-after-Sendable-capture warning.
+    final class Handle { var task: Task<Void, Never>? }
+    let handle = Handle()
+    let task = tasks.run(id, launder {
         _ = isolation
 
         do {
@@ -346,10 +345,9 @@ func load(
         } catch {
             state[keyPath: status].finishFailure(error.localizedDescription)
         }
-        tasks.vacate(id, ifStill: handle)
-    }
-    handle = task
-    tasks.replace(id, with: task)
+        tasks.vacate(id, ifStill: handle.task)
+    })
+    handle.task = task
     return task
 }
 

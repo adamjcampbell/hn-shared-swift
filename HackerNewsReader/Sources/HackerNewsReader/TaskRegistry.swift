@@ -54,6 +54,22 @@ final class TaskRegistry<ID: Hashable> {
         entries[id] = task
     }
 
+    /// PROBE: spawns laundered work as the in-flight task for `id`
+    /// (latest-wins). The registry needs no isolation of its own — the
+    /// `@isolated(any)` value carries its executor, and `Task(operation:)`
+    /// enqueues on it (SE-0431). The work's tail should call
+    /// ``vacate(_:ifStill:)`` with the returned task.
+    @discardableResult
+    func run(
+        _ id: ID,
+        _ work: @Sendable @escaping @isolated(any) () async -> Void
+    ) -> Task<Void, Never> {
+        entries[id]?.cancel()
+        let task = Task(operation: work)
+        entries[id] = task
+        return task
+    }
+
     /// Vacates `id` if `task` is still its occupant. Call from the
     /// finishing task's own synchronous tail; the identity guard makes a
     /// replaced task finishing late leave its replacement's slot alone.
