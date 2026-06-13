@@ -4,45 +4,47 @@ import Testing
 import os
 @testable import HackerNewsReader
 
-/// `@MainActor` so the suite's `Task` literals — and the registry, whose
-/// confinement rests on non-`Sendability` — share one actor, mirroring
-/// how `makeCore` confines production.
+/// `@MainActor` so `inheritingIsolation` literals inherit the suite's
+/// actor — and the registry, whose confinement rests on
+/// non-`Sendability`, shares it — mirroring how `makeCore` confines
+/// production.
 @Suite("TaskRegistry")
 @MainActor
 struct TaskRegistryTests {
 
     private enum ID: Hashable { case a, b }
 
-    /// Parks until cancelled: the sleep never elapses within a test's
-    /// lifetime, and cancellation throws it out.
-    private func parked() -> Task<Void, Never> {
-        Task { try? await Task.sleep(for: debounceNeverElapses) }
+    /// Installs work that parks until cancelled: the sleep never elapses
+    /// within a test's lifetime, and cancellation throws it out.
+    @discardableResult
+    private func runParked(_ id: ID, in registry: TaskRegistry<ID>) -> Task<Void, Never> {
+        registry.run(id, inheritingIsolation {
+            try? await Task.sleep(for: debounceNeverElapses)
+        })
     }
 
-    /// Mirrors `load`'s spawn shape: the task vacates its own slot from
-    /// its synchronous tail, identity-guarded.
-    private func selfVacating(
+    /// Mirrors `load`'s shape: the work's tail vacates its own slot,
+    /// identity-guarded, with the handle carried in a box.
+    private func runSelfVacating(
         _ id: ID, in registry: TaskRegistry<ID>,
         work: @escaping () async -> Void = {}
     ) -> Task<Void, Never> {
-        var handle: Task<Void, Never>?
-        let task = Task {
+        final class Handle { var task: Task<Void, Never>? }
+        let handle = Handle()
+        let task = registry.run(id, inheritingIsolation {
             await work()
-            registry.vacate(id, ifStill: handle)
-        }
-        handle = task
-        registry.replace(id, with: task)
+            registry.vacate(id, ifStill: handle.task)
+        })
+        handle.task = task
         return task
     }
 
-    @Test("replace cancels the in-flight task for the same id")
-    func replaceCancelsPrior() async {
+    @Test("run cancels the in-flight task for the same id")
+    func runCancelsPrior() async {
         let registry = TaskRegistry<ID>()
-        let first = parked()
-        registry.replace(.a, with: first)
+        let first = runParked(.a, in: registry)
 
-        let second = parked()
-        registry.replace(.a, with: second)
+        let second = runParked(.a, in: registry)
         defer { registry.cancelAll() }
 
         #expect(first.isCancelled)
@@ -52,8 +54,7 @@ struct TaskRegistryTests {
     @Test("the subscript exposes the in-flight task for joining")
     func subscriptExposesInFlightTask() async {
         let registry = TaskRegistry<ID>()
-        let task = parked()
-        registry.replace(.a, with: task)
+        let task = runParked(.a, in: registry)
         defer { registry.cancelAll() }
 
         // A caller wanting join-instead-of-duplicate awaits this.
@@ -64,7 +65,7 @@ struct TaskRegistryTests {
     @Test("a finished task vacates its slot, so a joiner would start fresh")
     func completionVacatesSlot() async {
         let registry = TaskRegistry<ID>()
-        let task = selfVacating(.a, in: registry)
+        let task = runSelfVacating(.a, in: registry)
 
         await task.value
 
@@ -74,11 +75,10 @@ struct TaskRegistryTests {
     @Test("a replaced task finishing late does not vacate the replacement's slot")
     func staleVacateDoesNotClobberReplacement() async {
         let registry = TaskRegistry<ID>()
-        let first = selfVacating(.a, in: registry) {
+        let first = runSelfVacating(.a, in: registry) {
             try? await Task.sleep(for: debounceNeverElapses)
         }
-        let second = parked()
-        registry.replace(.a, with: second)
+        let second = runParked(.a, in: registry)
         defer { registry.cancelAll() }
 
         // The cancelled first task unparks and runs its vacate against a
@@ -91,8 +91,7 @@ struct TaskRegistryTests {
     @Test("cancel cancels and removes the entry")
     func cancelCancelsAndRemoves() async {
         let registry = TaskRegistry<ID>()
-        let task = parked()
-        registry.replace(.a, with: task)
+        let task = runParked(.a, in: registry)
 
         registry.cancel(.a)
         await task.value
@@ -104,14 +103,11 @@ struct TaskRegistryTests {
     @Test("tasks for independent ids do not interfere")
     func independentIDsDontInterfere() async {
         let registry = TaskRegistry<ID>()
-        let taskA = parked()
-        let taskB = parked()
-        registry.replace(.a, with: taskA)
-        registry.replace(.b, with: taskB)
+        let taskA = runParked(.a, in: registry)
+        let taskB = runParked(.b, in: registry)
         defer { registry.cancelAll() }
 
-        let replacementA = parked()
-        registry.replace(.a, with: replacementA)
+        let replacementA = runParked(.a, in: registry)
 
         #expect(taskA.isCancelled)
         #expect(!taskB.isCancelled)
@@ -129,7 +125,7 @@ struct TaskRegistryTests {
             fired.withLock { $0 = true }
         }
 
-        let task = selfVacating(.a, in: registry)
+        let task = runSelfVacating(.a, in: registry)
         #expect(fired.withLock { $0 })
         #expect(registry[.a] == task)
 
@@ -141,10 +137,8 @@ struct TaskRegistryTests {
     @Test("cancelAll cancels every in-flight task")
     func cancelAllCancelsEverything() async {
         let registry = TaskRegistry<ID>()
-        let taskA = parked()
-        let taskB = parked()
-        registry.replace(.a, with: taskA)
-        registry.replace(.b, with: taskB)
+        let taskA = runParked(.a, in: registry)
+        let taskB = runParked(.b, in: registry)
 
         registry.cancelAll()
 

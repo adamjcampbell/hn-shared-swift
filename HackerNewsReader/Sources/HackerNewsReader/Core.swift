@@ -66,15 +66,15 @@ public struct Core {
 ///
 /// `isolation` is threaded from here through
 /// ``apply(_:to:commands:tasks:isolation:)`` into ``load``, where each
-/// fetch's `Task` literal captures it and spawns on the host actor.
-/// The threading — and keeping every suspending body *textually inside*
-/// such a literal — is load-bearing: a suspending closure passed as a
-/// value can resume off the host actor after an internal `await`, even
-/// when it captures the isolated parameter (observed on Swift 6.3.1,
-/// surfaced by TSan as off-actor `Model` and registry writes plus a
-/// lost `withObservationTracking` wake-up). Only code written directly
-/// in an isolated function's capturing `Task` literal stays reliably
-/// pinned across suspensions.
+/// work closure captures it (`_ = isolation`) and is wrapped in
+/// ``inheritingIsolation(_:)``: the resulting `@isolated(any)` value
+/// *carries* the host actor, and the registry's spawn enqueues on the
+/// carried isolation (SE-0431). The carriage is load-bearing — work
+/// typed `nonisolated(nonsending)` runs on its caller's isolation
+/// instead, and resumed off the host actor after internal suspensions
+/// when a calling chain lost its pin (Swift 6.3.1; off-actor `Model`
+/// and registry writes plus a lost `withObservationTracking` wake-up,
+/// recorded in ADR-0021/0024).
 ///
 /// The listener, the send closure, and `cancelAll` all capture the one
 /// ``TaskRegistry``; the registry, the `Model`, and both closures are
@@ -92,10 +92,10 @@ func makeCore(
     let (commands, commandsContinuation) = AsyncStream<Command>.makeStream()
     let tasks = TaskRegistry<TaskID>()
 
-    // PROBE: laundered work — the @isolated(any) value carries this
-    // function's isolation, so the registry's Task(operation:) runs and
-    // resumes the for-await on the host actor.
-    tasks.run(.searchListener, launder {
+    // The work value carries this function's isolation, so the
+    // registry's spawn runs — and resumes the `for await` — on the
+    // host actor.
+    tasks.run(.searchListener, inheritingIsolation {
         _ = isolation
 
         for await query in state.searchQueryChanges {
@@ -325,14 +325,14 @@ func load(
     request: @escaping @Sendable (Client) async throws -> Page,
     commit: @escaping (Page, [String]) -> Void
 ) -> Task<Void, Never> {
-    // PROBE: laundered work. The value carries `isolation`, so the whole
-    // body — including the post-fetch continuation and the vacate —
-    // runs on the host actor regardless of where the registry spawns it.
-    // The box (not a captured var) carries the handle into the tail
-    // without a mutated-after-Sendable-capture warning.
+    // The work value carries `isolation`, so the whole body — the
+    // post-fetch continuation, `commit`, the status write, and the
+    // vacate — runs on the host actor regardless of where the registry
+    // spawns it. The box (not a captured `var`) carries the handle into
+    // the tail without a mutated-after-`Sendable`-capture warning.
     final class Handle { var task: Task<Void, Never>? }
     let handle = Handle()
-    let task = tasks.run(id, launder {
+    let task = tasks.run(id, inheritingIsolation {
         _ = isolation
 
         do {

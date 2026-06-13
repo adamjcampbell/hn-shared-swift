@@ -6,6 +6,8 @@ Accepted (2026-06-12). Amends [ADR-0019](0019-core-free-functions-uicore-split.m
 
 Revised 2026-06-13: the *spawn-owning* half of this decision did not survive runtime scrutiny and is withdrawn; the isolated-parameter threading it removed is restored. See *Revision: the registry does not spawn* below. The registry class itself — no `inout`, identity-guarded self-removal, the strategies as capabilities, the observable test surface of [ADR-0022](0022-observable-task-registry-test-signal.md) — stands.
 
+Amended by [ADR-0024](0024-isolation-carried-work-values.md) (2026-06-13): the registry spawns again — soundly this time — by taking `@Sendable @isolated(any)` work values that carry their own isolation, superseding the revision's literal-placement division of labour.
+
 ## Context
 
 [ADR-0019](0019-core-free-functions-uicore-split.md) composes the core from free functions, each threading `isolation: isolated any Actor = #isolation` (SE-0420). The threading exists for exactly one reason: spawning an unstructured `Task` whose body captures the non-`Sendable` `Model`. A bare `Task { }` in that position infers `@concurrent` and fails region checking; referencing an isolated parameter inside the closure (`_ = isolation`) makes it inherit that isolation and compile. Because `apply`, `applySearchQuery`, and `loadTask` all spawned tasks (and `fetch` wanted its post-sleep continuation pinned), four signatures carried the parameter, and the `sendMessage` closure carried a `_ = isolation` line whose only job was to make `#isolation` inside `apply` resolve to the host actor rather than `nil`.
