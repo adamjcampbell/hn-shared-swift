@@ -64,42 +64,30 @@ public struct Core {
 /// Composes the core: builds the command stream and the task registry,
 /// spawns the search listener, and returns the ``Core`` handle.
 ///
-/// `isolation` appears here and nowhere else: it is captured once, in
-/// the registry's spawner, where each `Task { _ = isolation; … }`
-/// references the isolated parameter so its operation inherits
-/// makeCore's actor (SE-0420) and runs — and resumes — there.
-/// `apply`, `applySearchQuery`, and `load` are plain functions; their
-/// closures stay plain too. (Instance-isolated continuations resuming
-/// off-executor after `await` was a Swift 6.3 compiler bug —
-/// [swiftlang/swift#88993], fixed in 6.4, which this package targets.
-/// See ADR-0024.)
-///
-/// The listener, the send closure, and `cancelAll` all capture the one
-/// ``TaskRegistry``; the registry, the `Model`, and both closures are
-/// non-`Sendable`, so everything stays confined to `isolation`'s region
-/// and the writes stay serialised.
+/// `makeCore` is nonisolated: it runs on — and confines its
+/// non-`Sendable` state (`Model`, the registry, the send closure) to —
+/// whatever actor calls it. The `tasks` registry is injected by that
+/// caller, already carrying the isolation each spawned `Task` runs on:
+/// ``makeAppCore`` injects a statically-`@MainActor` spawner
+/// (`Task { @MainActor in … }` — no capture trick, `MainActor` is a
+/// global actor); tests inject a spawner capturing their `TestActor`
+/// instance (`Task { _ = isolation; … }`, the dynamic-isolation capture
+/// SE-0420 requires for an actor instance). So the `_ = isolation` dance
+/// lives only in test code, where the isolation is a dynamic instance;
+/// production reads as a plain global-actor `Task`. `apply`,
+/// `applySearchQuery`, and `load` are plain functions.
 ///
 /// - Parameters:
 ///   - model: The observable state; defaults to a fresh ``Model``.
+///   - tasks: The registry, built by the caller with a spawner bound to
+///     the caller's isolation.
 /// - Returns: The ``Core`` handle.
 func makeCore(
     model: Model = Model(),
-    isolation: isolated any Actor = #isolation
+    tasks: TaskRegistry<TaskID>
 ) -> Core {
     let state = model
     let (commands, commandsContinuation) = AsyncStream<Command>.makeStream()
-
-    // The one capture of `isolation`: each spawned `Task` references the
-    // isolated parameter (`_ = isolation`), so its operation inherits
-    // makeCore's actor (SE-0420) and runs — and resumes — there.
-    // `Task.init`'s operation is already `@_inheritActorContext sending
-    // @isolated(any)`, so the carriage needs no wrapper of our own.
-    let tasks = TaskRegistry<TaskID> { work in
-        Task {
-            _ = isolation
-            await work()
-        }
-    }
 
     tasks.run(.searchListener) {
         for await query in state.searchQueryChanges {
@@ -338,9 +326,10 @@ func load(
 // MARK: - Production entry (@MainActor, bridged)
 
 /// Builds the core on `MainActor` and returns the ``Core`` handle for the
-/// UI to consume. The bridged production entry point: pins `#isolation` to
-/// `MainActor`, so the returned handle's `sendMessage` and fetch work run
-/// there, and is the only function that crosses JNI.
+/// UI to consume. The bridged production entry point: injects a registry
+/// whose spawner is statically `@MainActor`, so the returned handle's
+/// `sendMessage` and fetch work run there, and is the only function that
+/// crosses JNI.
 ///
 /// Call once at app scope and keep the handle for the process lifetime:
 /// iOS holds it as `@State` on the `App`, Android stashes it on
@@ -350,5 +339,9 @@ func load(
 /// - Returns: The ``Core`` handle.
 // SKIP @bridge
 @MainActor public func makeAppCore() -> Core {
-    makeCore()
+    // Static `MainActor` isolation: the spawned `Task` inherits it via
+    // the explicit `@MainActor in`, with no `#isolation` capture.
+    makeCore(tasks: TaskRegistry { work in
+        Task { @MainActor in await work() }
+    })
 }

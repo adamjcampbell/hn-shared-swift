@@ -38,7 +38,8 @@ the old.
 | 0021 | [Bind isolation once into a spawn-owning `TaskRegistry`; drop the threaded `isolated` parameters](0021-spawn-owning-task-registry.md) | 2026-06-12 | Accepted                                                                        |
 | 0022 | [Observe the `TaskRegistry` as a test synchronisation signal; retire `settle`](0022-observable-task-registry-test-signal.md) | 2026-06-12 | Proposed                                                                        |
 | 0023 | [Ambient `searchDebounce`; control time by amount, not by clock](0023-ambient-debounce-clock-free-tests.md) | 2026-06-12 | Proposed                                                                        |
-| 0024 | [Carry isolation in the work value — `@Sendable @isolated(any)` via `inheritingIsolation`](0024-isolation-carried-work-values.md) | 2026-06-13 | Accepted                                                                        |
+| 0024 | [Carry isolation in the work value — `@Sendable @isolated(any)` via `inheritingIsolation`](0024-isolation-carried-work-values.md) | 2026-06-13 | Accepted (historical; superseded on 6.4 — see body)                             |
+| 0025 | [Inject the `TaskRegistry` at the composition boundary — static production isolation, dynamic test isolation](0025-inject-registry-static-production-isolation.md) | 2026-06-13 | Accepted                                                                        |
 
 ADRs 0001–0003, 0005, 0006, 0013, 0014, and 0017–0021 together describe the
 design as it stands today. ADRs 0004 and 0007–0012 are the hand-written-bridge

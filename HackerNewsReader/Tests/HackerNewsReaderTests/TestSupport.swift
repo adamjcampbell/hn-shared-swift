@@ -45,8 +45,15 @@ func withCore<R>(
     var core: Core?
     defer { core?.cancelAll() }
 
+    // Tests are isolated to an actor *instance*, so the spawner captures
+    // it (`_ = isolation`) — the dynamic-isolation capture SE-0420
+    // requires. (Production's `makeAppCore` injects a static `@MainActor`
+    // spawner and needs no capture.)
+    let tasks = TaskRegistry<TaskID> { work in
+        Task { _ = isolation; await work() }
+    }
     return try await Dependencies.$current.withValue(dependencies) {
-        let made = makeCore(model: model)
+        let made = makeCore(model: model, tasks: tasks)
         core = made
         return try await body(isolation, made)
     }

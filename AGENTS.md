@@ -158,10 +158,15 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   `nonisolated(nonsending)` continuations resuming back on the host
   actor instance, which is broken in 6.3.0/6.3.1
   ([swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993),
-  fixed in 6.4 / 6.3.2+). On 6.4 the `TaskRegistry` uses the collapsed
-  single-closure spawner (`spawn: (work) -> Task`); the work/epilogue
-  split visible in git history was a 6.3.1 workaround — do not
-  reintroduce it. See ADR-0024.
+  fixed in 6.4 / 6.3.2+). The work/epilogue split and `inheritingIsolation`
+  visible in git history were 6.3.1 workarounds — do not reintroduce them
+  (ADR-0024).
+- `makeCore` is nonisolated and takes the `TaskRegistry` as a parameter
+  (ADR-0025). The caller builds the spawner with *its* isolation:
+  `makeAppCore` (`@MainActor`) injects `TaskRegistry { work in Task { @MainActor in await work() } }`
+  (static, no capture); `withCore` injects `TaskRegistry { work in Task { _ = isolation; await work() } }`
+  (dynamic per-test `TestActor` capture). The `_ = isolation` spelling is
+  a test-only concern; production is plain global-actor `Task`.
 - `searchDebounce` / `client` / `date` are ambient via the `@TaskLocal`
   `Dependencies`, not injected into a type. Production reads the live
   defaults (250 ms, `Client()`, `Date()`); `withCore` defaults
