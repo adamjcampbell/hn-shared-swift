@@ -6,8 +6,8 @@ import HackerNews
 
 /// Per-test ``Core`` fixture. Isolated to a fresh ``TestActor`` so
 /// `makeCore` (and the whole `body`) run on it: `#isolation` binds
-/// there, and every model / registry write stays serialised onto that
-/// actor's queue. Cancels the listener on exit so the `Task → Model`
+/// there, and every model / registry write stays serialised on that
+/// actor. Cancels the listener on exit so the `Task → Model`
 /// references release before the next test starts.
 ///
 /// The body runs isolated to the `TestActor`, so reads and

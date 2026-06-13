@@ -9,15 +9,13 @@ import Observation
 /// a lock.
 ///
 /// ``run(_:work:)`` composes the caller's `work` with the
-/// identity-guarded vacate into one closure and hands it to `spawn`,
-/// which wraps it in an `@isolated(any)` operation
-/// (``inheritingIsolation(_:)``) carrying the host actor;
-/// `Task(operation:)` runs *and resumes* it there (SE-0431), so the
-/// vacate — which runs after `await work()` — touches `entries` on the
-/// host actor. (Resuming a composed closure on the host across an
-/// internal `await` is what the actor-instance form of
-/// [swiftlang/swift#88993] got wrong in Swift 6.3; fixed in 6.4, which
-/// this package targets. See ADR-0024.)
+/// identity-guarded vacate into one closure and hands it to `spawn`.
+/// `makeCore` builds `spawn` as a `Task { _ = isolation; await work() }`
+/// literal that inherits the host actor (SE-0420), so the work — and the
+/// vacate composed into its tail — runs and resumes there. (An
+/// instance-isolated continuation resuming off-executor after an
+/// internal `await` was a Swift 6.3 compiler bug, [swiftlang/swift#88993],
+/// fixed in 6.4, which this package targets. See ADR-0024.)
 ///
 /// The vacate guard keeps joining honest: a finished task removes its
 /// entry only while the slot is still its own, so a replaced task

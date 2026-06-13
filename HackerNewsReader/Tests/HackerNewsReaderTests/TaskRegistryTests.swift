@@ -4,7 +4,7 @@ import Testing
 import os
 @testable import HackerNewsReader
 
-/// `@MainActor` so the spawner's `inheritingIsolation` literal inherits
+/// `@MainActor` so the spawner's `Task` literal inherits
 /// the suite's actor — and the registry, whose confinement rests on
 /// non-`Sendability`, shares it — mirroring how `makeCore` confines
 /// production.
@@ -14,13 +14,11 @@ struct TaskRegistryTests {
 
     private enum ID: Hashable { case a, b }
 
-    /// Mirrors `makeCore`'s spawner: one `inheritingIsolation` capture of
-    /// the suite's actor, wrapping every run's composed work.
+    /// Mirrors `makeCore`'s spawner: a `Task` literal that inherits the
+    /// suite's `@MainActor` and runs every run's composed work.
     private func makeRegistry() -> TaskRegistry<ID> {
         TaskRegistry { work in
-            Task(operation: inheritingIsolation {
-                await work()
-            })
+            Task { await work() }
         }
     }
 

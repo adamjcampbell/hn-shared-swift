@@ -64,16 +64,15 @@ public struct Core {
 /// Composes the core: builds the command stream and the task registry,
 /// spawns the search listener, and returns the ``Core`` handle.
 ///
-/// `isolation` appears here and nowhere else: it is captured once, into
-/// the registry's spawner, where ``inheritingIsolation(_:)`` wraps each
-/// run's work into an `@isolated(any)` operation that *carries* the host
-/// actor — `Task(operation:)` enqueues on the carried isolation
-/// (SE-0431), so the work runs and resumes there no matter where it was
-/// formed or spawned from. `apply`, `applySearchQuery`, and `load` are
-/// plain functions; their closures stay plain too. (The carriage is
-/// what pins resumption to the host; an actor-instance form of this
-/// drifted off-executor on resume in Swift 6.3 — [swiftlang/swift#88993],
-/// fixed in 6.4, which this package targets. See ADR-0024.)
+/// `isolation` appears here and nowhere else: it is captured once, in
+/// the registry's spawner, where each `Task { _ = isolation; … }`
+/// references the isolated parameter so its operation inherits
+/// makeCore's actor (SE-0420) and runs — and resumes — there.
+/// `apply`, `applySearchQuery`, and `load` are plain functions; their
+/// closures stay plain too. (Instance-isolated continuations resuming
+/// off-executor after `await` was a Swift 6.3 compiler bug —
+/// [swiftlang/swift#88993], fixed in 6.4, which this package targets.
+/// See ADR-0024.)
 ///
 /// The listener, the send closure, and `cancelAll` all capture the one
 /// ``TaskRegistry``; the registry, the `Model`, and both closures are
@@ -90,17 +89,16 @@ func makeCore(
     let state = model
     let (commands, commandsContinuation) = AsyncStream<Command>.makeStream()
 
-    // The one capture of `isolation`: the spawner wraps each run's
-    // composed work in `inheritingIsolation`, so the registry's call
-    // sites stay plain closures and the work (plus its vacate tail)
-    // runs and resumes on the host actor. If the inheritance through
-    // this nesting ever failed, the `@Sendable` wrapper could not
-    // legalise the non-`Sendable` captures and this would not compile.
+    // The one capture of `isolation`: each spawned `Task` references the
+    // isolated parameter (`_ = isolation`), so its operation inherits
+    // makeCore's actor (SE-0420) and runs — and resumes — there.
+    // `Task.init`'s operation is already `@_inheritActorContext sending
+    // @isolated(any)`, so the carriage needs no wrapper of our own.
     let tasks = TaskRegistry<TaskID> { work in
-        Task(operation: inheritingIsolation {
+        Task {
             _ = isolation
             await work()
-        })
+        }
     }
 
     tasks.run(.searchListener) {
