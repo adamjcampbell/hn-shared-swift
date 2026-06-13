@@ -78,13 +78,18 @@ public struct Core {
 /// production reads as a plain global-actor `Task`. `apply`,
 /// `applySearchQuery`, and `load` are plain functions.
 ///
+/// Both dependencies are injected by the caller — the composition root:
+/// the `model` (so the app can launch in a specific state), and the
+/// `tasks` registry (so its spawner carries the caller's isolation).
+/// `makeCore` is pure wiring with no defaults of its own.
+///
 /// - Parameters:
-///   - model: The observable state; defaults to a fresh ``Model``.
+///   - model: The observable state, constructed by the caller.
 ///   - tasks: The registry, built by the caller with a spawner bound to
 ///     the caller's isolation.
 /// - Returns: The ``Core`` handle.
 func makeCore(
-    model: Model = Model(),
+    model: Model,
     tasks: TaskRegistry<TaskID>
 ) -> Core {
     let state = model
@@ -327,23 +332,25 @@ func load(
 // MARK: - Production entry (@MainActor, bridged)
 
 /// Builds the core on `MainActor` and returns the ``Core`` handle for the
-/// UI to consume. The bridged production entry point: injects a registry
-/// whose spawner is statically `@MainActor`, so the returned handle's
-/// `sendMessage` and fetch work run there, and is the only function that
-/// crosses JNI.
+/// UI to consume. The bridged production entry point: takes the `model`
+/// the app constructed (letting it launch in a specific state) and
+/// injects a registry whose spawner is statically `@MainActor`, so the
+/// returned handle's `sendMessage` and fetch work run there. The only
+/// function that crosses JNI.
 ///
 /// Call once at app scope and keep the handle for the process lifetime:
 /// iOS holds it as `@State` on the `App`, Android stashes it on
 /// `Application` in `onCreate`. App code builds the send capability from
 /// the handle with `SendMessageAction(core)`.
 ///
+/// - Parameter model: The observable state, constructed by the app.
 /// - Returns: The ``Core`` handle.
 // SKIP @bridge
-@MainActor public func makeAppCore() -> Core {
+@MainActor public func makeAppCore(model: Model) -> Core {
     // Static `MainActor` isolation: the spawner closure is inferred
     // `@MainActor` (a non-`Sendable` closure formed in this `@MainActor`
     // function, SE-0461), so the `Task` literal inherits `MainActor`
     // unconditionally (SE-0420, global actor) — no `@MainActor in`
     // annotation and no `#isolation` capture needed.
-    makeCore(tasks: TaskRegistry { work in Task { await work() } })
+    makeCore(model: model, tasks: TaskRegistry { work in Task { await work() } })
 }
