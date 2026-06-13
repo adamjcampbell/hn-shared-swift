@@ -65,18 +65,15 @@ public struct Core {
 /// spawns the search listener, and returns the ``Core`` handle.
 ///
 /// `isolation` appears here and nowhere else: it is captured once, into
-/// the registry's spawner, where ``inheritingIsolation(_:)`` binds each
-/// run's work and epilogue into an `@isolated(any)` operation that
-/// *carries* the host actor — `Task(operation:)` enqueues on the
-/// carried isolation (SE-0431), so the work runs and resumes there no
-/// matter where it was formed or spawned from. The carriage is
-/// load-bearing — work typed `nonisolated(nonsending)` runs on its
-/// caller's isolation instead, and resumed off the host actor after
-/// internal suspensions when a calling chain lost its pin (Swift
-/// 6.3.1; off-actor `Model` and registry writes plus a lost
-/// `withObservationTracking` wake-up, recorded in ADR-0021/0024).
-/// `apply`, `applySearchQuery`, and `load` are plain functions; their
-/// closures stay plain too.
+/// the registry's spawner, where ``inheritingIsolation(_:)`` wraps each
+/// run's work into an `@isolated(any)` operation that *carries* the host
+/// actor — `Task(operation:)` enqueues on the carried isolation
+/// (SE-0431), so the work runs and resumes there no matter where it was
+/// formed or spawned from. `apply`, `applySearchQuery`, and `load` are
+/// plain functions; their closures stay plain too. (The carriage is
+/// what pins resumption to the host; an actor-instance form of this
+/// drifted off-executor on resume in Swift 6.3 — [swiftlang/swift#88993],
+/// fixed in 6.4, which this package targets. See ADR-0024.)
 ///
 /// The listener, the send closure, and `cancelAll` all capture the one
 /// ``TaskRegistry``; the registry, the `Model`, and both closures are
@@ -93,17 +90,16 @@ func makeCore(
     let state = model
     let (commands, commandsContinuation) = AsyncStream<Command>.makeStream()
 
-    // The one capture of `isolation`: the spawner binds each run's work
-    // and epilogue to the host actor via `inheritingIsolation`, so the
-    // registry's call sites stay plain closures. If the inheritance
-    // through this nesting ever failed, the `@Sendable` wrapper could
-    // not legalise the non-`Sendable` captures and this would not
-    // compile.
-    let tasks = TaskRegistry<TaskID> { work, epilogue in
+    // The one capture of `isolation`: the spawner wraps each run's
+    // composed work in `inheritingIsolation`, so the registry's call
+    // sites stay plain closures and the work (plus its vacate tail)
+    // runs and resumes on the host actor. If the inheritance through
+    // this nesting ever failed, the `@Sendable` wrapper could not
+    // legalise the non-`Sendable` captures and this would not compile.
+    let tasks = TaskRegistry<TaskID> { work in
         Task(operation: inheritingIsolation {
             _ = isolation
             await work()
-            epilogue()
         })
     }
 

@@ -154,6 +154,14 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 
 ## Concurrency & testing
 
+- Targets **Swift 6.4+** (Xcode 27+). The core's task spawning relies on
+  `nonisolated(nonsending)` continuations resuming back on the host
+  actor instance, which is broken in 6.3.0/6.3.1
+  ([swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993),
+  fixed in 6.4 / 6.3.2+). On 6.4 the `TaskRegistry` uses the collapsed
+  single-closure spawner (`spawn: (work) -> Task`); the work/epilogue
+  split visible in git history was a 6.3.1 workaround — do not
+  reintroduce it. See ADR-0024.
 - `searchDebounce` / `client` / `date` are ambient via the `@TaskLocal`
   `Dependencies`, not injected into a type. Production reads the live
   defaults (250 ms, `Client()`, `Date()`); `withCore` defaults

@@ -15,12 +15,11 @@ struct TaskRegistryTests {
     private enum ID: Hashable { case a, b }
 
     /// Mirrors `makeCore`'s spawner: one `inheritingIsolation` capture of
-    /// the suite's actor, binding every run's work and epilogue.
+    /// the suite's actor, wrapping every run's composed work.
     private func makeRegistry() -> TaskRegistry<ID> {
-        TaskRegistry { work, epilogue in
+        TaskRegistry { work in
             Task(operation: inheritingIsolation {
                 await work()
-                epilogue()
             })
         }
     }

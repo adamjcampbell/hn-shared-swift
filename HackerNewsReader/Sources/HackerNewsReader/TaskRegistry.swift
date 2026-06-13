@@ -8,23 +8,23 @@ import Observation
 /// region it was formed on, which is what serialises `entries` without
 /// a lock.
 ///
-/// Carried isolation is the load-bearing property. Work typed
-/// `nonisolated(nonsending)` runs on its *caller's* isolation, which
-/// evaporated off-actor when a calling chain lost its pin; the spawner
-/// wraps work and epilogue in an `@isolated(any)` operation
-/// (``inheritingIsolation(_:)``) that owns its executor, so
-/// `Task(operation:)` runs — and resumes — them on the actor the
-/// spawner was formed on (SE-0431). If the wrapper's inheritance ever
-/// failed, its `@Sendable` requirement could not legalise the
-/// non-`Sendable` captures and the spawner would not compile.
+/// ``run(_:work:)`` composes the caller's `work` with the
+/// identity-guarded vacate into one closure and hands it to `spawn`,
+/// which wraps it in an `@isolated(any)` operation
+/// (``inheritingIsolation(_:)``) carrying the host actor;
+/// `Task(operation:)` runs *and resumes* it there (SE-0431), so the
+/// vacate — which runs after `await work()` — touches `entries` on the
+/// host actor. (Resuming a composed closure on the host across an
+/// internal `await` is what the actor-instance form of
+/// [swiftlang/swift#88993] got wrong in Swift 6.3; fixed in 6.4, which
+/// this package targets. See ADR-0024.)
 ///
-/// The vacate guard in the spawn's epilogue keeps joining honest: a
-/// finished task removes its entry only while the slot is still its
-/// own, so a replaced task finishing late never clobbers its
-/// replacement, and an id with an entry is an id with live work — a
-/// caller wanting to resubscribe to (join) an in-flight run reads
-/// ``subscript(_:)`` and awaits what it finds instead of starting a
-/// duplicate.
+/// The vacate guard keeps joining honest: a finished task removes its
+/// entry only while the slot is still its own, so a replaced task
+/// finishing late never clobbers its replacement, and an id with an
+/// entry is an id with live work — a caller wanting to resubscribe to
+/// (join) an in-flight run reads ``subscript(_:)`` and awaits what it
+/// finds instead of starting a duplicate.
 ///
 /// `@Observable` so membership is a watchable signal: tests read
 /// ``subscript(_:)`` inside `withObservationTracking` (via `waitUntil`)
@@ -35,22 +35,13 @@ import Observation
 @Observable
 final class TaskRegistry<ID: Hashable> {
     private var entries: [ID: Task<Void, Never>] = [:]
-    @ObservationIgnored private let spawn: (
-        _ work: @escaping () async -> Void,
-        _ epilogue: @escaping () -> Void
-    ) -> Task<Void, Never>
+    @ObservationIgnored private let spawn: (@escaping () async -> Void) -> Task<Void, Never>
 
-    /// - Parameter spawn: Spawns a task that awaits `work` and then
-    ///   calls the synchronous `epilogue`, both bound to the host
+    /// - Parameter spawn: Spawns a task running `work` on the host
     ///   isolation the spawner carries. Must enqueue rather than run
     ///   inline (`Task(operation:)`, never `Task.immediate`) — the
     ///   vacate guard registers the task before its body may start.
-    init(
-        spawn: @escaping (
-            _ work: @escaping () async -> Void,
-            _ epilogue: @escaping () -> Void
-        ) -> Task<Void, Never>
-    ) {
+    init(spawn: @escaping (@escaping () async -> Void) -> Task<Void, Never>) {
         self.spawn = spawn
     }
 
@@ -66,8 +57,8 @@ final class TaskRegistry<ID: Hashable> {
 
     /// Cancels the in-flight task for `id` (if any) and spawns `work`
     /// in its place — latest-wins, the debounced-search and
-    /// pull-to-refresh semantics. The identity-guarded vacate runs as
-    /// the spawn's epilogue, on the host isolation, so a replaced task
+    /// pull-to-refresh semantics. The identity-guarded vacate runs in
+    /// the composed work's tail, on the host actor, so a replaced task
     /// finishing late leaves its replacement's slot alone.
     ///
     /// - Parameters:
@@ -83,7 +74,8 @@ final class TaskRegistry<ID: Hashable> {
         entries[id]?.cancel()
 
         var handle: Task<Void, Never>?
-        let task = spawn(work) { [self] in
+        let task = spawn { [self] in
+            await work()
             if entries[id] == handle { entries[id] = nil }
         }
         handle = task
