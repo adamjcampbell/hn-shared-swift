@@ -40,7 +40,7 @@ public struct Core {
     /// directly on their `TestActor`. Concurrent UI entry points (a
     /// fire-and-forget tap plus a `.refreshable`) serialise at that
     /// `@MainActor` boundary; the synchronous
-    /// ``apply(_:to:commands:tasks:isolation:)`` keeps each handler's
+    /// ``apply(_:to:commands:tasks:)`` keeps each handler's
     /// read-modify-write atomic against actor reentrancy.
     // SKIP @nobridge
     let sendMessage: (Message) async -> Void
@@ -64,17 +64,19 @@ public struct Core {
 /// Composes the core: builds the command stream and the task registry,
 /// spawns the search listener, and returns the ``Core`` handle.
 ///
-/// `isolation` is threaded from here through
-/// ``apply(_:to:commands:tasks:isolation:)`` into ``load``, where each
-/// work closure captures it (`_ = isolation`) and is wrapped in
-/// ``inheritingIsolation(_:)``: the resulting `@isolated(any)` value
-/// *carries* the host actor, and the registry's spawn enqueues on the
-/// carried isolation (SE-0431). The carriage is load-bearing — work
-/// typed `nonisolated(nonsending)` runs on its caller's isolation
-/// instead, and resumed off the host actor after internal suspensions
-/// when a calling chain lost its pin (Swift 6.3.1; off-actor `Model`
-/// and registry writes plus a lost `withObservationTracking` wake-up,
-/// recorded in ADR-0021/0024).
+/// `isolation` appears here and nowhere else: it is captured once, into
+/// the registry's spawner, where ``inheritingIsolation(_:)`` binds each
+/// run's work and epilogue into an `@isolated(any)` operation that
+/// *carries* the host actor — `Task(operation:)` enqueues on the
+/// carried isolation (SE-0431), so the work runs and resumes there no
+/// matter where it was formed or spawned from. The carriage is
+/// load-bearing — work typed `nonisolated(nonsending)` runs on its
+/// caller's isolation instead, and resumed off the host actor after
+/// internal suspensions when a calling chain lost its pin (Swift
+/// 6.3.1; off-actor `Model` and registry writes plus a lost
+/// `withObservationTracking` wake-up, recorded in ADR-0021/0024).
+/// `apply`, `applySearchQuery`, and `load` are plain functions; their
+/// closures stay plain too.
 ///
 /// The listener, the send closure, and `cancelAll` all capture the one
 /// ``TaskRegistry``; the registry, the `Model`, and both closures are
@@ -90,28 +92,31 @@ func makeCore(
 ) -> Core {
     let state = model
     let (commands, commandsContinuation) = AsyncStream<Command>.makeStream()
-    let tasks = TaskRegistry<TaskID>()
 
-    // The work value carries this function's isolation, so the
-    // registry's spawn runs — and resumes the `for await` — on the
-    // host actor.
-    tasks.run(.searchListener, inheritingIsolation {
-        _ = isolation
+    // The one capture of `isolation`: the spawner binds each run's work
+    // and epilogue to the host actor via `inheritingIsolation`, so the
+    // registry's call sites stay plain closures. If the inheritance
+    // through this nesting ever failed, the `@Sendable` wrapper could
+    // not legalise the non-`Sendable` captures and this would not
+    // compile.
+    let tasks = TaskRegistry<TaskID> { work, epilogue in
+        Task(operation: inheritingIsolation {
+            _ = isolation
+            await work()
+            epilogue()
+        })
+    }
 
+    tasks.run(.searchListener) {
         for await query in state.searchQueryChanges {
             applySearchQuery(query, to: state, tasks: tasks)
         }
-    })
+    }
 
     return Core(
         model: state,
         commands: commands,
         sendMessage: { message in
-            // Pins this closure to the host actor and resolves `#isolation`
-            // inside `apply` to it; a closure that dropped this would pass
-            // `nil` to apply's isolated parameter.
-            _ = isolation
-
             await apply(
                 message,
                 to: state,
@@ -151,8 +156,7 @@ func apply(
     _ message: Message,
     to state: Model,
     commands: AsyncStream<Command>.Continuation,
-    tasks: TaskRegistry<TaskID>,
-    isolation: isolated any Actor = #isolation
+    tasks: TaskRegistry<TaskID>
 ) -> Task<Void, Never>? {
     switch message {
 
@@ -217,7 +221,7 @@ func apply(
 /// on an empty query, otherwise marks loading and spawns the search
 /// fetch into the registry's `.search` slot.
 ///
-/// Synchronous for the same reason as ``apply(_:to:commands:tasks:isolation:)``:
+/// Synchronous for the same reason as ``apply(_:to:commands:tasks:)``:
 /// the listener invokes it inside its `for await` loop, so the
 /// read-modify-write must not span a suspension.
 ///
@@ -229,8 +233,7 @@ func apply(
 func applySearchQuery(
     _ query: String,
     to state: Model,
-    tasks: TaskRegistry<TaskID>,
-    isolation: isolated any Actor = #isolation
+    tasks: TaskRegistry<TaskID>
 ) {
     if query.isEmpty {
         tasks.cancel(.search)
@@ -321,20 +324,10 @@ func load(
     status: ReferenceWritableKeyPath<Model, LoadStatus>,
     tasks: TaskRegistry<TaskID>,
     debounce: Duration? = nil,
-    isolation: isolated any Actor = #isolation,
     request: @escaping @Sendable (Client) async throws -> Page,
     commit: @escaping (Page, [String]) -> Void
 ) -> Task<Void, Never> {
-    // The work value carries `isolation`, so the whole body — the
-    // post-fetch continuation, `commit`, the status write, and the
-    // vacate — runs on the host actor regardless of where the registry
-    // spawns it. The box (not a captured `var`) carries the handle into
-    // the tail without a mutated-after-`Sendable`-capture warning.
-    final class Handle { var task: Task<Void, Never>? }
-    let handle = Handle()
-    let task = tasks.run(id, inheritingIsolation {
-        _ = isolation
-
+    tasks.run(id) {
         do {
             let page = try await fetch(debounce: debounce, body: request)
             try Task.checkCancellation()
@@ -345,10 +338,7 @@ func load(
         } catch {
             state[keyPath: status].finishFailure(error.localizedDescription)
         }
-        tasks.vacate(id, ifStill: handle.task)
-    })
-    handle.task = task
-    return task
+    }
 }
 
 // MARK: - Production entry (@MainActor, bridged)
