@@ -5,10 +5,9 @@ import Testing
 import HackerNews
 
 /// Per-test ``Core`` fixture. Isolated to a fresh ``TestActor`` so
-/// `makeCore` (and the whole `body`) run on it: `#isolation` binds
-/// there, and every model / registry write stays serialised on that
-/// actor. Cancels the listener on exit so the `Task → Model`
-/// references release before the next test starts.
+/// `makeCore`, the spawner built here, and the whole `body` run on that
+/// actor, serialising every model / registry write. Cancels the listener
+/// on exit so the `Task → Model` references release before the next test.
 ///
 /// The body runs isolated to the `TestActor`, so reads and
 /// `core.sendMessage(_:)` calls share a consistent snapshot between
@@ -38,24 +37,17 @@ func withCore<R>(
     var dependencies = Dependencies(date: DateGenerator(now), client: client)
     dependencies.searchDebounce = debounce
 
-    // The defer lives here, in `withCore`'s own isolated frame, not
-    // inside the `withValue` operation closure — a closure value's
-    // post-await continuation is not reliably pinned to the host actor
-    // (TSan), and `cancelAll` mutates the registry.
-    var core: Core?
-    defer { core?.cancelAll() }
-
-    // Tests are isolated to an actor *instance*, so the spawner captures
-    // it (`_ = isolation`) — the dynamic-isolation capture SE-0420
-    // requires. (Production's `makeAppCore` injects a static `@MainActor`
-    // spawner and needs no capture.)
+    // Tests isolate to an actor *instance*, so the spawner captures it
+    // (`_ = isolation`) — the dynamic-isolation capture SE-0420 requires
+    // for an instance. (Production's `makeAppCore` injects a static
+    // `@MainActor` spawner and needs no capture.)
     let tasks = TaskRegistry<TaskID> { work in
         Task { _ = isolation; await work() }
     }
     return try await Dependencies.$current.withValue(dependencies) {
-        let made = makeCore(model: model, tasks: tasks)
-        core = made
-        return try await body(isolation, made)
+        let core = makeCore(model: model, tasks: tasks)
+        defer { core.cancelAll() }
+        return try await body(isolation, core)
     }
 }
 
@@ -85,9 +77,8 @@ func waitUntil(isolation: isolated any Actor = #isolation, _ condition: () -> Bo
     }
 }
 
-/// Rendezvous for parking a mock mid-call — the clock-free replacement
-/// for `clock.sleep(for: .seconds(Int.max))` on a never-advanced
-/// `TestClock`.
+/// Rendezvous for parking a mock mid-call, so a test can interrupt a
+/// fetch while it is genuinely in flight.
 ///
 /// The mock calls ``arrive()``: it signals the test and parks. The test
 /// awaits ``arrival()`` to know the mock is deterministically *inside*

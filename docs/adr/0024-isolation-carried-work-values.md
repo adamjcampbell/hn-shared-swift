@@ -2,11 +2,13 @@
 
 ## Status
 
+**Superseded by [ADR-0025](0025-inject-registry-static-production-isolation.md) (2026-06-13).** The `@isolated(any)` carriage approach (`inheritingIsolation`) was removed when the project moved to Swift 6.4; the live design is ADR-0025 (the injected registry). This ADR is kept as the record of the carriage approach and the Swift 6.3 bug ([swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993)) it worked around.
+
 Accepted (2026-06-13). Amends the revision of [ADR-0021](0021-spawn-owning-task-registry.md) (the bookkeeping-only registry) and overturns, with changed calculus, the `@_inheritActorContext` rejections recorded in [ADR-0019](0019-core-free-functions-uicore-split.md) and ADR-0021.
 
 Revised 2026-06-13 (same day): the isolation capture moved from the work-formation sites into one spawner built in `makeCore` — the registry binds plain work at spawn time, and the threaded `isolated` parameters disappear from `apply` / `applySearchQuery` / `load` entirely. The per-site wrapping originally accepted here is recorded under *Alternatives considered*.
 
-Revised 2026-06-13 (later): the underlying failure was identified as a Swift compiler bug — [swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993), fixed in Swift 6.4 by [PR #89015](https://github.com/swiftlang/swift/pull/89015). The project moves to Swift 6.4, where the bug is gone. With it fixed, **the entire workaround stack this ADR built is shed**: the work/epilogue split, the `inheritingIsolation` helper, and (in tests) the custom `TestActor` executor are all removed, returning the core to [ADR-0021](0021-spawn-owning-task-registry.md)'s original spawn-owning form. See *Swift 6.4 update* below. This ADR is therefore largely **historical** — it records the 6.3 workaround and the bug it worked around; the live design is ADR-0021's `Task { _ = isolation; await work() }` registry.
+Revised 2026-06-13 (later): the underlying failure was identified as a Swift compiler bug — [swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993), fixed in Swift 6.4 by [PR #89015](https://github.com/swiftlang/swift/pull/89015). The project moves to Swift 6.4, where the bug is gone. With it fixed, **the entire workaround stack this ADR built is shed**: the work/epilogue split, the `inheritingIsolation` helper, and (in tests) the custom `TestActor` executor are all removed, returning the core to [ADR-0021](0021-spawn-owning-task-registry.md)'s original spawn-owning form. See *Swift 6.4 update* below. This ADR is therefore largely **historical** — it records the 6.3 workaround and the bug it worked around; the live design is [ADR-0025](0025-inject-registry-static-production-isolation.md).
 
 ## Context
 

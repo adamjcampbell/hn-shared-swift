@@ -154,13 +154,12 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 
 ## Concurrency & testing
 
-- Targets **Swift 6.4+** (Xcode 27+). The core's task spawning relies on
-  `nonisolated(nonsending)` continuations resuming back on the host
-  actor instance, which is broken in 6.3.0/6.3.1
+- Targets **Swift 6.4+** (Xcode 27+). The core spawns work isolated to an
+  actor *instance*, whose continuations must resume on that instance after
+  `await` — broken in 6.3.0/6.3.1
   ([swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993),
-  fixed in 6.4 / 6.3.2+). The work/epilogue split and `inheritingIsolation`
-  visible in git history were 6.3.1 workarounds — do not reintroduce them
-  (ADR-0024).
+  fixed in 6.4 / 6.3.2+). ADR-0024 records the workaround stack that
+  carried the design on 6.3; don't reintroduce it on a fixed toolchain.
 - `makeCore` is nonisolated and takes the `TaskRegistry` as a parameter
   (ADR-0025). The caller builds the spawner with *its* isolation:
   `makeAppCore` (`@MainActor`) injects `TaskRegistry { work in Task { await work() } }`
@@ -175,11 +174,10 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   by controlling the *amount* — pass `debounceNeverElapses` to hold the
   debounce window open and assert mid-window behaviour (the parked
   sleep releases via cancellation on fixture exit).
-- `TestActor` is a plain `actor` (default executor). `withCore` is
-  isolated to a fresh `TestActor`, so `makeCore`'s `#isolation` binds
-  there; the body receives that actor as its first parameter, no
-  force-cast needed. (The custom `DispatchSerialQueue` executor it used
-  pre-6.4 is gone — see ADR-0024.)
+- `TestActor` is a plain `actor` (default per-instance executor).
+  `withCore` is isolated to a fresh `TestActor`, so `makeCore`, the
+  spawner built there, and the body all run on it; the body receives
+  that actor as its first parameter, no force-cast needed.
 - `await waitUntil { <cond> }` is the default synchronisation: it
   re-arms `withObservationTracking` and waits on a real observable
   transition — a `Model` field (a status flips, a `LoadedStories`

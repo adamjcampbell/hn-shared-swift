@@ -2,6 +2,8 @@
 
 ## Status
 
+**Superseded by [ADR-0025](0025-inject-registry-static-production-isolation.md) (2026-06-13).** The live task-registry design is ADR-0025 — the registry is injected at the composition boundary, with no threaded `isolated` parameters and no spawn-owning struct — with the `@Observable` registry surface of [ADR-0022](0022-observable-task-registry-test-signal.md). What follows is the superseded record of how the registry was first shaped (spawn-owning, then bookkeeping-only).
+
 Accepted (2026-06-12). Amends [ADR-0019](0019-core-free-functions-uicore-split.md): replaces the isolation-threaded free-function composition with a registry that owns task creation. ADR-0019's other decisions — one isolation-generic `Core` handle, the `@MainActor` `SendMessageAction` boundary, free functions as the sole `Model` writers — stand unchanged.
 
 Revised 2026-06-13: the *spawn-owning* half of this decision did not survive runtime scrutiny and is withdrawn; the isolated-parameter threading it removed is restored. See *Revision: the registry does not spawn* below. The registry class itself — no `inout`, identity-guarded self-removal, the strategies as capabilities, the observable test surface of [ADR-0022](0022-observable-task-registry-test-signal.md) — stands.

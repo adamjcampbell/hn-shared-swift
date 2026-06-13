@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-06-12). Builds on [ADR-0020](0020-ambient-dependencies-struct.md) and [ADR-0022](0022-observable-task-registry-test-signal.md).
+Accepted (2026-06-12). Builds on [ADR-0020](0020-ambient-dependencies-struct.md) and [ADR-0022](0022-observable-task-registry-test-signal.md).
 
 ## Context
 

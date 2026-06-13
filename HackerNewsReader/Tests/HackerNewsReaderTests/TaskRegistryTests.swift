@@ -4,17 +4,16 @@ import Testing
 import os
 @testable import HackerNewsReader
 
-/// `@MainActor` so the spawner's `Task` literal inherits
-/// the suite's actor — and the registry, whose confinement rests on
-/// non-`Sendability`, shares it — mirroring how `makeCore` confines
-/// production.
+/// `@MainActor` so the spawner's `Task` literal inherits the suite's
+/// actor — and the non-`Sendable` registry shares it — mirroring how
+/// `makeAppCore` confines production on `MainActor`.
 @Suite("TaskRegistry")
 @MainActor
 struct TaskRegistryTests {
 
     private enum ID: Hashable { case a, b }
 
-    /// Mirrors `makeCore`'s spawner: a `Task` literal that inherits the
+    /// Mirrors the production spawner: a `Task` literal that inherits the
     /// suite's `@MainActor` and runs every run's composed work.
     private func makeRegistry() -> TaskRegistry<ID> {
         TaskRegistry { work in

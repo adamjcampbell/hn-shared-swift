@@ -15,7 +15,7 @@ On Swift 6.4 (after the [ADR-0024](0024-isolation-carried-work-values.md) update
 `makeCore` is **nonisolated** and takes the registry as a parameter:
 
 ```swift
-func makeCore(model: Model = Model(), tasks: TaskRegistry<TaskID>) -> Core
+func makeCore(model: Model, tasks: TaskRegistry<TaskID>) -> Core
 ```
 
 Each caller builds the registry with a spawner bound to *its* isolation:

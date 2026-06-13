@@ -28,10 +28,11 @@ names borrowed from Elm.
 
 Mutations are written in **idiomatic Swift, made concurrency-safe by
 region-based isolation**. The mutation logic is a set of free functions,
-not an object: `makeCore` threads its caller's actor through `#isolation`,
-so the host actor owns every write to `Model`. The `@Observable` class
-itself stays a nonisolated mutable data bag, and Swift 6's region-based
-isolation keeps the non-`Sendable` `Model` from ever leaving that region.
+not an object: a `Core` wraps the `@Observable Model`, and the host actor
+it is built on (`MainActor` in the app) owns every write. The `@Observable`
+class itself stays a nonisolated mutable data bag, and Swift 6's
+region-based isolation keeps the non-`Sendable` `Model` from ever leaving
+that region.
 
 The host actor is `MainActor` in production (via `makeAppCore()`) and a
 `TestActor` in tests. Reads on the UI thread stay synchronous, only writes
@@ -256,7 +257,7 @@ Outside that overhead, app complexity could be much lower.
     and the bridged `makeAppCore() -> Core` production entry), plus
     `Message`, `Command`, `SendMessageAction`, `StoryRow`, `LoadStatus`,
     `LoadedStories`, `Dependencies` (the ambient `@TaskLocal` for
-    `date` / `client` / `clock`), and the bridged `Strings` enum
+    `date` / `client` / `searchDebounce`), and the bridged `Strings` enum
     generated from `Resources/Localizable.xcstrings` by
     `scripts/generate-strings.swift`. Depends on `HackerNews`; Skip
     transitively packages `HackerNews` into the AAR set.

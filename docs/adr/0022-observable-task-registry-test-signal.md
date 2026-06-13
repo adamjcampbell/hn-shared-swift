@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-06-12). Builds on [ADR-0021](0021-spawn-owning-task-registry.md).
+Accepted (2026-06-12). Builds on [ADR-0021](0021-spawn-owning-task-registry.md).
 
 ## Context
 

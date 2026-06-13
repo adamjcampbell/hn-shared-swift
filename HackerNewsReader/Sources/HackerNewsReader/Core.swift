@@ -16,31 +16,23 @@ enum TaskID { case feed, feedMore, search, searchMore, searchListener }
 /// hook. One `Core` serves every consumer — `MainActor` production (built
 /// via ``makeAppCore``) and `TestActor` tests (built via ``makeCore``).
 ///
-/// ``makeCore`` threads its `isolation` parameter through the message
-/// handlers into the ``TaskRegistry``, so the host actor owns every
-/// mutation. ``Model`` is non-`Sendable` and never leaves that region. Production wraps
-/// ``sendMessage`` in a `@MainActor` ``SendMessageAction`` at the app
-/// boundary (`SendMessageAction(core)`); only ``model`` and ``commands``
-/// cross JNI.
+/// ``Model`` is non-`Sendable` and never leaves the region its `Core`
+/// was built on. Production wraps ``sendMessage`` in a `@MainActor`
+/// ``SendMessageAction`` at the app boundary; only ``model`` and
+/// ``commands`` cross JNI.
 // SKIP @bridgeMembers
 public struct Core {
     public let model: Model
 
     public let commands: AsyncStream<Command>
 
-    /// Applies a `Message` to the model. Non-`Sendable` — it captures the
-    /// `Model` and the task registry — so the type system confines every
-    /// caller to the region `makeCore` was formed on, and the body runs
-    /// there: `MainActor` in production, a `TestActor` in tests. The
-    /// listener `Task` and the fetch work share that same isolation, so
-    /// every `Model` / registry write stays serialised.
-    ///
-    /// `internal` so app code reaches it only through the `@MainActor`
-    /// ``SendMessageAction`` that wraps it; tests in-module call it
-    /// directly on their `TestActor`. Concurrent UI entry points (a
-    /// fire-and-forget tap plus a `.refreshable`) serialise at that
-    /// `@MainActor` boundary; the synchronous
-    /// ``apply(_:to:commands:tasks:)`` keeps each handler's
+    /// Applies a `Message` to the model. Non-`Sendable` (it captures the
+    /// `Model` and the registry), so every caller is confined to the
+    /// region the `Core` was built on. `internal` so app code reaches it
+    /// only through the `@MainActor` ``SendMessageAction``; tests call it
+    /// directly. Concurrent UI entry points (a fire-and-forget tap plus a
+    /// `.refreshable`) serialise at that `@MainActor` boundary, and the
+    /// synchronous ``apply(_:to:commands:tasks:)`` keeps each handler's
     /// read-modify-write atomic against actor reentrancy.
     // SKIP @nobridge
     let sendMessage: (Message) async -> Void
@@ -61,32 +53,20 @@ public struct Core {
     let tasks: TaskRegistry<TaskID>
 }
 
-/// Composes the core: builds the command stream and the task registry,
-/// spawns the search listener, and returns the ``Core`` handle.
+/// Wires the command stream, the search listener, and the send closure
+/// over the injected `model` and `tasks`, and returns the ``Core``.
 ///
-/// `makeCore` is nonisolated: it runs on — and confines its
-/// non-`Sendable` state (`Model`, the registry, the send closure) to —
-/// whatever actor calls it. The `tasks` registry is injected by that
-/// caller, already carrying the isolation each spawned `Task` runs on:
-/// ``makeAppCore`` injects a statically-`@MainActor` spawner
-/// (`Task { await work() }` — the literal inherits `MainActor`, a global
-/// actor, with no annotation or capture); tests inject a spawner
-/// capturing their `TestActor`
-/// instance (`Task { _ = isolation; … }`, the dynamic-isolation capture
-/// SE-0420 requires for an actor instance). So the `_ = isolation` dance
-/// lives only in test code, where the isolation is a dynamic instance;
-/// production reads as a plain global-actor `Task`. `apply`,
-/// `applySearchQuery`, and `load` are plain functions.
-///
-/// Both dependencies are injected by the caller — the composition root:
-/// the `model` (so the app can launch in a specific state), and the
-/// `tasks` registry (so its spawner carries the caller's isolation).
-/// `makeCore` is pure wiring with no defaults of its own.
+/// Pure wiring with no defaults: the composition root supplies both
+/// dependencies — the `model` (so the app can launch in a specific
+/// state) and the `tasks` registry (whose spawner carries the caller's
+/// isolation; see ``makeAppCore`` and the test fixture). `makeCore` is
+/// nonisolated and runs on the caller; its non-`Sendable` state stays in
+/// that region. `apply`, `applySearchQuery`, and `load` are plain
+/// functions.
 ///
 /// - Parameters:
 ///   - model: The observable state, constructed by the caller.
-///   - tasks: The registry, built by the caller with a spawner bound to
-///     the caller's isolation.
+///   - tasks: The registry, with a spawner bound to the caller's isolation.
 /// - Returns: The ``Core`` handle.
 func makeCore(
     model: Model,
@@ -347,10 +327,9 @@ func load(
 /// - Returns: The ``Core`` handle.
 // SKIP @bridge
 @MainActor public func makeAppCore(model: Model) -> Core {
-    // Static `MainActor` isolation: the spawner closure is inferred
-    // `@MainActor` (a non-`Sendable` closure formed in this `@MainActor`
-    // function, SE-0461), so the `Task` literal inherits `MainActor`
-    // unconditionally (SE-0420, global actor) — no `@MainActor in`
-    // annotation and no `#isolation` capture needed.
+    // The spawner closure is inferred `@MainActor` (a non-`Sendable`
+    // closure in this `@MainActor` function), so `Task { … }` inherits
+    // `MainActor` — no annotation or capture. Tests inject an
+    // instance-capturing spawner instead; see the test fixture.
     makeCore(model: model, tasks: TaskRegistry { work in Task { await work() } })
 }

@@ -1,35 +1,24 @@
 import Observation
 
 /// Keyed store of in-flight `Task`s that spawns the work it tracks
-/// through one injected `spawn`, formed where the host isolation is in
-/// scope — `makeCore` captures its isolated parameter into the spawner
-/// once, and every ``run(_:work:)`` call site stays a plain closure.
-/// Non-`Sendable` by design: every capture of it is confined to the
-/// region it was formed on, which is what serialises `entries` without
-/// a lock.
+/// through an injected `spawn` closure (the composition root supplies
+/// one bound to its isolation). Non-`Sendable` by design: every capture
+/// of it is confined to the region it was built on, which is what
+/// serialises `entries` without a lock.
 ///
-/// ``run(_:work:)`` composes the caller's `work` with the
-/// identity-guarded vacate into one closure and hands it to `spawn`.
-/// `makeCore` builds `spawn` as a `Task { _ = isolation; await work() }`
-/// literal that inherits the host actor (SE-0420), so the work — and the
-/// vacate composed into its tail — runs and resumes there. (An
-/// instance-isolated continuation resuming off-executor after an
-/// internal `await` was a Swift 6.3 compiler bug, [swiftlang/swift#88993],
-/// fixed in 6.4, which this package targets. See ADR-0024.)
+/// ``run(_:work:)`` composes the caller's `work` with an
+/// identity-guarded vacate into one closure and hands it to `spawn`. The
+/// vacate keeps joining honest: a finished task removes its entry only
+/// while the slot is still its own, so a replaced task finishing late
+/// never clobbers its replacement, and an id with an entry is an id with
+/// live work — a caller wanting to resubscribe to (join) an in-flight
+/// run reads ``subscript(_:)`` and awaits what it finds rather than
+/// starting a duplicate.
 ///
-/// The vacate guard keeps joining honest: a finished task removes its
-/// entry only while the slot is still its own, so a replaced task
-/// finishing late never clobbers its replacement, and an id with an
-/// entry is an id with live work — a caller wanting to resubscribe to
-/// (join) an in-flight run reads ``subscript(_:)`` and awaits what it
-/// finds instead of starting a duplicate.
-///
-/// `@Observable` so membership is a watchable signal: tests read
+/// `@Observable` so membership is a watchable test signal: a test reads
 /// ``subscript(_:)`` inside `withObservationTracking` (via `waitUntil`)
-/// and wait for a task to be registered, replaced (`Task` is
-/// `Equatable`, so identity comparison detects cancel-and-replace), or
-/// removed — instead of draining the actor's queue a guessed number of
-/// times.
+/// to await a task being registered, replaced (`Task` is `Equatable`),
+/// or removed.
 @Observable
 final class TaskRegistry<ID: Hashable> {
     private var entries: [ID: Task<Void, Never>] = [:]
