@@ -69,8 +69,9 @@ public struct Core {
 /// whatever actor calls it. The `tasks` registry is injected by that
 /// caller, already carrying the isolation each spawned `Task` runs on:
 /// ``makeAppCore`` injects a statically-`@MainActor` spawner
-/// (`Task { @MainActor in … }` — no capture trick, `MainActor` is a
-/// global actor); tests inject a spawner capturing their `TestActor`
+/// (`Task { await work() }` — the literal inherits `MainActor`, a global
+/// actor, with no annotation or capture); tests inject a spawner
+/// capturing their `TestActor`
 /// instance (`Task { _ = isolation; … }`, the dynamic-isolation capture
 /// SE-0420 requires for an actor instance). So the `_ = isolation` dance
 /// lives only in test code, where the isolation is a dynamic instance;
@@ -339,9 +340,10 @@ func load(
 /// - Returns: The ``Core`` handle.
 // SKIP @bridge
 @MainActor public func makeAppCore() -> Core {
-    // Static `MainActor` isolation: the spawned `Task` inherits it via
-    // the explicit `@MainActor in`, with no `#isolation` capture.
-    makeCore(tasks: TaskRegistry { work in
-        Task { @MainActor in await work() }
-    })
+    // Static `MainActor` isolation: the spawner closure is inferred
+    // `@MainActor` (a non-`Sendable` closure formed in this `@MainActor`
+    // function, SE-0461), so the `Task` literal inherits `MainActor`
+    // unconditionally (SE-0420, global actor) — no `@MainActor in`
+    // annotation and no `#isolation` capture needed.
+    makeCore(tasks: TaskRegistry { work in Task { await work() } })
 }

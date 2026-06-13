@@ -20,16 +20,16 @@ func makeCore(model: Model = Model(), tasks: TaskRegistry<TaskID>) -> Core
 
 Each caller builds the registry with a spawner bound to *its* isolation:
 
-- **Production** ([`makeAppCore`](#), `@MainActor`): `TaskRegistry { work in Task { @MainActor in await work() } }`. The spawned `Task` inherits `MainActor` from the explicit `@MainActor in` annotation — **no `#isolation` capture**, idiomatic global-actor code.
+- **Production** ([`makeAppCore`](#), `@MainActor`): `TaskRegistry { work in Task { await work() } }`. The spawner closure is inferred `@MainActor` (a non-`Sendable` closure formed in the `@MainActor` function, SE-0461), so the `Task` literal inherits `MainActor` unconditionally (SE-0420, global actor) — **no `@MainActor in` annotation and no `#isolation` capture**, idiomatic global-actor code.
 - **Tests** (`withCore`, isolated to a per-test `TestActor` instance): `TaskRegistry { work in Task { _ = isolation; await work() } }` — the `_ = isolation` capture SE-0420 requires for a dynamic *instance* actor.
 
 So the `_ = isolation` ceremony lives only in test code, where the isolation genuinely is a dynamic instance; production reads as a plain global-actor `Task`. `makeCore` runs on (and confines its non-`Sendable` state to) whatever actor calls it; being nonisolated, it loses the `isolated` parameter entirely.
 
-This compiles with **no unsafe opt-outs**. The static-both form ADR-0024 rejected needed `assumeIsolated` + `nonisolated(unsafe)` because it threaded the non-`Sendable` work into a `TestActor` *method*; the static-production/dynamic-test split here never does that — the test spawner is a plain `Task { _ = isolation; … }` literal, and the production `Task { @MainActor in … }` is a global-actor closure (inherently `Sendable` per SE-0431), so passing the work into it is accepted. Verified 15/15 on the endurance gate under Swift 6.4.
+This compiles with **no unsafe opt-outs**. The static-both form ADR-0024 rejected needed `assumeIsolated` + `nonisolated(unsafe)` because it threaded the non-`Sendable` work into a `TestActor` *method*; the static-production/dynamic-test split here never does that — the test spawner is a plain `Task { _ = isolation; … }` literal, and the production `Task { await work() }` is a global-actor-isolated closure (inherently `Sendable` per SE-0431), so passing the work into it is accepted. Verified 15/15 on the endurance gate under Swift 6.4.
 
 ## Consequences
 
-- **Production carries no isolation-capture trick.** `makeAppCore` is plain `Task { @MainActor in … }`; the dynamic-capture spelling is confined to the test harness, where it is warranted. `makeCore`'s signature drops the `isolated` parameter.
+- **Production carries no isolation-capture trick.** `makeAppCore` is plain `Task { await work() }` (MainActor inherited, no annotation); the dynamic-capture spelling is confined to the test harness, where it is warranted. `makeCore`'s signature drops the `isolated` parameter.
 - **`makeCore` is no longer fully self-contained.** The spawner is defined at the two call sites rather than once inside `makeCore`, and each caller must construct and inject the registry. This is the cost traded for capture-free production: the previous form had one spawner definition and a uniform `#isolation`, at the price of production wearing the instance-capture spelling.
 - The bridged surface is unchanged — `makeAppCore`'s signature is the same; only its body and `makeCore`'s signature change. App call sites (`SendMessageAction(core)`) are unaffected.
 - The conceptual model is sharper: dynamic-instance-isolation capture is a *test* concern (instance actors per test), and production's static global-actor isolation is expressed as such. For a forward-looking, architecture-proving project, that separation is the point.

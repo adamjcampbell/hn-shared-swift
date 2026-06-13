@@ -163,8 +163,8 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   (ADR-0024).
 - `makeCore` is nonisolated and takes the `TaskRegistry` as a parameter
   (ADR-0025). The caller builds the spawner with *its* isolation:
-  `makeAppCore` (`@MainActor`) injects `TaskRegistry { work in Task { @MainActor in await work() } }`
-  (static, no capture); `withCore` injects `TaskRegistry { work in Task { _ = isolation; await work() } }`
+  `makeAppCore` (`@MainActor`) injects `TaskRegistry { work in Task { await work() } }`
+  (the `Task` inherits `MainActor` — global actor, no annotation or capture); `withCore` injects `TaskRegistry { work in Task { _ = isolation; await work() } }`
   (dynamic per-test `TestActor` capture). The `_ = isolation` spelling is
   a test-only concern; production is plain global-actor `Task`.
 - `searchDebounce` / `client` / `date` are ambient via the `@TaskLocal`
