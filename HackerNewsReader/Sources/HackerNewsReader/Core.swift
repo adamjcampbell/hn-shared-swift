@@ -28,7 +28,7 @@ public struct Core {
     /// only through the `@MainActor` ``SendMessageAction``; tests call it
     /// directly. Concurrent UI entry points (a fire-and-forget tap plus a
     /// `.refreshable`) serialise at that `@MainActor` boundary, and
-    /// ``apply(_:to:commands:feed:searchMore:)`` keeps each handler's
+    /// ``apply(_:to:commands:feed:search:)`` keeps each handler's
     /// pre-fetch read-modify-write before its first `await`, so it stays
     /// atomic against actor reentrancy.
     // SKIP @nobridge
@@ -67,10 +67,10 @@ func makeCore(
     let state = model
     let (commands, commandsContinuation) = AsyncStream<Command>.makeStream()
     let feed = Latest<Page>()
-    let searchMore = Latest<Page>()
+    let search = Latest<Page>()
 
     let consumer = spawn {
-        await runSearch(state, searchMore: searchMore, spawn: spawn)
+        await runSearch(state, search: search, spawn: spawn)
     }
 
     return Core(
@@ -82,13 +82,13 @@ func makeCore(
                 to: state,
                 commands: commandsContinuation,
                 feed: feed,
-                searchMore: searchMore
+                search: search
             )
         },
         cancelAll: {
             consumer.cancel()
             feed.cancel()
-            searchMore.cancel()
+            search.cancel()
         }
     )
 }
@@ -115,13 +115,15 @@ func makeCore(
 ///   - commands: Continuation for one-shot UI commands.
 ///   - feed: Latest-wins slot shared by the feed's initial load and its
 ///     load-more, so a refresh cancels an in-flight load-more.
-///   - searchMore: Latest-wins slot for the search load-more.
+///   - search: Latest-wins slot shared by the search reload (driven by
+///     ``runSearch`` / ``applySearch``) and the search load-more, so a new
+///     query cancels an in-flight load-more.
 func apply(
     _ message: Message,
     to state: Model,
     commands: AsyncStream<Command>.Continuation,
     feed: Latest<Page>,
-    searchMore: Latest<Page>
+    search: Latest<Page>
 ) async {
     switch message {
 
@@ -168,12 +170,15 @@ func apply(
         }
 
     case .loadMore:
+        // `!searchInitialStatus.isLoading` yields to an in-flight reload, so
+        // a load-more never cancels the reload it shares the `search` slot with.
         guard let loaded = state.searchLoaded, loaded.hasMore,
-              !state.searchLoadMoreStatus.isLoading else { return }
+              !state.searchLoadMoreStatus.isLoading,
+              !state.searchInitialStatus.isLoading else { return }
         let query = state.searchQuery
         let next = loaded.nextPage
         state.searchLoadMoreStatus.startLoading()
-        await load(searchMore, into: state, status: \.searchLoadMoreStatus) {
+        await load(search, into: state, status: \.searchLoadMoreStatus) {
             try await $0.search(query, next)
         } commit: { page in
             state.searchLoaded?.appendPage(page.stories.map(\.id), totalPages: page.totalPages)
@@ -181,79 +186,81 @@ func apply(
     }
 }
 
-/// The long-lived search consumer: the one host-isolated `Task` the
-/// ``Core`` spawns. Binding-driven — the search field writes
-/// `model.searchQuery`, whose `didSet` feeds this loop — it runs the
-/// latest search-reload, cancelling any superseded one, and commits
-/// results on the host actor.
-///
-/// Each query cancels the prior reload and the ``searchMore`` slot (so a
-/// new search pre-empts an in-flight load-more), then spawns the reload
-/// through `spawn`. The reload is the one place a fetch must run *and
-/// commit* on the host actor while new queries keep arriving: it can't be
-/// an awaited ``Latest`` (that would block this loop), and its work isn't
-/// `Sendable` (it mutates the `Model`). `spawn` carries the caller's
-/// isolation to it — the capability ``makeCore`` is handed, used here
-/// where the work genuinely needs it.
-///
-/// A superseded reload is cancelled; its post-fetch
-/// `try Task.checkCancellation()` drops the stale commit. Because the
-/// reload does a full *replace* (not an append), a result that completes
-/// inside the cancellation race window is transient — the latest reload
-/// commits last and wins.
+/// The long-lived search driver: the one host-isolated `Task` the ``Core``
+/// spawns. Binding-driven — the search field writes `model.searchQuery`,
+/// whose `didSet` feeds this loop — it spawns the latest ``applySearch``
+/// per query change. Spawning rather than awaiting keeps the loop reading
+/// the next keystroke while a reload is in flight; the shared `search` slot
+/// does the cancel-and-replace, so the driver does not cancel the prior
+/// task itself. It holds only the most recent, to cancel on teardown (the
+/// `search` slot releases an occupied reload; this releases one spawned but
+/// not yet in the slot).
 ///
 /// - Parameters:
 ///   - state: The model to mutate.
-///   - searchMore: The search load-more slot, cancelled on every query
-///     change so a new search pre-empts an in-flight load-more.
-///   - spawn: Spawns the reload on the host actor (so it may commit), with
-///     a `Task` bound to the caller's isolation.
+///   - search: The slot shared by the search reload and the search
+///     load-more.
+///   - spawn: Spawns each ``applySearch`` on the host actor (so it may
+///     commit), with a `Task` bound to the caller's isolation.
 func runSearch(
     _ state: Model,
-    searchMore: Latest<Page>,
+    search: Latest<Page>,
     spawn: @escaping (@escaping () async -> Void) -> Task<Void, Never>
 ) async {
-    var reload: Task<Void, Never>?
-    defer { reload?.cancel() }
+    var latest: Task<Void, Never>?
+    defer { latest?.cancel() }
 
     for await query in state.searchQueryChanges {
-        reload?.cancel()
-        // A new or cleared query pre-empts an in-flight search load-more.
-        searchMore.cancel()
+        latest = spawn { await applySearch(query, to: state, search: search) }
+    }
+}
 
-        if query.isEmpty {
-            state.searchLoaded = nil
-            state.searchInitialStatus = LoadStatus()
-            state.searchLoadMoreStatus = LoadStatus()
-            continue
-        }
+/// Applies a `model.searchQuery` change — the binding-driven analogue of an
+/// ``apply`` fetch arm. Clears search state on an empty query; otherwise
+/// marks loading and runs the latest reload through the shared `search`
+/// slot, which cancels any in-flight search load-more.
+///
+/// Spawned per query by ``runSearch`` (so the driver never blocks) and
+/// caller-following, so it commits the `Model` on the host actor. Latest
+/// wins by ordering, not by a held handle: SE-0431 enqueues the per-query
+/// tasks `runSearch` spawns in creation order on the host actor, so they
+/// claim the `search` slot in query order and ``Latest`` lets only the last
+/// (newest) one commit. The invariant is unenforced by types — the slot is
+/// claimed in the task's synchronous head (before the first real
+/// suspension), the spawned closure stays host-actor-isolated, and priority
+/// stays uniform (nothing `await`s an older reload's value). Same SE-0431
+/// ordering the `feed` slot relies on; here it is load-bearing.
+///
+/// - Parameters:
+///   - query: The current search query.
+///   - state: The model to mutate.
+///   - search: Latest-wins slot shared with the search load-more, so a new
+///     query cancels an in-flight load-more.
+func applySearch(_ query: String, to state: Model, search: Latest<Page>) async {
+    if query.isEmpty {
+        search.cancel()
+        state.searchLoaded = nil
+        state.searchInitialStatus = LoadStatus()
+        state.searchLoadMoreStatus = LoadStatus()
+        return
+    }
 
-        // @Observable re-fires on equal writes; skip no-ops during keystroke bursts.
-        if state.searchLoadMoreStatus != LoadStatus() {
-            state.searchLoadMoreStatus = LoadStatus()
-        }
-        if !state.searchInitialStatus.isLoading {
-            state.searchInitialStatus.startLoading()
-        }
+    // @Observable re-fires on equal writes; skip no-ops during keystroke bursts.
+    if state.searchLoadMoreStatus != LoadStatus() {
+        state.searchLoadMoreStatus = LoadStatus()
+    }
+    if !state.searchInitialStatus.isLoading {
+        state.searchInitialStatus.startLoading()
+    }
 
-        // Host-isolated (via `spawn`): the reload commits the `Model` itself.
-        reload = spawn {
-            do {
-                let page = try await fetch(debounce: Dependencies.current.searchDebounce) {
-                    try await $0.search(query, 0)
-                }
-                try Task.checkCancellation()
-                for story in page.stories { state.stories[story.id] = story }
-                state.searchLoaded = LoadedStories(
-                    ids: page.stories.map(\.id), page: 0,
-                    totalPages: page.totalPages, loadedAt: Dependencies.current.date.now
-                )
-                state.searchInitialStatus.finishSuccess()
-            } catch is CancellationError {
-            } catch {
-                state.searchInitialStatus.finishFailure(error.localizedDescription)
-            }
-        }
+    await load(search, into: state, status: \.searchInitialStatus,
+               debounce: Dependencies.current.searchDebounce) {
+        try await $0.search(query, 0)
+    } commit: { page in
+        state.searchLoaded = LoadedStories(
+            ids: page.stories.map(\.id), page: 0,
+            totalPages: page.totalPages, loadedAt: Dependencies.current.date.now
+        )
     }
 }
 
@@ -302,6 +309,8 @@ func fetch(
 ///   - slot: Latest-wins slot for the in-flight fetch.
 ///   - state: The model to mutate.
 ///   - status: Key path to the `LoadStatus` carrying this load's outcome.
+///   - debounce: Delay before the fetch, or `nil` (the search reload
+///     debounces; feed and load-more don't).
 ///   - request: Issues the page fetch.
 ///   - commit: Records the fetched page into `state` — a fresh
 ///     `LoadedStories` for an initial load, `appendPage` for load-more.
@@ -309,12 +318,13 @@ func load(
     _ slot: Latest<Page>,
     into state: Model,
     status: ReferenceWritableKeyPath<Model, LoadStatus>,
+    debounce: Duration? = nil,
     request: @escaping @Sendable (Client) async throws -> Page,
     commit: (Page) -> Void
 ) async {
     do {
         let page = try await slot {
-            try await fetch(debounce: nil, body: request)
+            try await fetch(debounce: debounce, body: request)
         }
         for story in page.stories { state.stories[story.id] = story }
         commit(page)
