@@ -47,8 +47,9 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 - `HackerNewsReader` owns the presentation lifecycle: `Model`, `Core`,
   `SendMessageAction`, `Message`, `Command`, plus `StoryRow`,
   `LoadStatus`, `LoadedStories`, and the free functions that build and
-  mutate the core (`makeCore` / `makeAppCore`, `apply`, `runSearch`).
-- `apply` and `runSearch` are the only writers of `Model`. Don't
+  mutate the core (`makeCore` / `makeAppCore`, `apply`, `applySearch`,
+  `runSearch`).
+- `apply` and `applySearch` are the only writers of `Model`. Don't
   add mutators on `Model`.
 - `Message` is UI → core; `Command` is core → UI. Don't name a new type
   `Effect` — reserved for a possible future TCA-style reducer.
@@ -160,17 +161,26 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   ([swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993),
   fixed in 6.4 / 6.3.2+). ADR-0024 records the workaround stack that
   carried the design on 6.3; don't reintroduce it on a fixed toolchain.
-- Fetches go through `Latest<Page>`, a host-confined latest-wins slot:
-  feed refresh and feed load-more share one slot (so a refresh cancels an
-  in-flight load-more intrinsically), and search load-more has its own.
-  `apply` is `async` and caller-following — it `await`s the fetch and
-  commits the `Model` in place — and `Latest` is latest-wins *at delivery*
-  (a superseded caller throws `CancellationError` even if its work
-  completed), so callers commit unconditionally (ADR-0026).
+- Fetches go through `Latest<Page>`, a host-confined latest-wins slot —
+  one per list: `feed` (refresh + feed load-more) and `search` (the reload
+  + search load-more). A refresh / new query cancels its list's in-flight
+  load-more intrinsically through the shared slot. `apply` is `async` and
+  caller-following — it `await`s the fetch and commits the `Model` in place
+  — and `Latest` is latest-wins *at delivery* (a superseded caller throws
+  `CancellationError` even if its work completed), so callers commit
+  unconditionally (ADR-0026).
+- Search is binding-driven and shaped like an `apply` arm: the reload is
+  `applySearch(query:to:search:)` (`await load` over the `search` slot),
+  and `runSearch` is a thin driver that `spawn`s one `applySearch` per
+  `model.searchQuery` change. Latest-wins across keystrokes rests on
+  SE-0431 (the per-query tasks claim the slot in creation order, in their
+  synchronous head), not a held handle — the same ordering `feed` relies
+  on. Don't insert an `await` before the slot claim or make the spawned
+  closure non-host-isolated; that voids the order guarantee.
 - `makeCore` is nonisolated and takes a `spawn` parameter — the
   isolation-carrying spawner used *only* where work must run *and* mutate
-  the `Model`: the binding-driven search consumer (`runSearch`) and each
-  reload it starts. `makeAppCore` (`@MainActor`) injects
+  the `Model`: the search driver (`runSearch`) and each `applySearch` it
+  spawns. `makeAppCore` (`@MainActor`) injects
   `{ work in Task { await work() } }` (the `Task` inherits `MainActor` —
   global actor, no annotation or capture); `withCore` injects
   `{ work in Task { _ = isolation; await work() } }` (dynamic per-test
@@ -212,14 +222,14 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   the top.
 - Wrap test setup in `withCore { actor, core in … }`. It binds
   `Dependencies.$current.withValue(...)` and runs `makeCore` inside that
-  binding, so the search consumer `Task` and every fetch inherit the
+  binding, so the search driver `Task` and every fetch inherit the
   pinned deps, then `core.cancelAll()`s on exit to break the
-  `consumer-Task → Model` cycle before the next test. Mocks pass through
+  `driver-Task → Model` cycle before the next test. Mocks pass through
   `client: .mock(frontPage: …, search: …)`.
 - Pin time with `withCore(now:)`, or `Dependencies.$current.withValue`
   (copy and mutate `Dependencies.current` to override a subset), when
   asserting on `StoryRow.metaLine` / `feedHeaderSubtitle`. `withCore`
-  opens the binding around `makeCore` and the body so the consumer and
+  opens the binding around `makeCore` and the body so the driver and
   projections share the same `now`.
 
 ## State shape
@@ -238,7 +248,7 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   denormalised arrays.
 - Trust the boundary dedupe (bridge / SwiftUI diffing). Don't sprinkle
   `if !state.x.contains(...)` whack-a-mole guards inside `apply` /
-  `runSearch`.
+  `applySearch`.
 
 ## Doc & comment style
 
