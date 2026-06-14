@@ -47,8 +47,8 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 - `HackerNewsReader` owns the presentation lifecycle: `Model`, `Core`,
   `SendMessageAction`, `Message`, `Command`, plus `StoryRow`,
   `LoadStatus`, `LoadedStories`, and the free functions that build and
-  mutate the core (`makeCore` / `makeAppCore`, `apply`, `applySearchQuery`).
-- `apply` and `applySearchQuery` are the only writers of `Model`. Don't
+  mutate the core (`makeCore` / `makeAppCore`, `apply`, `runSearch`).
+- `apply` and `runSearch` are the only writers of `Model`. Don't
   add mutators on `Model`.
 - `Message` is UI → core; `Command` is core → UI. Don't name a new type
   `Effect` — reserved for a possible future TCA-style reducer.
@@ -160,12 +160,23 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   ([swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993),
   fixed in 6.4 / 6.3.2+). ADR-0024 records the workaround stack that
   carried the design on 6.3; don't reintroduce it on a fixed toolchain.
-- `makeCore` is nonisolated and takes the `TaskRegistry` as a parameter
-  (ADR-0025). The caller builds the spawner with *its* isolation:
-  `makeAppCore` (`@MainActor`) injects `TaskRegistry { work in Task { await work() } }`
-  (the `Task` inherits `MainActor` — global actor, no annotation or capture); `withCore` injects `TaskRegistry { work in Task { _ = isolation; await work() } }`
-  (dynamic per-test `TestActor` capture). The `_ = isolation` spelling is
-  a test-only concern; production is plain global-actor `Task`.
+- Fetches go through `Latest<Page>`, a host-confined latest-wins slot:
+  feed refresh and feed load-more share one slot (so a refresh cancels an
+  in-flight load-more intrinsically), and search load-more has its own.
+  `apply` is `async` and caller-following — it `await`s the fetch and
+  commits the `Model` in place — and `Latest` is latest-wins *at delivery*
+  (a superseded caller throws `CancellationError` even if its work
+  completed), so callers commit unconditionally (ADR-0026).
+- `makeCore` is nonisolated and takes a `spawn` parameter — the
+  isolation-carrying spawner used *only* where work must run *and* mutate
+  the `Model`: the binding-driven search consumer (`runSearch`) and each
+  reload it starts. `makeAppCore` (`@MainActor`) injects
+  `{ work in Task { await work() } }` (the `Task` inherits `MainActor` —
+  global actor, no annotation or capture); `withCore` injects
+  `{ work in Task { _ = isolation; await work() } }` (dynamic per-test
+  `TestActor` capture). The `_ = isolation` spelling is a test-only
+  concern; production is plain global-actor `Task`. The awaited `Latest`
+  fetches need no spawner — they broker only `Sendable` values.
 - `searchDebounce` / `client` / `date` are ambient via the `@TaskLocal`
   `Dependencies`, not injected into a type. Production reads the live
   defaults (250 ms, `Client()`, `Date()`); `withCore` defaults
@@ -180,20 +191,20 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   that actor as its first parameter, no force-cast needed.
 - `await waitUntil { <cond> }` is the default synchronisation: it
   re-arms `withObservationTracking` and waits on a real observable
-  transition — a `Model` field (a status flips, a `LoadedStories`
-  populates or clears) or a `core.tasks` registry slot (`TaskRegistry`
-  is `@Observable`; `Task` is `Equatable`). For a cancel-and-replace,
-  the condition is "a different task is registered":
-  `core.tasks[.search] != nil && core.tasks[.search] != before` — a
-  cancelled fetch self-removes on its own schedule, so `!= before`
-  alone can return on a transiently empty slot. There is no `settle`
-  and no `runPending`; nothing drains queues by count.
+  `Model` transition — a status flips, a `LoadedStories` populates or
+  clears, `searchResults` change. There is no registry to observe; wait
+  on the effect in the `Model`, or `await` the `apply` directly for
+  `.refresh` / `.loadMore`. There is no `settle` and no `runPending`;
+  nothing drains queues by count.
 - To interrupt a fetch mid-call, park the mock on a `Gate`: the mock
   `await`s `gate.arrive()` (signals, then parks), the test `await`s
   `gate.arrival()` to know the fetch is inside the client, then
   triggers the interruption. The park releases on cancellation; check
   `Task.isCancelled` / `Task.checkCancellation()` after `arrive()`
-  to surface it the way the transport would.
+  to surface it the way the transport would. `Hold` is the
+  cancellation-*ignoring* variant — it releases only on `release()`,
+  modelling a fetch whose round-trip completes *after* it was cancelled
+  (cancel losing the race), to test the `Latest` delivery guard.
 - No `core.run` batching: the `withCore` body is one isolated scope, so
   write reads and `await core.sendMessage(...)` flat. Split only across
   real suspension boundaries (`waitUntil`, `gate.arrival`,
@@ -201,14 +212,14 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   the top.
 - Wrap test setup in `withCore { actor, core in … }`. It binds
   `Dependencies.$current.withValue(...)` and runs `makeCore` inside that
-  binding, so the listener `Task` and every fetch inherit the pinned
-  deps, then `core.cancelAll()`s on exit to break the
-  `listener-Task → Model` cycle before the next test. Mocks pass through
+  binding, so the search consumer `Task` and every fetch inherit the
+  pinned deps, then `core.cancelAll()`s on exit to break the
+  `consumer-Task → Model` cycle before the next test. Mocks pass through
   `client: .mock(frontPage: …, search: …)`.
 - Pin time with `withCore(now:)`, or `Dependencies.$current.withValue`
   (copy and mutate `Dependencies.current` to override a subset), when
   asserting on `StoryRow.metaLine` / `feedHeaderSubtitle`. `withCore`
-  opens the binding around `makeCore` and the body so listener tasks and
+  opens the binding around `makeCore` and the body so the consumer and
   projections share the same `now`.
 
 ## State shape
@@ -227,7 +238,7 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   denormalised arrays.
 - Trust the boundary dedupe (bridge / SwiftUI diffing). Don't sprinkle
   `if !state.x.contains(...)` whack-a-mole guards inside `apply` /
-  `applySearchQuery`.
+  `runSearch`.
 
 ## Doc & comment style
 

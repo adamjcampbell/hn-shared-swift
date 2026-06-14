@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted (2026-06-12). Builds on [ADR-0021](0021-spawn-owning-task-registry.md).
+Superseded by [ADR-0026](0026-replace-registry-with-latest-slot.md) (2026-06-14): the `TaskRegistry` it observed is gone, so tests await `Model` transitions via `waitUntil` instead. The `settle`-retirement it introduced stands.
+
+Was Accepted (2026-06-12). Builds on [ADR-0021](0021-spawn-owning-task-registry.md).
 
 ## Context
 
