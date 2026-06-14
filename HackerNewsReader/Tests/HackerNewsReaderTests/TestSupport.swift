@@ -1,13 +1,15 @@
 import Foundation
 import Observation
 import Testing
+import os
 @testable import HackerNewsReader
 import HackerNews
 
 /// Per-test ``Core`` fixture. Isolated to a fresh ``TestActor`` so
-/// `makeCore`, the spawner built here, and the whole `body` run on that
-/// actor, serialising every model / registry write. Cancels the listener
-/// on exit so the `Task → Model` references release before the next test.
+/// `makeCore`, the consumer spawner built here, and the whole `body` run
+/// on that actor, serialising every model write. Cancels the search
+/// consumer on exit so the `Task → Model` references release before the
+/// next test.
 ///
 /// The body runs isolated to the `TestActor`, so reads and
 /// `core.sendMessage(_:)` calls share a consistent snapshot between
@@ -15,15 +17,14 @@ import HackerNews
 ///
 /// Default `debounce` is `.zero`: the search fetch runs straight
 /// through its sleep, so a test drives a search to completion with
-/// `await waitUntil { core.model.searchLoaded != nil }` (or by awaiting
-/// the registry's task) and never touches a clock. Tests that assert
-/// *window* behaviour — what happens while the debounce is pending —
-/// pass ``debounceNeverElapses``: real time never crosses it, so the
-/// window deterministically stays open until cancellation (fixture
-/// exit) releases the parked sleep.
+/// `await waitUntil { core.model.searchLoaded != nil }` and never touches
+/// a clock. Tests that assert *window* behaviour — what happens while the
+/// debounce is pending — pass ``debounceNeverElapses``: real time never
+/// crosses it, so the window deterministically stays open until
+/// cancellation (fixture exit) releases the parked sleep.
 ///
 /// - Note: `client` / `debounce` / `now` are bound into ``Dependencies``
-///   and `makeCore` runs *inside* the `withValue`, so the listener
+///   and `makeCore` runs *inside* the `withValue`, so the search consumer
 ///   `Task` it spawns — and every fetch the body triggers — inherits
 ///   these deps.
 func withCore<R>(
@@ -40,12 +41,12 @@ func withCore<R>(
     // Tests isolate to an actor *instance*, so the spawner captures it
     // (`_ = isolation`) — the dynamic-isolation capture SE-0420 requires
     // for an instance. (Production's `makeAppCore` injects a static
-    // `@MainActor` spawner and needs no capture.)
-    let tasks = TaskRegistry<TaskID> { work in
-        Task { _ = isolation; await work() }
-    }
+    // `@MainActor` spawner and needs no capture.) `makeCore` uses this
+    // spawner for the search consumer and each reload it starts.
     return try await Dependencies.$current.withValue(dependencies) {
-        let core = makeCore(model: model, tasks: tasks)
+        let core = makeCore(model: model, spawn: { work in
+            Task { _ = isolation; await work() }
+        })
         defer { core.cancelAll() }
         return try await body(isolation, core)
     }
@@ -57,12 +58,9 @@ func withCore<R>(
 let debounceNeverElapses = Duration.seconds(1_000_000)
 
 /// Suspends until `condition` holds, re-arming `withObservationTracking`
-/// on whatever observable properties it reads — `Model` fields (a status
-/// flips, a `LoadedStories` populates or clears) or `core.tasks` slots
-/// (a fetch is registered, replaced, or removed; `Task` is `Equatable`,
-/// so `tasks[.search] != before` waits for a cancel-and-replace) — so a
-/// test waits on the actual transition instead of guessing how many
-/// queue drains it takes.
+/// on whatever observable `Model` fields it reads — a status flips, a
+/// `LoadedStories` populates or clears — so a test waits on the actual
+/// transition instead of guessing how many queue drains it takes.
 ///
 /// `onChange` fires in the mutation's `willSet`, but the resumed
 /// continuation runs after the mutation completes (FIFO on the
@@ -117,5 +115,55 @@ final class Gate: Sendable {
     /// Unparks the mock without cancelling it.
     func open() {
         releasesContinuation.finish()
+    }
+}
+
+/// A park that *ignores* cancellation: the parked task resumes only when
+/// the test calls ``release()``, never on cancellation — unlike ``Gate``,
+/// whose `arrive()` unparks when its task is cancelled. Models a fetch
+/// whose network round-trip completes *after* the work was cancelled
+/// (cancel losing the race), so a superseded ``Latest`` slot delivers a
+/// value rather than throwing. ``arrival()`` lets the test wait until the
+/// parked task is genuinely inside ``wait()`` before interrupting it.
+///
+/// One parker and one arrival-waiter per hold.
+final class Hold: Sendable {
+    private struct State {
+        var waiter: CheckedContinuation<Void, Never>?
+        var released = false
+        var arrivalWaiter: CheckedContinuation<Void, Never>?
+        var arrived = false
+    }
+    private let state = OSAllocatedUnfairLock<State>(initialState: State())
+
+    /// Parked side: announce arrival, then suspend until ``release()``,
+    /// ignoring cancellation.
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            state.withLock { s in
+                s.arrived = true
+                s.arrivalWaiter?.resume()
+                s.arrivalWaiter = nil
+                if s.released { continuation.resume() } else { s.waiter = continuation }
+            }
+        }
+    }
+
+    /// Test side: suspend until the parked task reaches ``wait()``.
+    func arrival() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            state.withLock { s in
+                if s.arrived { continuation.resume() } else { s.arrivalWaiter = continuation }
+            }
+        }
+    }
+
+    /// Resume the parked task.
+    func release() {
+        state.withLock { s in
+            s.released = true
+            s.waiter?.resume()
+            s.waiter = nil
+        }
     }
 }

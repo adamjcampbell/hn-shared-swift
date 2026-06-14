@@ -362,8 +362,8 @@ struct CoreTests {
         }
     }
 
-    @Test("keystrokes within the debounce window cancel-and-replace the pending fetch; none reaches the client")
-    func listener_rapidKeystrokes_collapseInsideTheWindow() async throws {
+    @Test("while the debounce window stays open, keystrokes don't reach the client and loading stays active")
+    func searchKeystrokesWithinWindowDontReachClient() async throws {
         let calls = CallRecorder()
         try await withCore(
             client: .mock(
@@ -374,34 +374,21 @@ struct CoreTests {
             ),
             debounce: debounceNeverElapses
         ) { _, core in
-            // Waiting on the registry after each write proves the listener
-            // processed that keystroke before the next lands. `Task`
-            // equality makes each cancel-and-replace an assertable
-            // transition, not a hope.
-            core.model.searchQuery = "r"
-            await waitUntil { core.tasks[.search] != nil }
+            let model = core.model
+            model.searchQuery = "r"
+            await waitUntil { model.searchInitialStatus.isLoading }
 
-            // "A different task is registered", not merely "the slot
-            // changed": a cancelled fetch unparks and self-removes on its
-            // own schedule, so a re-check can land on a transiently empty
-            // slot — `!= rFetch` alone would return on that nil.
-            let rFetch = core.tasks[.search]
-            core.model.searchQuery = "ru"
-            await waitUntil { core.tasks[.search] != nil && core.tasks[.search] != rFetch }
+            model.searchQuery = "ru"
+            model.searchQuery = "rust"
 
-            let ruFetch = core.tasks[.search]
-            core.model.searchQuery = "rust"
-            await waitUntil { core.tasks[.search] != nil && core.tasks[.search] != ruFetch }
-
-            // The window never elapses, so the collapse is total: every
-            // superseded fetch died in its debounce and nothing reached
-            // the client. The companion zero-debounce test covers the
-            // surviving query committing.
-            #expect(rFetch?.isCancelled == true)
-            #expect(ruFetch?.isCancelled == true)
-            #expect(core.tasks[.search]?.isCancelled == false)
+            // The window never elapses, so every superseded reload dies in
+            // its debounce before touching the client; the latest keystroke
+            // stays loading and nothing commits. Cancel-and-replace reaching
+            // the client is covered by the zero-debounce URLError test.
+            await waitUntil { model.searchQuery == "rust" }
             #expect(calls.searchCalls.isEmpty)
-            #expect(core.model.searchInitialStatus.isLoading)
+            #expect(model.searchInitialStatus.isLoading)
+            #expect(model.searchLoaded == nil)
         }
     }
 
@@ -594,6 +581,74 @@ struct CoreTests {
             #expect(model.searchLoaded == nil)
             #expect(model.searchLoadMoreStatus.isLoading == false)
             #expect(model.searchLoadMoreStatus.error == nil)
+        }
+    }
+
+    @Test("a search load-more that completes after a new query supersedes it does not corrupt the new results")
+    func searchLoadMore_completingAfterSupersede_doesNotCorrupt() async throws {
+        // Models cancel losing the race: the page-1 fetch's round-trip finishes
+        // *after* the new query cancels it, so the slot would deliver a value.
+        let hold = Hold()
+        try await withCore(
+            client: .mock(
+                search: { query, p in
+                    if query == "rust" && p == 1 {
+                        await hold.wait()
+                        return page([storyC], totalPages: 5)
+                    }
+                    if query == "go" { return page([storyB], totalPages: 1) }
+                    return page([storyA], totalPages: 5)
+                }
+            )
+        ) { actor, core in
+            let model = core.model
+            await commitSearch("rust", core: core)
+            #expect(model.searchResults.map(\.id) == ["100"])
+
+            let loadMore = Task { _ = actor; await core.sendMessage(.loadMore) }
+            await hold.arrival()                       // the rust page-1 fetch is in flight
+
+            model.searchQuery = "go"                    // supersede: cancels the search load-more
+            await waitUntil { model.searchResults.map(\.id) == ["101"] }
+
+            hold.release()                              // rust page-1 returns despite the cancel
+            await loadMore.value
+
+            #expect(model.searchQuery == "go")
+            #expect(model.searchResults.map(\.id) == ["101"])   // not ["101", "102"]
+            #expect(model.searchLoaded?.page == 0)               // cursor not bumped
+        }
+    }
+
+    @Test("a feed load-more that completes after a refresh supersedes it does not append onto the refreshed snapshot")
+    func feedLoadMore_completingAfterRefresh_doesNotCorrupt() async throws {
+        let hold = Hold()
+        try await withCore(
+            client: .mock(
+                frontPage: { p in
+                    if p == 1 {
+                        await hold.wait()
+                        return page([storyC], totalPages: 5)
+                    }
+                    return page([storyA], totalPages: 5)
+                }
+            )
+        ) { actor, core in
+            let model = core.model
+            await core.sendMessage(.refresh)
+            #expect(model.feedStories.map(\.id) == ["100"])
+
+            let loadMore = Task { _ = actor; await core.sendMessage(.loadMore) }
+            await hold.arrival()                        // the page-1 fetch is in flight
+
+            await core.sendMessage(.refresh)             // supersede: shares the feed slot
+            #expect(model.feedStories.map(\.id) == ["100"])
+
+            hold.release()                               // page-1 returns despite the cancel
+            await loadMore.value
+
+            #expect(model.feedStories.map(\.id) == ["100"])   // not ["100", "102"]
+            #expect(model.feedLoaded?.page == 0)               // cursor not bumped
         }
     }
 
