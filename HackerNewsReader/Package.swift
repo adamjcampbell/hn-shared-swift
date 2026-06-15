@@ -13,10 +13,10 @@ let package = Package(
     defaultLocalization: "en",
     platforms: [
         .iOS(.v17),
-        // 15.4 floor lets `TestCore` use SE-0371 `isolated deinit` to
-        // break the listener-task retain cycle on test-scope exit.
-        // The iOS minimum stays at 17 because production deinit is
-        // never reached — the module-level `appCore` is app-lifetime.
+        // The macOS 15.4 floor's original reason — SE-0371 `isolated
+        // deinit` to break a test-scope listener-task retain cycle — is
+        // obsolete; the fixture's `cancelAll()` handles that teardown now.
+        // Retained as the floor (not re-derived against the Skip minimums).
         .macOS("15.4"),
     ],
     products: [
