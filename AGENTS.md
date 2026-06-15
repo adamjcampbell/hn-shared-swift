@@ -155,12 +155,15 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 
 ## Concurrency & testing
 
-- Targets **Swift 6.4+** (Xcode 27+). The core spawns work isolated to an
-  actor *instance*, whose continuations must resume on that instance after
-  `await` — broken in 6.3.0/6.3.1
-  ([swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993),
-  fixed in 6.4 / 6.3.2+). ADR-0024 records the workaround stack that
-  carried the design on 6.3; don't reintroduce it on a fixed toolchain.
+- Builds and tests clean on **Apple Swift 6.3.1** (package tools-version
+  6.1); **no Swift 6.4 dependency** (12/12 on a repeated-run gate). The
+  6.3-era isolation workaround for
+  [swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993)
+  (an instance-isolated `nonisolated(nonsending)` continuation resuming off
+  a *custom* executor) — a custom `TestActor` executor plus an
+  `inheritingIsolation`/launder helper — is deleted. `TestActor` is now a
+  plain `actor` on the default executor, which doesn't trigger it. ADR-0024
+  records that workaround as history; don't reintroduce it.
 - Fetches go through `Tasks`, a flat non-`Sendable` registry of named
   `Task?` slots — `feed` (refresh + feed load-more) and `search` (the
   reload + search load-more), one per list — operated by the free
