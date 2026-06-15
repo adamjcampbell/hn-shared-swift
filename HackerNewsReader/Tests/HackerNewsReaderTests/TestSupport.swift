@@ -122,8 +122,9 @@ final class Gate: Sendable {
 /// the test calls ``release()``, never on cancellation — unlike ``Gate``,
 /// whose `arrive()` unparks when its task is cancelled. Models a fetch
 /// whose network round-trip completes *after* the work was cancelled
-/// (cancel losing the race), so a superseded ``Latest`` slot delivers a
-/// value rather than throwing. ``arrival()`` lets the test wait until the
+/// (cancel losing the race), so a superseded slot would deliver a value
+/// rather than throwing (the delivery guard in `latest` prevents the
+/// commit). ``arrival()`` lets the test wait until the
 /// parked task is genuinely inside ``wait()`` before interrupting it.
 ///
 /// One parker and one arrival-waiter per hold.

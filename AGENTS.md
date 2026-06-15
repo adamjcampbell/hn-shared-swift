@@ -161,16 +161,22 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   ([swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993),
   fixed in 6.4 / 6.3.2+). ADR-0024 records the workaround stack that
   carried the design on 6.3; don't reintroduce it on a fixed toolchain.
-- Fetches go through `Latest<Page>`, a host-confined latest-wins slot —
-  one per list: `feed` (refresh + feed load-more) and `search` (the reload
-  + search load-more). A refresh / new query cancels its list's in-flight
-  load-more intrinsically through the shared slot. `apply` is `async` and
-  caller-following — it `await`s the fetch and commits the `Model` in place
-  — and `Latest` is latest-wins *at delivery* (a superseded caller throws
-  `CancellationError` even if its work completed), so callers commit
-  unconditionally (ADR-0026).
+- Fetches go through `Tasks`, a flat non-`Sendable` registry of named
+  `Task?` slots — `feed` (refresh + feed load-more) and `search` (the
+  reload + search load-more), one per list — operated by the free
+  `latest(_:on:debounce:_:)` / `cancel(_:on:)`. `Tasks` is pure data
+  (no methods); the policy is the two free functions, generic over the
+  slot's class and value. A refresh / new query cancels its list's
+  in-flight load-more intrinsically through the shared slot. `apply` is
+  `async` and caller-following — it `await`s the fetch and commits the
+  `Model` in place — and `latest` is latest-wins *at delivery* (a
+  superseded caller throws `CancellationError` even if its work completed),
+  so callers commit unconditionally (ADR-0026). `Tasks` is threaded as a
+  parameter beside the `Model`; an ambient `@TaskLocal` was rejected
+  (it would force a lock, `@unchecked`, or an underscored attribute — see
+  ADR-0026 alternatives).
 - Search is binding-driven and shaped like an `apply` arm: the reload is
-  `applySearch(query:to:search:)` (`await load` over the `search` slot),
+  `applySearch(query:to:tasks:)` (`await load` over `latest(\.search, on:)`),
   and `runSearch` is a thin driver that `spawn`s one `applySearch` per
   `model.searchQuery` change. Latest-wins across keystrokes rests on
   SE-0431 (the per-query tasks claim the slot in creation order, in their
@@ -185,7 +191,7 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   global actor, no annotation or capture); `withCore` injects
   `{ work in Task { _ = isolation; await work() } }` (dynamic per-test
   `TestActor` capture). The `_ = isolation` spelling is a test-only
-  concern; production is plain global-actor `Task`. The awaited `Latest`
+  concern; production is plain global-actor `Task`. The awaited `latest`
   fetches need no spawner — they broker only `Sendable` values.
 - `searchDebounce` / `client` / `date` are ambient via the `@TaskLocal`
   `Dependencies`, not injected into a type. Production reads the live
@@ -214,7 +220,7 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   to surface it the way the transport would. `Hold` is the
   cancellation-*ignoring* variant — it releases only on `release()`,
   modelling a fetch whose round-trip completes *after* it was cancelled
-  (cancel losing the race), to test the `Latest` delivery guard.
+  (cancel losing the race), to test the delivery guard in `latest`.
 - No `core.run` batching: the `withCore` body is one isolated scope, so
   write reads and `await core.sendMessage(...)` flat. Split only across
   real suspension boundaries (`waitUntil`, `gate.arrival`,
