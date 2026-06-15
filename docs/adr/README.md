@@ -33,11 +33,21 @@ the old.
 | 0016 | [Single `Engine` actor as sole writer; `Model` is a flat mega-struct](0016-engine-actor-flat-model.md)         | 2026-05-17 | Superseded by [0019](0019-core-free-functions-uicore-split.md)                  |
 | 0017 | [Presenter rows projected from `Model`; the package owns the view shape](0017-presenter-rows-in-model.md)      | 2026-05-21 | Accepted                                                                        |
 | 0018 | [Localized strings via `Localizable.xcstrings` + a generated `Strings` accessor](0018-localized-strings-catalog-generator.md) | 2026-05-21 | Accepted                                                                        |
-| 0019 | [Core from isolation-threaded free functions; vend one `Core`, compose `SendMessageAction` at the app boundary](0019-core-free-functions-uicore-split.md) | 2026-06-01 | Accepted (rev. 2026-06-02)                                                      |
+| 0019 | [Core from isolation-threaded free functions; vend one `Core`, compose `SendMessageAction` at the app boundary](0019-core-free-functions-uicore-split.md) | 2026-06-01 | Accepted (rev. 2026-06-02); amended by [0025](0025-inject-registry-static-production-isolation.md), [0026](0026-replace-registry-with-tasks-slots.md) |
 | 0020 | [Ambient `Dependencies` struct; read `date`/`client`/`clock` at the call site](0020-ambient-dependencies-struct.md) | 2026-06-01 | Accepted                                                                        |
+| 0021 | [Bind isolation once into a spawn-owning `TaskRegistry`; drop the threaded `isolated` parameters](0021-spawn-owning-task-registry.md) | 2026-06-12 | Superseded by [0025](0025-inject-registry-static-production-isolation.md)        |
+| 0022 | [Observe the `TaskRegistry` as a test synchronisation signal; retire `settle`](0022-observable-task-registry-test-signal.md) | 2026-06-12 | Superseded by [0026](0026-replace-registry-with-tasks-slots.md)                 |
+| 0023 | [Ambient `searchDebounce`; control time by amount, not by clock](0023-ambient-debounce-clock-free-tests.md) | 2026-06-12 | Accepted                                                                        |
+| 0024 | [Carry isolation in the work value — `@Sendable @isolated(any)` via `inheritingIsolation`](0024-isolation-carried-work-values.md) | 2026-06-13 | Superseded by [0025](0025-inject-registry-static-production-isolation.md)        |
+| 0025 | [Inject the `TaskRegistry` at the composition boundary — static production isolation, dynamic test isolation](0025-inject-registry-static-production-isolation.md) | 2026-06-13 | Superseded by [0026](0026-replace-registry-with-tasks-slots.md)                 |
+| 0026 | [Replace the `TaskRegistry` with a flat `Tasks` slot registry and free `latest` / `cancel`; async caller-following `apply`](0026-replace-registry-with-tasks-slots.md) | 2026-06-15 | Accepted                                                                        |
 
-ADRs 0001–0003, 0005, 0006, 0013, 0014, and 0017–0020 together describe the
-design as it stands today. ADRs 0004 and 0007–0012 are the hand-written-bridge
-evolution that ended at SkipFuse adoption; ADRs 0015 and 0016 are the
-`Engine`-actor era, superseded by 0019's free-function core. All are preserved
-as the immutable record of what was tried and why each step was replaced.
+ADRs 0001–0003, 0005, 0006, 0013, 0014, 0017–0020, 0023, and 0026 together
+describe the design as it stands today. ADRs 0004 and 0007–0012 are the
+hand-written-bridge evolution that ended at SkipFuse adoption; 0015 and 0016
+are the `Engine`-actor era superseded by 0019's free-function core; 0021,
+0022, 0024, and 0025 are the `TaskRegistry` era — the spawn-owning registry,
+observing it as a test signal, and the Swift 6.3→6.4 isolation workarounds —
+superseded by 0026 once `apply` went `async` and a flat `Tasks` slot registry
+(free `latest` / `cancel`) replaced the registry. All are preserved as the immutable record of what was
+tried and why each step was replaced.

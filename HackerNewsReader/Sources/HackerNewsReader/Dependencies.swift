@@ -10,8 +10,8 @@ import HackerNews
 /// `@TaskLocal` beats a keyed `DependencyValues` dictionary: typed reads,
 /// no erasure, no per-key boilerplate.
 ///
-/// Production reads see the live defaults (`Date()`, `Client()`,
-/// `ContinuousClock()`); no `withValue` is needed because the defaults
+/// Production reads see the live defaults (`Date()`, `Client()`, the
+/// 250 ms debounce); no `withValue` is needed because the defaults
 /// are the live values. Tests override via
 /// `Dependencies.$current.withValue(…) { … }` — `withCore` does this
 /// internally so the listener `Task` and message handlers `makeCore`
@@ -20,7 +20,14 @@ import HackerNews
 struct Dependencies: Sendable {
     var date = DateGenerator { Date() }
     var client = Client()
-    var clock: any Clock<Duration> = ContinuousClock()
+
+    /// Debounce window between a `model.searchQuery` write and the
+    /// resulting search fetch. Ambient so tests control time by
+    /// controlling the *amount* instead of faking a clock: `.zero`
+    /// makes the fetch immediately awaitable, a huge value holds the
+    /// window open for as long as the test needs (the parked sleep
+    /// releases through cancellation on fixture exit).
+    var searchDebounce: Duration = .milliseconds(250)
 
     @TaskLocal static var current = Dependencies()
 }

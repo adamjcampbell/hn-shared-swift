@@ -2,6 +2,7 @@ package com.example.hackernewsreader
 
 import android.app.Application
 import hacker.news.reader.Core
+import hacker.news.reader.Model
 import hacker.news.reader.makeAppCore
 import skip.foundation.ProcessInfo
 
@@ -13,6 +14,6 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         ProcessInfo.launch(applicationContext)
-        core = makeAppCore()
+        core = makeAppCore(model = Model())
     }
 }

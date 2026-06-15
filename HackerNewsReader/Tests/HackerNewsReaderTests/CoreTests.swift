@@ -1,4 +1,3 @@
-import Clocks
 import Foundation
 import Testing
 import os
@@ -41,25 +40,16 @@ private func page(_ stories: [Story], totalPages: Int = 1) -> Page {
     Page(stories: stories, totalPages: totalPages)
 }
 
-/// Drives the listener-debounced search to commit. Inline the steps
-/// instead when asserting mid-flight. Pass the same `TestClock` the
-/// fixture was given so the debounce sleep can be advanced.
-///
-/// `waitUntil` covers the two observable transitions — the listener
-/// picking up the query (`isLoading`) and the commit (`searchLoaded`).
-/// The lone `runPending` is irreducible: it drains the fetch `Task` to
-/// its `clock.sleep` so `advance` lands on a parked sleeper, and "the
-/// task is now sleeping" has no observable signal.
+/// Drives the listener search to commit. Assumes the fixture's
+/// zero-debounce default, so the fetch runs straight through its sleep
+/// and the commit is the one transition to wait on. Inline the steps
+/// instead when asserting mid-flight.
 private func commitSearch(
     _ query: String,
     core: Core,
-    clock: TestClock<Duration>,
-    isolation: isolated TestActor
+    isolation: isolated any Actor = #isolation
 ) async {
     core.model.searchQuery = query
-    await waitUntil { core.model.searchInitialStatus.isLoading }
-    await isolation.runPending()
-    await clock.advance(by: Core.searchDebounce)
     await waitUntil { core.model.searchLoaded != nil }
 }
 
@@ -190,23 +180,22 @@ struct CoreTests {
         }
     }
 
-    @Test("listener debounces and fires search with current query")
-    func listener_debouncesAndFires() async throws {
+    @Test("listener fires the search with the current query")
+    func listener_firesWithCurrentQuery() async throws {
         let calls = CallRecorder()
-        let clock = TestClock<Duration>()
         try await withCore(
             client: .mock(
                 search: { query, p in
                     calls.recordSearch(query, page: p)
                     return page([storyA])
                 }
-            ),
-            clock: clock
-        ) { actor, core in
-            await commitSearch("rust", core: core, clock: clock, isolation: actor)
+            )
+        ) { _, core in
+            await commitSearch("rust", core: core)
 
             let model = core.model
             #expect(model.searchQuery == "rust")
+            #expect(model.searchInitialStatus.isLoading == false)
             #expect(model.searchResults.map(\.id) == ["100"])
 
             let recorded = calls.searchCalls
@@ -215,25 +204,25 @@ struct CoreTests {
         }
     }
 
-    @Test("initialStatus.isLoading activates on first keystroke, before debounce elapses")
+    @Test("initialStatus.isLoading activates on first keystroke, while the debounce is still pending")
     func isSearchLoading_activatesOnFirstKeystroke() async throws {
-        let clock = TestClock<Duration>()
+        let calls = CallRecorder()
         try await withCore(
-            client: .mock(search: { _, _ in page([storyA]) }),
-            clock: clock
-        ) { actor, core in
+            client: .mock(search: { query, p in
+                calls.recordSearch(query, page: p)
+                return page([storyA])
+            }),
+            debounce: debounceNeverElapses
+        ) { _, core in
             let model = core.model
             #expect(model.searchInitialStatus.isLoading == false)
             model.searchQuery = "r"
             await waitUntil { model.searchInitialStatus.isLoading }
 
-            #expect(model.searchInitialStatus.isLoading == true)
-
-            await actor.runPending()
-            await clock.advance(by: Core.searchDebounce)
-            await waitUntil { !model.searchInitialStatus.isLoading }
-
-            #expect(model.searchInitialStatus.isLoading == false)
+            // The window can't elapse: loading is live while the fetch is
+            // still parked in its debounce, before the client is touched.
+            #expect(model.searchLoaded == nil)
+            #expect(calls.searchCalls.isEmpty)
         }
     }
 
@@ -255,29 +244,28 @@ struct CoreTests {
 
     @Test("search-to-search cancel-and-replace through URLError(.cancelled) doesn't surface")
     func searchCancelAndReplace_throughURLErrorCancelled_silent() async throws {
-        let clock = TestClock<Duration>()
+        let gate = Gate()
         try await withCore(
             client: .mock(
                 search: { query, _ in
                     if query == "ru" {
-                        do { try await clock.sleep(for: .seconds(Int.max)) }
-                        catch { throw URLError(.cancelled) }
+                        // Park mid-call; cancellation unparks, and the mock
+                        // surfaces it the way URLSession does.
+                        await gate.arrive()
+                        throw URLError(.cancelled)
                     }
                     return page([storyA])
                 }
-            ),
-            clock: clock
-        ) { actor, core in
-            await settle(actor)
+            )
+        ) { _, core in
             core.model.searchQuery = "ru"
-            await settle(actor)
-            await clock.advance(by: Core.searchDebounce)
-            await settle(actor)
+            // The "ru" fetch is deterministically inside the client call.
+            await gate.arrival()
 
+            // The listener cancels "ru" mid-client-call (the URLError path
+            // under test) and replaces it; the "rust" fetch commits.
             core.model.searchQuery = "rust"
-            await settle(actor)
-            await clock.advance(by: Core.searchDebounce)
-            await settle(actor)
+            await waitUntil { core.model.searchLoaded != nil }
 
             let model = core.model
             #expect(model.searchInitialStatus.error == nil)
@@ -289,7 +277,6 @@ struct CoreTests {
     @Test("clearing the search query cancels the search, clears results, and does not refetch the feed")
     func clearingSearchQuery_cancelsAndClearsResults() async throws {
         let calls = CallRecorder()
-        let clock = TestClock<Duration>()
         try await withCore(
             client: .mock(
                 frontPage: { p in
@@ -300,14 +287,13 @@ struct CoreTests {
                     calls.recordSearch(query, page: p)
                     return page([storyA])
                 }
-            ),
-            clock: clock
-        ) { actor, core in
+            )
+        ) { _, core in
             await core.sendMessage(.refresh)
             let feedBefore = core.model.feedStories.map(\.id)
             let frontPageBefore = calls.frontPageCalls.count
 
-            await commitSearch("rust", core: core, clock: clock, isolation: actor)
+            await commitSearch("rust", core: core)
             let model = core.model
             #expect(model.searchResults.map(\.id) == ["100"])
             model.searchQuery = ""
@@ -328,19 +314,17 @@ struct CoreTests {
 
     @Test("feed survives an active search")
     func feedSurvivesActiveSearch() async throws {
-        let clock = TestClock<Duration>()
         try await withCore(
             client: .mock(
                 frontPage: { _ in page([storyA, storyB]) },
                 search: { _, _ in page([storyA]) }
-            ),
-            clock: clock
-        ) { actor, core in
+            )
+        ) { _, core in
             await core.sendMessage(.refresh)
             let feedSnapshot = core.model.feedStories.map(\.id)
             #expect(feedSnapshot == ["100", "101"])
 
-            await commitSearch("x", core: core, clock: clock, isolation: actor)
+            await commitSearch("x", core: core)
 
             let model = core.model
             #expect(model.searchResults.map(\.id) == ["100"])
@@ -351,7 +335,6 @@ struct CoreTests {
     @Test("backspacing all the way to empty during an in-flight fetch still clears results")
     func listener_burstWriteDuringFetchClearsResults() async throws {
         let calls = CallRecorder()
-        let clock = TestClock<Duration>()
         try await withCore(
             client: .mock(
                 search: { query, p in
@@ -359,8 +342,8 @@ struct CoreTests {
                     return page([storyA])
                 }
             ),
-            clock: clock
-        ) { actor, core in
+            debounce: debounceNeverElapses
+        ) { _, core in
             core.model.searchQuery = "rust"
             await waitUntil { core.model.searchInitialStatus.isLoading }
 
@@ -379,10 +362,9 @@ struct CoreTests {
         }
     }
 
-    @Test("rapid keystrokes within the debounce window collapse to one search")
-    func listener_rapidKeystrokes_onlyFinalQueryFires() async throws {
+    @Test("while the debounce window stays open, keystrokes don't reach the client and loading stays active")
+    func searchKeystrokesWithinWindowDontReachClient() async throws {
         let calls = CallRecorder()
-        let clock = TestClock<Duration>()
         try await withCore(
             client: .mock(
                 search: { query, p in
@@ -390,43 +372,40 @@ struct CoreTests {
                     return page([storyA])
                 }
             ),
-            clock: clock
-        ) { actor, core in
-            // Let the listener suspend on `for await` before the first write.
-            await settle(actor)
+            debounce: debounceNeverElapses
+        ) { _, core in
+            let model = core.model
+            model.searchQuery = "r"
+            await waitUntil { model.searchInitialStatus.isLoading }
 
-            core.model.searchQuery = "r"
-            await settle(actor)
-            core.model.searchQuery = "ru"
-            await settle(actor)
-            core.model.searchQuery = "rust"
-            await settle(actor)
+            model.searchQuery = "ru"
+            model.searchQuery = "rust"
 
-            await clock.advance(by: Core.searchDebounce)
-            await settle(actor)
-
-            let recorded = calls.searchCalls
-            #expect(recorded.map(\.0) == ["rust"])
-            #expect(core.model.searchResults.map(\.id) == ["100"])
+            // The window never elapses, so every superseded reload dies in
+            // its debounce before touching the client; the latest keystroke
+            // stays loading and nothing commits. Cancel-and-replace reaching
+            // the client is covered by the zero-debounce URLError test.
+            await waitUntil { model.searchQuery == "rust" }
+            #expect(calls.searchCalls.isEmpty)
+            #expect(model.searchInitialStatus.isLoading)
+            #expect(model.searchLoaded == nil)
         }
     }
 
     @Test("a story present in both feed and search shares its read state across projections")
     func storyInBothFeedAndSearch_sharesReadState() async throws {
-        let clock = TestClock<Duration>()
         try await withCore(
             client: .mock(
                 frontPage: { _ in page([storyA, storyB]) },
                 search: { _, _ in page([storyA]) }
-            ),
-            clock: clock
-        ) { actor, core in
+            )
+        ) { _, core in
             let model = core.model
             await core.sendMessage(.refresh)
             await core.sendMessage(.toggleRead(id: storyA.id))
             #expect(model.feedStories.first(where: { $0.id == storyA.id })?.isRead == true)
 
-            await commitSearch("x", core: core, clock: clock, isolation: actor)
+            await commitSearch("x", core: core)
 
             #expect(model.searchResults.first?.isRead == true)
         }
@@ -499,25 +478,26 @@ struct CoreTests {
     @Test("refresh during an in-flight loadMore cancels the loadMore")
     func refresh_duringLoadMore_cancelsLoadMore() async throws {
         let calls = CallRecorder()
-        let clock = TestClock<Duration>()
+        let gate = Gate()
         try await withCore(
             client: .mock(
                 frontPage: { p in
                     calls.recordFrontPage(page: p)
                     if p == 1 {
-                        try await clock.sleep(for: .seconds(Int.max))
+                        await gate.arrive()
+                        try Task.checkCancellation()
                     }
                     return page([storyA], totalPages: 5)
                 }
-            ),
-            clock: clock
+            )
         ) { actor, core in
             let model = core.model
             await core.sendMessage(.refresh)
             #expect(model.feedLoaded?.page == 0)
 
             let loadMore = Task { _ = actor; await core.sendMessage(.loadMore) }
-            await waitUntil { model.feedLoadMoreStatus.isLoading }
+            // The page-1 fetch is deterministically inside the client call.
+            await gate.arrival()
             #expect(model.feedLoadMoreStatus.isLoading == true)
 
             await core.sendMessage(.refresh)
@@ -552,7 +532,6 @@ struct CoreTests {
 
     @Test("search paginates symmetrically with feed")
     func search_paginates() async throws {
-        let clock = TestClock<Duration>()
         try await withCore(
             client: .mock(
                 search: { _, p in
@@ -560,10 +539,9 @@ struct CoreTests {
                     if p == 1 { return page([storyB], totalPages: 2) }
                     return page([])
                 }
-            ),
-            clock: clock
-        ) { actor, core in
-            await commitSearch("x", core: core, clock: clock, isolation: actor)
+            )
+        ) { _, core in
+            await commitSearch("x", core: core)
             let model = core.model
             #expect(model.searchResults.map(\.id) == ["100"])
             #expect(model.searchLoaded?.hasMore == true)
@@ -576,22 +554,23 @@ struct CoreTests {
 
     @Test("clearing search cancels in-flight search load-more")
     func clearSearch_cancelsLoadMore() async throws {
-        let clock = TestClock<Duration>()
+        let gate = Gate()
         try await withCore(
             client: .mock(
                 search: { _, p in
                     if p == 0 { return page([storyA], totalPages: 5) }
-                    try await clock.sleep(for: .seconds(Int.max))
+                    await gate.arrive()
+                    try Task.checkCancellation()
                     return page([])
                 }
-            ),
-            clock: clock
+            )
         ) { actor, core in
-            await commitSearch("x", core: core, clock: clock, isolation: actor)
+            await commitSearch("x", core: core)
             #expect(core.model.searchLoaded?.hasMore == true)
 
             let loadMore = Task { _ = actor; await core.sendMessage(.loadMore) }
-            await waitUntil { core.model.searchLoadMoreStatus.isLoading }
+            // The page-1 fetch is deterministically inside the client call.
+            await gate.arrival()
             #expect(core.model.searchLoadMoreStatus.isLoading == true)
 
             core.model.searchQuery = ""
@@ -602,6 +581,74 @@ struct CoreTests {
             #expect(model.searchLoaded == nil)
             #expect(model.searchLoadMoreStatus.isLoading == false)
             #expect(model.searchLoadMoreStatus.error == nil)
+        }
+    }
+
+    @Test("a search load-more that completes after a new query supersedes it does not corrupt the new results")
+    func searchLoadMore_completingAfterSupersede_doesNotCorrupt() async throws {
+        // Models cancel losing the race: the page-1 fetch's round-trip finishes
+        // *after* the new query cancels it, so the slot would deliver a value.
+        let hold = Hold()
+        try await withCore(
+            client: .mock(
+                search: { query, p in
+                    if query == "rust" && p == 1 {
+                        await hold.wait()
+                        return page([storyC], totalPages: 5)
+                    }
+                    if query == "go" { return page([storyB], totalPages: 1) }
+                    return page([storyA], totalPages: 5)
+                }
+            )
+        ) { actor, core in
+            let model = core.model
+            await commitSearch("rust", core: core)
+            #expect(model.searchResults.map(\.id) == ["100"])
+
+            let loadMore = Task { _ = actor; await core.sendMessage(.loadMore) }
+            await hold.arrival()                       // the rust page-1 fetch is in flight
+
+            model.searchQuery = "go"                    // supersede: cancels the search load-more
+            await waitUntil { model.searchResults.map(\.id) == ["101"] }
+
+            hold.release()                              // rust page-1 returns despite the cancel
+            await loadMore.value
+
+            #expect(model.searchQuery == "go")
+            #expect(model.searchResults.map(\.id) == ["101"])   // not ["101", "102"]
+            #expect(model.searchLoaded?.page == 0)               // cursor not bumped
+        }
+    }
+
+    @Test("a feed load-more that completes after a refresh supersedes it does not append onto the refreshed snapshot")
+    func feedLoadMore_completingAfterRefresh_doesNotCorrupt() async throws {
+        let hold = Hold()
+        try await withCore(
+            client: .mock(
+                frontPage: { p in
+                    if p == 1 {
+                        await hold.wait()
+                        return page([storyC], totalPages: 5)
+                    }
+                    return page([storyA], totalPages: 5)
+                }
+            )
+        ) { actor, core in
+            let model = core.model
+            await core.sendMessage(.refresh)
+            #expect(model.feedStories.map(\.id) == ["100"])
+
+            let loadMore = Task { _ = actor; await core.sendMessage(.loadMore) }
+            await hold.arrival()                        // the page-1 fetch is in flight
+
+            await core.sendMessage(.refresh)             // supersede: shares the feed slot
+            #expect(model.feedStories.map(\.id) == ["100"])
+
+            hold.release()                               // page-1 returns despite the cancel
+            await loadMore.value
+
+            #expect(model.feedStories.map(\.id) == ["100"])   // not ["100", "102"]
+            #expect(model.feedLoaded?.page == 0)               // cursor not bumped
         }
     }
 

@@ -31,7 +31,7 @@ private func makeRow(_ story: Story, isRead: Bool = false, now: Date = pinnedNow
 /// Pins the `date` dependency to `pinnedNow` for the duration of `body`
 /// — every `Model.feedHeaderSubtitle` / `feedStories` read inside sees
 /// the same reference time. Overrides only `date` (copy-and-mutate),
-/// leaving `client` / `clock` at their current values.
+/// leaving `client` / `searchDebounce` at their current values.
 private func withPinnedNow<R>(_ body: () throws -> R) rethrows -> R {
     var dependencies = Dependencies.current
     dependencies.date = .constant(pinnedNow)

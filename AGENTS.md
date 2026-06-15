@@ -47,8 +47,9 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 - `HackerNewsReader` owns the presentation lifecycle: `Model`, `Core`,
   `SendMessageAction`, `Message`, `Command`, plus `StoryRow`,
   `LoadStatus`, `LoadedStories`, and the free functions that build and
-  mutate the core (`makeCore` / `makeAppCore`, `apply`, `applySearchQuery`).
-- `apply` and `applySearchQuery` are the only writers of `Model`. Don't
+  mutate the core (`makeCore` / `makeAppCore`, `apply`, `applySearch`,
+  `runSearch`).
+- `apply` and `applySearch` are the only writers of `Model`. Don't
   add mutators on `Model`.
 - `Message` is UI → core; `Command` is core → UI. Don't name a new type
   `Effect` — reserved for a possible future TCA-style reducer.
@@ -154,45 +155,90 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 
 ## Concurrency & testing
 
-- `clock` / `client` / `date` are ambient via the `@TaskLocal`
+- Builds and tests clean on **Apple Swift 6.3.1** (package tools-version
+  6.1); **no Swift 6.4 dependency** (12/12 on a repeated-run gate). The
+  6.3-era isolation workaround for
+  [swiftlang/swift#88993](https://github.com/swiftlang/swift/issues/88993)
+  (an instance-isolated `nonisolated(nonsending)` continuation resuming off
+  a *custom* executor) — a custom `TestActor` executor plus an
+  `inheritingIsolation`/launder helper — is deleted. `TestActor` is now a
+  plain `actor` on the default executor, which doesn't trigger it. ADR-0024
+  records that workaround as history; don't reintroduce it.
+- Fetches go through `Tasks`, a flat non-`Sendable` registry of named
+  `Task?` slots — `feed` (refresh + feed load-more) and `search` (the
+  reload + search load-more), one per list — operated by the free
+  `latest(_:on:debounce:_:)` / `cancel(_:on:)`. `Tasks` is pure data
+  (no methods); the policy is the two free functions, generic over the
+  slot's class and value. A refresh / new query cancels its list's
+  in-flight load-more intrinsically through the shared slot. `apply` is
+  `async` and caller-following — it `await`s the fetch and commits the
+  `Model` in place — and `latest` is latest-wins *at delivery* (a
+  superseded caller throws `CancellationError` even if its work completed),
+  so callers commit unconditionally (ADR-0026). `Tasks` is threaded as a
+  parameter beside the `Model`; an ambient `@TaskLocal` was rejected
+  (it would force a lock, `@unchecked`, or an underscored attribute — see
+  ADR-0026 alternatives).
+- Search is binding-driven and shaped like an `apply` arm: the reload is
+  `applySearch(query:to:tasks:)` (`await load` over `latest(\.search, on:)`),
+  and `runSearch` is a thin driver that `spawn`s one `applySearch` per
+  `model.searchQuery` change. Latest-wins across keystrokes rests on
+  SE-0431 (the per-query tasks claim the slot in creation order, in their
+  synchronous head), not a held handle — the same ordering `feed` relies
+  on. Don't insert an `await` before the slot claim or make the spawned
+  closure non-host-isolated; that voids the order guarantee.
+- `makeCore` is nonisolated and takes a `spawn` parameter — the
+  isolation-carrying spawner used *only* where work must run *and* mutate
+  the `Model`: the search driver (`runSearch`) and each `applySearch` it
+  spawns. `makeAppCore` (`@MainActor`) injects
+  `{ work in Task { await work() } }` (the `Task` inherits `MainActor` —
+  global actor, no annotation or capture); `withCore` injects
+  `{ work in Task { _ = isolation; await work() } }` (dynamic per-test
+  `TestActor` capture). The `_ = isolation` spelling is a test-only
+  concern; production is plain global-actor `Task`. The awaited `latest`
+  fetches need no spawner — they broker only `Sendable` values.
+- `searchDebounce` / `client` / `date` are ambient via the `@TaskLocal`
   `Dependencies`, not injected into a type. Production reads the live
-  defaults (`ContinuousClock()`, `Client()`, `Date()`); `withCore`
-  defaults `clock` to `ImmediateClock()`. Reach for `TestClock` only
-  when asserting on debounce timing, and pass the same clock to
-  `commitSearch(_:core:clock:isolation:)`.
-- `TestActor` installs a `DispatchSerialQueue` as `unownedExecutor`.
-  `withCore` is isolated to a fresh `TestActor`, so `makeCore`'s
-  `#isolation` binds there; the body receives that actor as its first
-  parameter, no force-cast needed.
-- `await waitUntil { core.model.<cond> }` is the default
-  synchronisation: it re-arms `withObservationTracking` and waits on the
-  real observable transition (a status flips, a `LoadedStories`
-  populates or clears). `settle(_:)` drains the actor's queue twice for
-  the few steps with no transition to wait on (a keystroke that leaves
-  `Model` unchanged, a cancel-and-replace through parked sleeps); it is
-  the last resort. `TestActor.runPending()` is the underlying single
-  drain, used directly only where a drain is irreducible (e.g. parking a
-  fetch on its `clock.sleep` before `advance`).
-- Use `try` (not `try?`) on `clock.sleep` so cancellation propagates;
-  swallowing it lets cancelled tasks fall through to the live fetch.
+  defaults (250 ms, `Client()`, `Date()`); `withCore` defaults
+  `debounce` to `.zero` so a search runs straight through to commit.
+  There is no clock dependency and no `TestClock`: tests control time
+  by controlling the *amount* — pass `debounceNeverElapses` to hold the
+  debounce window open and assert mid-window behaviour (the parked
+  sleep releases via cancellation on fixture exit).
+- `TestActor` is a plain `actor` (default per-instance executor).
+  `withCore` is isolated to a fresh `TestActor`, so `makeCore`, the
+  spawner built there, and the body all run on it; the body receives
+  that actor as its first parameter, no force-cast needed.
+- `await waitUntil { <cond> }` is the default synchronisation: it
+  re-arms `withObservationTracking` and waits on a real observable
+  `Model` transition — a status flips, a `LoadedStories` populates or
+  clears, `searchResults` change. There is no registry to observe; wait
+  on the effect in the `Model`, or `await` the `apply` directly for
+  `.refresh` / `.loadMore`. There is no `settle` and no `runPending`;
+  nothing drains queues by count.
+- To interrupt a fetch mid-call, park the mock on a `Gate`: the mock
+  `await`s `gate.arrive()` (signals, then parks), the test `await`s
+  `gate.arrival()` to know the fetch is inside the client, then
+  triggers the interruption. The park releases on cancellation; check
+  `Task.isCancelled` / `Task.checkCancellation()` after `arrive()`
+  to surface it the way the transport would. `Hold` is the
+  cancellation-*ignoring* variant — it releases only on `release()`,
+  modelling a fetch whose round-trip completes *after* it was cancelled
+  (cancel losing the race), to test the delivery guard in `latest`.
 - No `core.run` batching: the `withCore` body is one isolated scope, so
   write reads and `await core.sendMessage(...)` flat. Split only across
-  real suspension boundaries (`waitUntil` / `settle`, `clock.advance`,
-  `Task.value`, `iterator.next`). Alias `let model = core.model` at the
-  top.
-- Park mocks with `try await clock.sleep(for: .seconds(Int.max))`.
-  `.infinity` / `.greatestFiniteMagnitude` compile but trap (Double →
-  Int128).
+  real suspension boundaries (`waitUntil`, `gate.arrival`,
+  `Task.value`, `iterator.next`). Alias `let model = core.model` at
+  the top.
 - Wrap test setup in `withCore { actor, core in … }`. It binds
   `Dependencies.$current.withValue(...)` and runs `makeCore` inside that
-  binding, so the listener `Task` and every fetch inherit the pinned
-  deps, then `core.cancelAll()`s on exit to break the
-  `listener-Task → Model` cycle before the next test. Mocks pass through
+  binding, so the search driver `Task` and every fetch inherit the
+  pinned deps, then `core.cancelAll()`s on exit to break the
+  `driver-Task → Model` cycle before the next test. Mocks pass through
   `client: .mock(frontPage: …, search: …)`.
 - Pin time with `withCore(now:)`, or `Dependencies.$current.withValue`
   (copy and mutate `Dependencies.current` to override a subset), when
   asserting on `StoryRow.metaLine` / `feedHeaderSubtitle`. `withCore`
-  opens the binding around `makeCore` and the body so listener tasks and
+  opens the binding around `makeCore` and the body so the driver and
   projections share the same `now`.
 
 ## State shape
@@ -211,7 +257,7 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   denormalised arrays.
 - Trust the boundary dedupe (bridge / SwiftUI diffing). Don't sprinkle
   `if !state.x.contains(...)` whack-a-mole guards inside `apply` /
-  `applySearchQuery`.
+  `applySearch`.
 
 ## Doc & comment style
 

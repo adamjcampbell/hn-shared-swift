@@ -7,137 +7,122 @@ import FoundationNetworking
 
 // MARK: - Core (isolation-generic, bridged)
 
-/// Identities for the in-flight Tasks ``makeCore`` coordinates through
-/// a single ``TaskRegistry``.
-enum TaskID { case feed, feedMore, search, searchMore, searchListener }
-
 /// The single handle behind the UI: the observable ``Model``, the
 /// one-shot command stream, an async send-message entry, and a teardown
 /// hook. One `Core` serves every consumer — `MainActor` production (built
 /// via ``makeAppCore``) and `TestActor` tests (built via ``makeCore``).
 ///
-/// ``makeCore`` threads `isolation` through `#isolation`, so the host
-/// actor owns every mutation. ``Model`` is non-`Sendable` and never leaves
-/// that region. Production wraps ``sendMessage`` in a `@MainActor`
-/// ``SendMessageAction`` at the app boundary (`SendMessageAction(core)`);
-/// only ``model`` and ``commands`` cross JNI.
+/// ``Model`` is non-`Sendable` and never leaves the region its `Core`
+/// was built on. Production wraps ``sendMessage`` in a `@MainActor`
+/// ``SendMessageAction`` at the app boundary; only ``model`` and
+/// ``commands`` cross JNI.
 // SKIP @bridgeMembers
 public struct Core {
     public let model: Model
 
     public let commands: AsyncStream<Command>
 
-    /// Applies a `Message` to the model. Non-`Sendable` — it captures the
-    /// `Model` and the task registry — so the type system confines every
-    /// caller to the region `makeCore` was formed on, and the body runs
-    /// there: `MainActor` in production, a `TestActor` in tests. The
-    /// listener `Task` and the fetch work share that same isolation, so
-    /// every `Model` / registry write stays serialised.
-    ///
-    /// `internal` so app code reaches it only through the `@MainActor`
-    /// ``SendMessageAction`` that wraps it; tests in-module call it
-    /// directly on their `TestActor`. Concurrent UI entry points (a
-    /// fire-and-forget tap plus a `.refreshable`) serialise at that
-    /// `@MainActor` boundary; the synchronous
-    /// ``apply(_:to:commands:tasks:isolation:)`` keeps each handler's
-    /// read-modify-write atomic against actor reentrancy.
+    /// Applies a `Message` to the model. Non-`Sendable` (it captures the
+    /// `Model` and the fetch ``Tasks``), so every caller is confined to the
+    /// region the `Core` was built on. `internal` so app code reaches it
+    /// only through the `@MainActor` ``SendMessageAction``; tests call it
+    /// directly. Concurrent UI entry points (a fire-and-forget tap plus a
+    /// `.refreshable`) serialise at that `@MainActor` boundary, and
+    /// ``apply(_:to:commands:tasks:)`` keeps each handler's pre-fetch
+    /// read-modify-write before its first `await`, so it stays atomic
+    /// against actor reentrancy.
     // SKIP @nobridge
     let sendMessage: (Message) async -> Void
 
-    /// Cancels the listener and any in-flight fetch. Production is
+    /// Cancels the search driver and any in-flight fetch. Production is
     /// process-lifetime and never calls this; tests call it on fixture
     /// exit so the `Task → Model` references release.
     // SKIP @nobridge
     let cancelAll: () -> Void
-
-    /// Debounce window between a `model.searchQuery` write and the
-    /// resulting search fetch.
-    // SKIP @nobridge
-    static let searchDebounce: Duration = .milliseconds(250)
 }
 
-/// Composes the core: builds the command stream and task
-/// registry, spawns the search listener, and returns the ``Core``
-/// handle. Each spawned `Task` references `isolation` so it captures the
-/// isolated parameter and runs on the host actor; without that reference a
-/// `Task` infers `@concurrent` and fails to compile against the
-/// non-`Sendable` `Model` capture. (The `sendMessage` closure references it
-/// for a different reason — see its definition below.)
+/// Wires the command stream, the search driver, and the send closure over
+/// the injected `model`, and returns the ``Core``.
 ///
-/// The listener `Task`, the `sendMessage` closure, and `cancelAll` all
-/// close over the one local `var tasks`. It stays a captured local
-/// rather than a parameter because an escaping closure cannot capture an
-/// `inout`; every capture runs in `isolation`'s region, so the
-/// non-`Sendable` state stays serialised.
+/// The composition root supplies the `model` (so the app can launch in a
+/// specific state) and `spawn`, whose `Task` carries the caller's isolation
+/// (see ``makeAppCore`` and the test fixture). `spawn` is the host-actor
+/// capability used only where work must run *and mutate the `Model`*: the
+/// search driver and the per-query ``applySearch`` it spawns. The fetches
+/// don't need it — ``latest(_:on:debounce:_:)`` brokers only `Sendable`
+/// values, so its in-flight `Task` runs the fetch off the host actor while
+/// the caller commits the result on it. `makeCore` is nonisolated and runs
+/// on the caller; its non-`Sendable` ``Tasks`` stays in that region.
 ///
 /// - Parameters:
-///   - model: The observable state; defaults to a fresh ``Model``.
+///   - model: The observable state, constructed by the caller.
+///   - spawn: Spawns a `Task` bound to the caller's isolation, for work
+///     that mutates the `Model` on the host actor.
 /// - Returns: The ``Core`` handle.
 func makeCore(
-    model: sending Model = Model(),
-    isolation: isolated any Actor = #isolation
+    model: Model,
+    spawn: @escaping (@escaping () async -> Void) -> Task<Void, Never>
 ) -> Core {
     let state = model
-    var tasks = TaskRegistry<TaskID>()
     let (commands, commandsContinuation) = AsyncStream<Command>.makeStream()
+    // The in-flight fetches: one slot for the feed (refresh + feed
+    // load-more), one for search (reload + search load-more).
+    let tasks = Tasks()
 
-    tasks[.searchListener] = Task {
-        _ = isolation
-
-        for await query in state.searchQueryChanges {
-            applySearchQuery(
-                query,
-                to: state,
-                tasks: &tasks
-            )
-        }
+    let consumer = spawn {
+        await runSearch(state, tasks: tasks, spawn: spawn)
     }
 
     return Core(
         model: state,
         commands: commands,
         sendMessage: { message in
-            // Resolves `#isolation` in `apply` to the host actor; a closure
-            // that dropped this would pass `nil` to its isolated parameter.
-            _ = isolation
-
             await apply(
                 message,
                 to: state,
                 commands: commandsContinuation,
-                tasks: &tasks
-            )?.value
+                tasks: tasks
+            )
         },
-        cancelAll: { tasks.cancelAll() }
+        cancelAll: {
+            consumer.cancel()
+            cancel(\.feed, on: tasks)
+            cancel(\.search, on: tasks)
+        }
     )
 }
 
 // MARK: - Message handling
 
 /// Applies a user-driven ``Message`` to `state`: mutates the model in
-/// place, yields any ``Command``, and registers in-flight fetch work.
+/// place, yields any ``Command``, and awaits any fetch the message
+/// triggers.
 ///
-/// Synchronous so the `tasks` access never spans a suspension. The
-/// `.refresh` / `.loadMore` arms return their spawned `Task` so the
-/// caller can `await` its value *outside* the `inout` scope — which is
-/// what keeps that await from overlapping the listener's concurrent
-/// `tasks` access on the same actor.
+/// Caller-following (`nonisolated(nonsending)`, the package default), so
+/// it runs on whatever actor calls it — always the host actor, because
+/// every caller closes over the non-`Sendable` `state` — and resumes there
+/// after each `await`. Each fetch arm performs its read-modify-write
+/// synchronously *before* the first `await`, so it stays atomic against
+/// actor reentrancy; the post-fetch commit runs back on the host actor,
+/// guarded against staleness by the slot's cancel-and-replace (a
+/// superseded fetch throws `CancellationError` and commits nothing). The
+/// `.refresh` / `.loadMore` arms await their fetch so `.refreshable` can
+/// hold its spinner.
 ///
 /// - Parameters:
 ///   - message: The message to apply.
 ///   - state: The model to mutate.
 ///   - commands: Continuation for one-shot UI commands.
-///   - tasks: Registry that owns cancellation of in-flight fetches.
-/// - Returns: The spawned fetch `Task` for `.refresh` / `.loadMore`
-///   (so `.refreshable` can hold its spinner), `nil` otherwise.
-@discardableResult
+///   - tasks: The fetch slots. The feed slot is shared by refresh and feed
+///     load-more (a refresh cancels an in-flight load-more); the search
+///     slot by the reload and search load-more (a new query cancels an
+///     in-flight load-more).
 func apply(
     _ message: Message,
     to state: Model,
     commands: AsyncStream<Command>.Continuation,
-    tasks: inout TaskRegistry<TaskID>,
-    isolation: isolated any Actor = #isolation
-) -> Task<Void, Never>? {
+    tasks: Tasks
+) async {
     switch message {
 
     case .toggleRead(let id):
@@ -146,91 +131,115 @@ func apply(
         } else {
             state.readIds.insert(id)
         }
-        return nil
 
     case .openStory(let id):
-        guard let story = state.stories[id] else { return nil }
+        guard let story = state.stories[id] else { return }
         state.readIds.insert(id)
         if let url = story.url {
             commands.yield(.presentURL(value: url))
         }
-        return nil
 
     case .refresh:
-        // Cancel in-flight load-more so its page doesn't append onto the snapshot we're replacing.
-        tasks[.feedMore] = nil
         state.feedLoadMoreStatus = LoadStatus()
         state.feedInitialStatus.startLoading()
-
-        let task = loadTask(into: state, status: \.feedInitialStatus) {
-            try await $0.frontPage(0)
-        } commit: { page, ids in
+        await load(into: state, status: \.feedInitialStatus) {
+            try await latest(\.feed, on: tasks) {
+                try await Dependencies.current.client.frontPage(0)
+            }
+        } commit: { page in
             state.feedLoaded = LoadedStories(
-                ids: ids, page: 0, totalPages: page.totalPages, loadedAt: Dependencies.current.date.now
+                ids: page.stories.map(\.id), page: 0,
+                totalPages: page.totalPages, loadedAt: Dependencies.current.date.now
             )
         }
-        tasks[.feed] = task
-        return task
 
     case .loadMore where state.searchQuery.isEmpty:
+        // `!feedInitialStatus.isLoading` yields to an in-flight refresh, so a
+        // load-more never cancels the reload it shares the `feed` slot with.
         guard let loaded = state.feedLoaded, loaded.hasMore,
-              !state.feedLoadMoreStatus.isLoading else { return nil }
+              !state.feedLoadMoreStatus.isLoading,
+              !state.feedInitialStatus.isLoading else { return }
         let next = loaded.nextPage
         state.feedLoadMoreStatus.startLoading()
-
-        let task = loadTask(into: state, status: \.feedLoadMoreStatus) {
-            try await $0.frontPage(next)
-        } commit: { page, ids in
-            state.feedLoaded?.appendPage(ids, totalPages: page.totalPages)
+        await load(into: state, status: \.feedLoadMoreStatus) {
+            try await latest(\.feed, on: tasks) {
+                try await Dependencies.current.client.frontPage(next)
+            }
+        } commit: { page in
+            state.feedLoaded?.appendPage(page.stories.map(\.id), totalPages: page.totalPages)
         }
-        tasks[.feedMore] = task
-        return task
 
     case .loadMore:
         guard let loaded = state.searchLoaded, loaded.hasMore,
-              !state.searchLoadMoreStatus.isLoading else { return nil }
+              !state.searchLoadMoreStatus.isLoading,
+              !state.searchInitialStatus.isLoading else { return }
         let query = state.searchQuery
         let next = loaded.nextPage
         state.searchLoadMoreStatus.startLoading()
-
-        let task = loadTask(into: state, status: \.searchLoadMoreStatus) {
-            try await $0.search(query, next)
-        } commit: { page, ids in
-            state.searchLoaded?.appendPage(ids, totalPages: page.totalPages)
+        await load(into: state, status: \.searchLoadMoreStatus) {
+            try await latest(\.search, on: tasks) {
+                try await Dependencies.current.client.search(query, next)
+            }
+        } commit: { page in
+            state.searchLoaded?.appendPage(page.stories.map(\.id), totalPages: page.totalPages)
         }
-        tasks[.searchMore] = task
-        return task
     }
 }
 
-/// Applies a debounced `model.searchQuery` change: clears search state
-/// on an empty query, otherwise marks loading and spawns the search
-/// fetch into `tasks[.search]`.
+/// The long-lived search driver: the one host-isolated `Task` the ``Core``
+/// spawns. Binding-driven — the search field writes `model.searchQuery`,
+/// whose `didSet` feeds this loop — it spawns the latest ``applySearch``
+/// per query change. Spawning rather than awaiting keeps the loop reading
+/// the next keystroke while a reload is in flight; the `search` slot does
+/// the cancel-and-replace, so the driver does not cancel the prior task
+/// itself. It holds only the most recent, to cancel on teardown.
 ///
-/// Synchronous for the same reason as ``apply(_:to:commands:tasks:isolation:)``:
-/// the listener invokes it inside its `for await` loop, so it must not
-/// hold the `tasks` access across a suspension.
+/// - Parameters:
+///   - state: The model to mutate.
+///   - tasks: The fetch slots, shared with the search reload and load-more.
+///   - spawn: Spawns each ``applySearch`` on the host actor (so it may
+///     commit), with a `Task` bound to the caller's isolation.
+func runSearch(
+    _ state: Model,
+    tasks: Tasks,
+    spawn: @escaping (@escaping () async -> Void) -> Task<Void, Never>
+) async {
+    var pending: Task<Void, Never>?
+    defer { pending?.cancel() }
+
+    for await query in state.searchQueryChanges {
+        pending = spawn { await applySearch(query, to: state, tasks: tasks) }
+    }
+}
+
+/// Applies a `model.searchQuery` change — the binding-driven analogue of an
+/// ``apply`` fetch arm. Clears search state on an empty query; otherwise
+/// marks loading and runs the latest reload through the shared `search`
+/// slot (debounced), which cancels any in-flight search load-more.
+///
+/// Spawned per query by ``runSearch`` (so the driver never blocks) and
+/// caller-following, so it commits the `Model` on the host actor. Latest
+/// wins by ordering, not by a held handle: the per-query tasks `runSearch`
+/// spawns begin in creation order on the host actor (SE-0431), so they
+/// claim the `search` slot in query order and only the last (newest) one
+/// delivers. The invariant is unenforced by types — the slot is claimed in
+/// the task's synchronous head, before the first real suspension inside
+/// ``latest(_:on:debounce:_:)``, the spawned closure stays
+/// host-actor-isolated, and priority stays uniform.
 ///
 /// - Parameters:
 ///   - query: The current search query.
 ///   - state: The model to mutate.
-///   - tasks: Registry that owns the search fetch's cancellation.
-func applySearchQuery(
-    _ query: String,
-    to state: Model,
-    tasks: inout TaskRegistry<TaskID>,
-    isolation: isolated any Actor = #isolation
-) {
+///   - tasks: The fetch slots, shared with the search load-more.
+func applySearch(_ query: String, to state: Model, tasks: Tasks) async {
     if query.isEmpty {
-        tasks[.search] = nil
-        tasks[.searchMore] = nil
+        cancel(\.search, on: tasks)
         state.searchLoaded = nil
         state.searchInitialStatus = LoadStatus()
         state.searchLoadMoreStatus = LoadStatus()
         return
     }
 
-    tasks[.searchMore] = nil
     // @Observable re-fires on equal writes; skip no-ops during keystroke bursts.
     if state.searchLoadMoreStatus != LoadStatus() {
         state.searchLoadMoreStatus = LoadStatus()
@@ -239,104 +248,71 @@ func applySearchQuery(
         state.searchInitialStatus.startLoading()
     }
 
-    tasks[.search] = loadTask(
-        into: state, status: \.searchInitialStatus,
-        debounce: Core.searchDebounce
-    ) {
-        try await $0.search(query, 0)
-    } commit: { page, ids in
+    await load(into: state, status: \.searchInitialStatus) {
+        try await latest(\.search, on: tasks, debounce: Dependencies.current.searchDebounce) {
+            try await Dependencies.current.client.search(query, 0)
+        }
+    } commit: { page in
         state.searchLoaded = LoadedStories(
-            ids: ids, page: 0, totalPages: page.totalPages, loadedAt: Dependencies.current.date.now
+            ids: page.stories.map(\.id), page: 0,
+            totalPages: page.totalPages, loadedAt: Dependencies.current.date.now
         )
     }
 }
 
-/// Sleeps for `debounce` (if set), then runs `body`.
+/// Runs `fetch`, merges its stories into the entity store, hands the page to
+/// `commit`, and marks `status` succeeded. Cancellation is silent (a newer
+/// fetch superseded this one — the slot threw `CancellationError`); any
+/// other error lands on `status`.
 ///
-/// Carries `isolation` so the debounce sleep and its post-sleep
-/// continuation run on the host actor — tests drive a `TestClock` and
-/// drain the actor's queue deterministically, which only works if the
-/// sleeper resumes there.
-///
-/// - Parameters:
-///   - debounce: Delay before invoking `body`, or `nil` for none.
-///   - body: Closure that issues the page fetch.
-/// - Returns: The page produced by `body`.
-/// - Throws: Whatever `body` throws, plus `CancellationError` if the
-///   surrounding task is cancelled.
-/// - Note: `URLSession` surfaces task cancellation as
-///   `URLError.cancelled`; this rethrows it as `CancellationError` so
-///   callers can match cancellation the same way regardless of transport.
-func fetch(
-    debounce: Duration?,
-    isolation: isolated any Actor = #isolation,
-    body: @Sendable (Client) async throws -> Page
-) async throws -> Page {
-    if let debounce {
-        try await Dependencies.current.clock.sleep(for: debounce)
-    }
-    try Task.checkCancellation()
-    do {
-        return try await body(Dependencies.current.client)
-    } catch let urlError as URLError where urlError.code == .cancelled {
-        throw CancellationError()
-    }
-}
-
-/// Spawns the load `Task` every fetch arm shares: fetch the page (with
-/// an optional debounce), merge its stories into the entity store, hand
-/// the page to `commit`, and mark `status` succeeded. Cancellation is
-/// silent (a newer fetch clears loading when it commits); any other
-/// error lands on `status`.
+/// Caller-following, so the commit runs back on the host actor the caller
+/// called from. `fetch` is a ``latest(_:on:debounce:_:)`` call, so the
+/// latest-wins slot is hidden inside it — `load` never names it.
 ///
 /// - Parameters:
 ///   - state: The model to mutate.
-///   - status: Key path to the `LoadStatus` field carrying this load's
-///     success/failure.
-///   - debounce: Delay before the fetch, or `nil`.
-///   - request: Issues the page fetch.
-///   - commit: Records the fetched page (and its story ids) into `state`
-///     — a fresh `LoadedStories` for an initial load, `appendPage` for
-///     load-more.
-/// - Returns: The spawned `Task`.
-func loadTask(
+///   - status: Key path to the `LoadStatus` carrying this load's outcome.
+///   - fetch: The latest-wins page fetch.
+///   - commit: Records the fetched page into `state` — a fresh
+///     `LoadedStories` for an initial load, `appendPage` for load-more.
+func load(
     into state: Model,
     status: ReferenceWritableKeyPath<Model, LoadStatus>,
-    debounce: Duration? = nil,
-    isolation: isolated any Actor = #isolation,
-    request: @escaping @Sendable (Client) async throws -> Page,
-    commit: @escaping (Page, [String]) -> Void
-) -> Task<Void, Never> {
-    Task {
-        _ = isolation
-
-        do {
-            let page = try await fetch(debounce: debounce, body: request)
-            try Task.checkCancellation()
-            for story in page.stories { state.stories[story.id] = story }
-            commit(page, page.stories.map(\.id))
-            state[keyPath: status].finishSuccess()
-        } catch is CancellationError {
-        } catch {
-            state[keyPath: status].finishFailure(error.localizedDescription)
-        }
+    fetch: () async throws -> Page,
+    commit: (Page) -> Void
+) async {
+    do {
+        let page = try await fetch()
+        for story in page.stories { state.stories[story.id] = story }
+        commit(page)
+        state[keyPath: status].finishSuccess()
+    } catch is CancellationError {
+    } catch {
+        state[keyPath: status].finishFailure(error.localizedDescription)
     }
 }
 
 // MARK: - Production entry (@MainActor, bridged)
 
 /// Builds the core on `MainActor` and returns the ``Core`` handle for the
-/// UI to consume. The bridged production entry point: pins `#isolation` to
-/// `MainActor`, so the returned handle's `sendMessage` and fetch work run
-/// there, and is the only function that crosses JNI.
+/// UI to consume. The bridged production entry point: takes the `model`
+/// the app constructed (letting it launch in a specific state) and injects
+/// a spawner whose `Task` is statically `@MainActor`, so the search driver
+/// and its reloads commit there. The only function that crosses JNI.
 ///
 /// Call once at app scope and keep the handle for the process lifetime:
 /// iOS holds it as `@State` on the `App`, Android stashes it on
 /// `Application` in `onCreate`. App code builds the send capability from
 /// the handle with `SendMessageAction(core)`.
 ///
+/// - Parameter model: The observable state, constructed by the app.
 /// - Returns: The ``Core`` handle.
 // SKIP @bridge
-@MainActor public func makeAppCore() -> Core {
-    makeCore()
+@MainActor public func makeAppCore(model: Model) -> Core {
+    // The spawner closure is inferred `@MainActor` (a non-`Sendable`
+    // closure in this `@MainActor` function), so its `Task { … }` inherits
+    // `MainActor` — no annotation or capture — and the driver and its
+    // reloads commit there. Tests inject an instance-capturing spawner
+    // instead; see the test fixture.
+    makeCore(model: model, spawn: { work in Task { await work() } })
 }

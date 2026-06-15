@@ -4,6 +4,10 @@
 
 Accepted (2026-06-01). Supersedes [ADR-0015](0015-engine-borrows-host-executor.md) and [ADR-0016](0016-engine-actor-flat-model.md).
 
+Amended by [ADR-0025](0025-inject-registry-static-production-isolation.md) (2026-06-13): the isolation-threaded free-function parameters and the `inout` registry described below are replaced by a `TaskRegistry` injected at the composition boundary, where production binds its spawner to `MainActor` statically and tests capture their isolation dynamically; the one-`Core` handle, the `SendMessageAction` boundary, and the sole-writer discipline stand.
+
+Amended further by [ADR-0026](0026-replace-registry-with-tasks-slots.md) (2026-06-15): `apply` is now `async` and caller-following, committing the `Model` in place; the injected `TaskRegistry` is replaced by a flat `Tasks` slot registry (free `latest` / `cancel`), with the isolation-carrying spawner retained only for the binding-driven search consumer. The free-function core, the one-`Core` handle, and the `SendMessageAction` boundary stand.
+
 Revised 2026-06-02: the outer `@MainActor UICore` struct was dissolved. A pressure-test established that two structs were not forced by isolation — the only difference between the consumers is the send capability, and that can be composed at the app boundary. One isolation-generic `Core` is now the single vended (and bridged) handle; production builds the `@MainActor` `SendMessageAction(core)` itself. The free-function core below is unchanged; only the "outer layer" decision is revised, and the original two-struct form is recorded under *Alternatives considered*.
 
 ## Context
