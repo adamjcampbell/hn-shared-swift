@@ -2,7 +2,7 @@
 
 ## Status
 
-Superseded by [ADR-0026](0026-replace-registry-with-latest-slot.md) (2026-06-14): the injected `TaskRegistry` is replaced by a per-surface `Latest` slot and an `async` caller-following `apply`; the isolation-carrying spawner survives only for the binding-driven search consumer.
+Superseded by [ADR-0026](0026-replace-registry-with-tasks-slots.md) (2026-06-15): the injected `TaskRegistry` is replaced by a flat `Tasks` slot registry (free `latest` / `cancel`) and an `async` caller-following `apply`; the isolation-carrying spawner survives only for the binding-driven search consumer.
 
 Was Accepted (2026-06-13); amended [ADR-0021](0021-spawn-owning-task-registry.md) and the Swift 6.4 form of [ADR-0024](0024-isolation-carried-work-values.md): the task spawner moved out of `makeCore` into its two callers.
 
