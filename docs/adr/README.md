@@ -40,7 +40,7 @@ the old.
 | 0023 | [Ambient `searchDebounce`; control time by amount, not by clock](0023-ambient-debounce-clock-free-tests.md) | 2026-06-12 | Accepted                                                                        |
 | 0024 | [Carry isolation in the work value — `@Sendable @isolated(any)` via `inheritingIsolation`](0024-isolation-carried-work-values.md) | 2026-06-13 | Superseded by [0025](0025-inject-registry-static-production-isolation.md)        |
 | 0025 | [Inject the `TaskRegistry` at the composition boundary — static production isolation, dynamic test isolation](0025-inject-registry-static-production-isolation.md) | 2026-06-13 | Superseded by [0026](0026-replace-registry-with-latest-slot.md)                 |
-| 0026 | [Replace the `TaskRegistry` with a per-surface `Latest` slot; async caller-following `apply`](0026-replace-registry-with-latest-slot.md) | 2026-06-14 | Accepted                                                                        |
+| 0026 | [Replace the `TaskRegistry` with a flat `Tasks` slot registry and free `latest` / `cancel`; async caller-following `apply`](0026-replace-registry-with-latest-slot.md) | 2026-06-15 | Accepted                                                                        |
 
 ADRs 0001–0003, 0005, 0006, 0013, 0014, 0017–0020, 0023, and 0026 together
 describe the design as it stands today. ADRs 0004 and 0007–0012 are the
@@ -48,6 +48,6 @@ hand-written-bridge evolution that ended at SkipFuse adoption; 0015 and 0016
 are the `Engine`-actor era superseded by 0019's free-function core; 0021,
 0022, 0024, and 0025 are the `TaskRegistry` era — the spawn-owning registry,
 observing it as a test signal, and the Swift 6.3→6.4 isolation workarounds —
-superseded by 0026 once `apply` went `async` and a per-surface `Latest` slot
-replaced the registry. All are preserved as the immutable record of what was
+superseded by 0026 once `apply` went `async` and a flat `Tasks` slot registry
+(free `latest` / `cancel`) replaced the registry. All are preserved as the immutable record of what was
 tried and why each step was replaced.
