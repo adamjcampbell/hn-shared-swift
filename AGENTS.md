@@ -28,8 +28,8 @@ cd ios-app && \
     -destination 'platform=iOS Simulator,name=iPhone 17' \
     -skipPackagePluginValidation build
 
-# Android. The `skipExport` Gradle task re-runs `skip export` when Swift
-# sources change and is a no-op otherwise.
+# Android (macOS host). `preBuild` depends on `buildSwift`, which runs
+# runtime/build.py when its declared inputs change.
 cd android-app && \
   JAVA_HOME=/Applications/Android\ Studio.app/Contents/jbr/Contents/Home \
   ./gradlew :app:assembleDebug
@@ -38,12 +38,17 @@ adb shell am start -n com.example.hackernewsreader/.ui.MainActivity
 ```
 
 The iOS `.xcodeproj` is generated from `ios-app/project.yml` via `xcodegen`
-and gitignored. `skip-libs/` under `android-app/` is also gitignored.
+and gitignored. Android generated peers, jars and native libraries live in
+the gitignored `android-app/build/swift/`. The current script requires
+Swift/Android SDK 6.3.1 and NDK 27.3.13750724; see the Android README.
 
 ## Module split
 
 - `HackerNews` is a thin SDK: `Client` + `Story` + `Page` + private
   Firebase / Algolia decoders. No app state, no loading lifecycle.
+- `PlatformSupport` owns HTTP transport, preferred languages and native
+  time formatting, not app state. Android uses FoundationEssentials + JNI;
+  Apple platforms use Foundation.
 - `HackerNewsReader` owns the presentation lifecycle: `Model`, `Core`,
   `SendMessageAction`, `Message`, `Command`, plus `StoryRow`,
   `LoadStatus`, `LoadedStories`, and the free functions that build and
@@ -73,8 +78,13 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   `// SKIP @nobridge`. The bridged Kotlin surface is the `Core` returned
   from `makeAppCore()`: its `model` and `commands`.
 - `AsyncStream<T>` → `Flow<T>` via `.kotlin()` on the Kotlin side.
-- Kotlin toolchain must match SkipFuse's exported AAR metadata
+- Keep Kotlin aligned with generated peers and JVM runtime jars
   (currently 2.3.0). `kotlin-reflect` is required at runtime.
+- Android uses stock generated peers with a patched native runtime, not
+  upstream native AAR payloads. The UI Looper bootstrap uses private
+  libdispatch SPI pinned to Swift Android SDK 6.3.1. Keep MainActor checks;
+  do not substitute another UI actor. Upgrades require device tests. See
+  [ADR-0021](docs/adr/0021-foundation-light-platform-services.md).
 - `suspend fun` uses `suspendCoroutine`, not
   `suspendCancellableCoroutine` — Kotlin cancellation does not
   propagate to the Swift Task.
@@ -132,10 +142,12 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
   instead of failing the whole page. Mirrors Algolia's tolerance for
   hits missing required fields.
 - `Client(fetch:)` is the URL-construction test seam. Inject a
-  `@Sendable (URLRequest) async throws -> (Data, URLResponse)` closure
+  `@Sendable (URL) async throws -> HTTPResponse` closure (body and status)
   — no `URLProtocol`, no global mutable state, full parallel tests.
-- Wrap `URLSession` in `#if canImport(FoundationNetworking)` +
-  `import FoundationNetworking` for the Android cross-compile.
+- PlatformSupport uses URLSession on Apple and OkHttp callbacks via JNI
+  on Android. The seam is GET-only; JSON decoding stays shared. Swift
+  cancellation cancels the Android Call and resumes with CancellationError.
+  Do not reintroduce FoundationNetworking into the Android native closure.
 
 ## Strings & localization
 
@@ -146,11 +158,12 @@ and gitignored. `skip-libs/` under `android-app/` is also gitignored.
 - `localized(_:default:)` (in `Localization.swift`) is the only
   lookup helper. Don't introduce parallel platform-side string
   stores (no Android `strings.xml`, no per-platform `tr(...)`).
-- Skip-foundation gaps with `String(localized:bundle:)`,
-  `LocalizationValue`, and `Bundle.module` at argument position are
-  the reason for the indirection — Compose reads the bridged
-  `Strings` enum across SkipFuse. See
-  [ADR-0018](docs/adr/0018-localized-strings-catalog-generator.md).
+- Apple looks up the compiled bundle; Android selects generated catalog
+  tables using PlatformSupport language preferences. Compose reads the
+  bridged `Strings` enum. Preserve the shared single-pass formatter so
+  inserted user text is never reinterpreted as format tokens. See
+  [ADR-0021](docs/adr/0021-foundation-light-platform-services.md), which
+  supersedes ADR-0018's Android resource lookup, not its single-catalog rule.
 
 ## Concurrency & testing
 

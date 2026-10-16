@@ -1,4 +1,11 @@
+#if SKIP
 import Foundation
+#endif
+#if os(Android)
+import FoundationEssentials
+#else
+import Foundation
+#endif
 
 /// A Hacker News story — the canonical entity normalised from both
 /// the Firebase front-page feed and the Algolia search results.

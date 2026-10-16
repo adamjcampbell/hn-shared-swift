@@ -1,4 +1,11 @@
+#if SKIP
 import Foundation
+#endif
+#if os(Android)
+import FoundationEssentials
+#else
+import Foundation
+#endif
 import HackerNews
 
 /// View row — `Story` fields plus the per-user `isRead` flag projected

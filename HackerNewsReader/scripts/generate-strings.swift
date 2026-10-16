@@ -44,11 +44,12 @@ struct FormatArg {
 func parseFormatArgs(_ value: String) -> [FormatArg] {
     var args: [FormatArg] = []
     var implicitIndex = 0
+    var positionalCount = 0
     var i = value.startIndex
     while i < value.endIndex {
         guard value[i] == "%" else { i = value.index(after: i); continue }
         let next = value.index(after: i)
-        guard next < value.endIndex else { break }
+        precondition(next < value.endIndex, "Incomplete format: \(value)")
         if value[next] == "%" {
             i = value.index(after: next)
             continue
@@ -63,13 +64,14 @@ func parseFormatArgs(_ value: String) -> [FormatArg] {
             }
             if cursor < value.endIndex, value[cursor] == "$" {
                 positional = Int(digits)
+                positionalCount += 1
+                precondition(positional != nil && positional! > 0, "Invalid position: \(value)")
                 cursor = value.index(after: cursor)
             } else {
-                // Not actually positional (e.g. width spec); rewind.
-                cursor = next
+                preconditionFailure("Unsupported format width: \(value)")
             }
         }
-        guard cursor < value.endIndex else { break }
+        precondition(cursor < value.endIndex, "Incomplete format: \(value)")
         let spec: String
         if value[cursor...].hasPrefix("lld") {
             spec = "lld"
@@ -83,17 +85,22 @@ func parseFormatArgs(_ value: String) -> [FormatArg] {
         case "@": swiftType = "String"
         case "lld": swiftType = "Int"
         case "d": swiftType = "Int32"
-        case "lf", "f": swiftType = "Double"
         default:
-            // Unknown spec — skip, don't model it.
-            i = cursor
-            continue
+            preconditionFailure("Unsupported format: \(value)")
         }
         implicitIndex += 1
         args.append(FormatArg(index: positional ?? implicitIndex, swiftType: swiftType))
         i = cursor
     }
-    return args.sorted { $0.index < $1.index }
+    precondition(positionalCount == 0 || positionalCount == args.count, "Mixed argument positions: \(value)")
+    var unique: [Int: FormatArg] = [:]
+    for arg in args {
+        precondition(unique[arg.index] == nil || unique[arg.index]!.swiftType == arg.swiftType, "Conflicting argument types: \(value)")
+        unique[arg.index] = arg
+    }
+    let sorted = unique.values.sorted { $0.index < $1.index }
+    precondition(sorted.enumerated().allSatisfy { $0.element.index == $0.offset + 1 }, "Non-contiguous arguments: \(value)")
+    return sorted
 }
 
 // MARK: - Code generation
@@ -130,17 +137,19 @@ func emitAccessor(key: String, value: String, comment: String?) -> String {
     if args.isEmpty {
         return """
         \(header)    public static var \(key): String {
-                localized(\(keyLit), default: \(valueLit))
+                formatLocalized(localized(\(keyLit), default: \(valueLit)), [])
             }
         """
     }
     let params = args.enumerated().map { offset, arg in
         "_ arg\(offset + 1): \(arg.swiftType)"
     }.joined(separator: ", ")
-    let forwarded = args.indices.map { "arg\($0 + 1)" }.joined(separator: ", ")
+    let forwarded = args.enumerated().map { offset, arg in
+        arg.swiftType == "String" ? "arg\(offset + 1)" : "String(arg\(offset + 1))"
+    }.joined(separator: ", ")
     return """
     \(header)    public static func \(key)(\(params)) -> String {
-            String(format: localized(\(keyLit), default: \(valueLit)), \(forwarded))
+            formatLocalized(localized(\(keyLit), default: \(valueLit)), [\(forwarded)])
         }
     """
 }
@@ -168,18 +177,37 @@ let catalog = try JSONDecoder().decode(Catalog.self, from: data)
 let entries: [(key: String, value: String, comment: String?)] = catalog.strings
     .compactMap { key, entry in
         guard let value = entry.localizations?[catalog.sourceLanguage]?.stringUnit.value
-        else { return nil }
+        else { preconditionFailure("Missing source localization: \(key)") }
         return (key, value, entry.comment)
     }
     .sorted { $0.key < $1.key }
 
 let accessors = entries.map { emitAccessor(key: $0.key, value: $0.value, comment: $0.comment) }
 
+for entry in entries {
+    let source = parseFormatArgs(entry.value).map(\.swiftType)
+    for (language, localization) in catalog.strings[entry.key]!.localizations ?? [:] {
+        precondition(parseFormatArgs(localization.stringUnit.value).map(\.swiftType) == source,
+                     "Incompatible translation arguments: \(entry.key) (\(language))")
+    }
+}
+let languages = Set(catalog.strings.values.flatMap { Array(($0.localizations ?? [:]).keys) }).sorted()
+let tables = languages.map { language in
+    let values = entries.compactMap { entry -> String? in
+        guard let value = catalog.strings[entry.key]?.localizations?[language]?.stringUnit.value else { return nil }
+        return "        \(swiftStringLiteral(entry.key)): \(swiftStringLiteral(value)),"
+    }.joined(separator: "\n")
+    return "    \(swiftStringLiteral(language)): [\n\(values)\n    ],"
+}.joined(separator: "\n")
+
 let body = accessors.joined(separator: "\n\n")
 let output = """
 // This file is generated by scripts/generate-strings.swift.
 // Do not edit by hand — edit Localizable.xcstrings and rerun the script.
-import Foundation
+
+let stringTables: [String: [String: String]] = [
+\(tables)
+]
 
 /// User-visible strings backed by `Localizable.xcstrings`. Each
 /// accessor routes through ``localized(_:default:)`` for catalog

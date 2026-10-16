@@ -1,5 +1,3 @@
-import Foundation
-
 /// One page of Hacker News stories alongside the total page count so
 /// callers can drive a `hasMore` cursor without a second probe.
 public struct Page: Sendable, Equatable {

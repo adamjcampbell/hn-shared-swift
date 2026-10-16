@@ -1,7 +1,12 @@
+#if os(Android)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import Observation
 import HackerNews
 import SkipFuse
+import PlatformSupport
 
 /// Source of truth for the app — observable state for the feed,
 /// search, and read-tracking surfaces.
@@ -82,7 +87,7 @@ public final class Model {
     /// change to ``feedLoaded``, the entity store, or ``readIds``.
     public var feedHeaderSubtitle: String {
         let stamp: String = (feedLoaded?.loadedAt).map {
-            $0.formatted(date: .omitted, time: .standard)
+            formatTime($0)
         } ?? Strings.feedHeaderLastRefreshedNever
 
         let rows = feedStories

@@ -26,6 +26,7 @@ let package = Package(
         .package(url: "https://source.skip.tools/skip.git", from: "1.8.14"),
         .package(url: "https://source.skip.tools/skip-fuse.git", from: "1.0.0"),
         .package(url: "https://source.skip.tools/skip-model.git", from: "1.0.0"),
+        .package(url: "https://github.com/skiptools/swift-jni.git", exact: "0.5.1"),
         // Test-only: deterministic time control via TestClock so the
         // 250 ms search debounce doesn't translate into 250 ms of
         // real-clock waiting per test.
@@ -33,8 +34,14 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "PlatformSupport",
+            dependencies: [.product(name: "SwiftJNI", package: "swift-jni", condition: .when(platforms: [.android]))],
+            swiftSettings: sharedSettings
+        ),
+        .target(
             name: "HackerNews",
             dependencies: [
+                "PlatformSupport",
                 .product(name: "SkipFuse", package: "skip-fuse"),
             ],
             swiftSettings: sharedSettings,
@@ -44,6 +51,7 @@ let package = Package(
             name: "HackerNewsReader",
             dependencies: [
                 "HackerNews",
+                "PlatformSupport",
                 .product(name: "SkipFuse", package: "skip-fuse"),
                 .product(name: "SkipModel", package: "skip-model"),
             ],

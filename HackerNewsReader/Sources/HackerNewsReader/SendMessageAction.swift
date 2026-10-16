@@ -1,5 +1,3 @@
-import Foundation
-
 /// Capability action for sending ``Message``s — installed into the
 /// SwiftUI environment as `\.sendMessage` and mirroring the
 /// ergonomic of `DismissAction`.

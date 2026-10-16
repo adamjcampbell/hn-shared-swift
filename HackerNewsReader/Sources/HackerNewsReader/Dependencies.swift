@@ -1,4 +1,8 @@
+#if os(Android)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import HackerNews
 
 /// Package-wide ambient dependencies, propagated via one `@TaskLocal`.

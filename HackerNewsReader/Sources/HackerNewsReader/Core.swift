@@ -1,9 +1,10 @@
+#if os(Android)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import Observation
 import HackerNews
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
 
 // MARK: - Core (isolation-generic, bridged)
 
@@ -278,8 +279,13 @@ func fetch(
     try Task.checkCancellation()
     do {
         return try await body(Dependencies.current.client)
-    } catch let urlError as URLError where urlError.code == .cancelled {
-        throw CancellationError()
+    } catch {
+        #if !os(Android)
+        if let error = error as? URLError, error.code == .cancelled {
+            throw CancellationError()
+        }
+        #endif
+        throw error
     }
 }
 
@@ -318,7 +324,12 @@ func loadTask(
             state[keyPath: status].finishSuccess()
         } catch is CancellationError {
         } catch {
+            guard !Task.isCancelled else { return }
+            #if os(Android)
+            state[keyPath: status].finishFailure(String(describing: error))
+            #else
             state[keyPath: status].finishFailure(error.localizedDescription)
+            #endif
         }
     }
 }

@@ -11,7 +11,9 @@ recompose, `async` functions become `suspend`, `AsyncStream` becomes
 The app fetches front-page stories from the
 [official Firebase API](https://github.com/HackerNews/API), search from
 the [Algolia HN API](https://hn.algolia.com/api), and shows a per-story
-read indicator. Networking lives in Swift via `URLSession`.
+read indicator. Shared Swift owns URL construction and JSON decoding;
+`PlatformSupport` uses `URLSession` on Apple platforms and OkHttp via JNI
+on Android, through an async `@Sendable (URL) -> HTTPResponse` GET seam.
 
 ## How Skip is used
 
@@ -68,7 +70,10 @@ class App : Application() {
     lateinit var core: Core; private set
     override fun onCreate() {
         super.onCreate()
-        ProcessInfo.launch(applicationContext)
+        System.loadLibrary("SkipBridge")
+        System.loadLibrary("HackerNewsReader")
+        System.loadLibrary("MainLooper")
+        PlatformServices.setupMainLooper()
         core = makeAppCore()
     }
 }
@@ -169,6 +174,9 @@ The app's strings come from a single `Localizable.xcstrings` catalog.
 A generated `Strings` enum exposes typed accessors that bridge across
 SkipFuse, so Compose reads the same source as SwiftUI without a
 separate Android string store.
+Apple uses its compiled resource bundle; Android uses generated catalog
+tables selected by platform language preferences. PlatformSupport also
+provides native time-of-day formatting.
 
 ## Why one Model, free functions
 
@@ -203,9 +211,9 @@ are derived projections the UI binds to.
 
 Composition is achieved by function, not by type, under the old
 adage that *data + procedures = programs*. In this way
-`fetch(debounce:body:)` is the shared helper, handling debounce,
-task cancellation, and the normalisation of `URLError(.cancelled)`
-to `CancellationError` for every fetch path.
+`fetch(debounce:body:)` is the shared helper for debounce and task
+cancellation. PlatformSupport normalizes transport cancellation to
+`CancellationError`; on Android it also cancels the underlying OkHttp Call.
 
 *Semantic Compression* makes the same case for the fetch paths.
 The feed and search fetch paths look similar but are different
@@ -248,7 +256,7 @@ Outside that overhead, app complexity could be much lower.
 
 ## Layout
 
-- `HackerNewsReader/` — SwiftPM package, two targets, one exported
+- `HackerNewsReader/` — SwiftPM package, three library targets, one exported
   product (`.library(name: "HackerNewsReader")`).
   - `HackerNews` — API client and entity types: `Client`, `Story`,
     `Page`. Self-contained Hacker News SDK.
@@ -258,13 +266,24 @@ Outside that overhead, app complexity could be much lower.
     `LoadedStories`, `Dependencies` (the ambient `@TaskLocal` for
     `date` / `client` / `clock`), and the bridged `Strings` enum
     generated from `Resources/Localizable.xcstrings` by
-    `scripts/generate-strings.swift`. Depends on `HackerNews`; Skip
-    transitively packages `HackerNews` into the AAR set.
+    `scripts/generate-strings.swift`. Depends on `HackerNews` and
+    `PlatformSupport`.
+  - `PlatformSupport` — HTTP bytes/status, language preferences, and
+    time formatting; Apple Foundation or Android FoundationEssentials + JNI.
 - `ios-app/` — SwiftUI app generated from `project.yml` by
   [`xcodegen`](https://github.com/yonaskolb/XcodeGen).
-- `android-app/` — Gradle project consuming the SkipFuse-exported AARs
-  from `skip-libs/`, which is gitignored. A `skipExport` task wired
-  into `preBuild` re-runs `skip export` whenever Swift sources change.
+- `android-app/` — Gradle project whose `preBuild` runs `buildSwift`
+  (`runtime/build.py`) when its declared inputs change. It consumes
+  generated Kotlin peers, JVM runtime jars, and a custom native Swift
+  runtime from `build/swift/`, not exported native AARs.
+
+The Foundation-light runtime preserves Observation, MainActor and TaskLocal
+contracts. Its Android UI Looper integration uses private libdispatch SPI;
+toolchain upgrades require device tests. See
+[ADR-0021](docs/adr/0021-foundation-light-platform-services.md) and the
+[runtime notes](android-app/runtime/README.md). Build and device validation
+are separate from these implementation notes; no app-size or runtime-success
+claim is made here.
 
 Architecture, concurrency rules, and the SwiftUI view-layer
 conventions are in [`AGENTS.md`](AGENTS.md).
@@ -281,8 +300,10 @@ conventions are in [`AGENTS.md`](AGENTS.md).
 |---|---|
 | Swift | 6.3.1 |
 | Skip CLI | 1.8.14 |
-| Kotlin | 2.3.0 — must match SkipFuse's exported AAR metadata |
-| Android NDK | 27.x, via Skip CLI's auto-managed install |
+| Swift Android SDK | 6.3.1-RELEASE (pinned runtime compatibility boundary) |
+| Android build host | macOS only in the current script |
+| Kotlin | 2.3.0 — aligned with the generated peers and JVM runtime |
+| Android NDK | 27.3.13750724 |
 | JDK | 21 — Android Studio's bundled JBR works |
 | Xcode | 26.0+ |
 | iOS deployment target | 17.0 |

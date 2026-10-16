@@ -1,5 +1,3 @@
-import Foundation
-
 /// One-shot imperative messages the core yields to the UI — the
 /// outbound half of the Elm-shaped pair (``Message`` is inbound).
 /// Models presentations owned by the platform (a Safari sheet on

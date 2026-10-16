@@ -1,5 +1,3 @@
-import Foundation
-
 /// User-driven inputs the core applies to ``Model`` — the inbound
 /// half of the Elm-shaped pair (``Command`` is outbound). Named for
 /// Elm's `Msg`, expanded to a full word.

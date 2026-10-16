@@ -1,0 +1,29 @@
+Foundation-light Swift Android runtime
+
+This app includes software from Skip (SkipBridge, SkipAndroidBridge, SkipLib,
+SkipModel and SkipFoundation), SwiftJNI, the Swift Android SDK and Android NDK.
+Their license and notice texts accompany this file in assets/third-party/.
+Skip component source files carry their original copyright notices.
+
+The MPL-covered Skip source, including the modified native runtime files, is
+provided inside this APK at assets/third-party/runtime-sources.zip, at no charge.
+An APK is a ZIP archive: extract that entry with any ZIP reader, then extract
+runtime-sources.zip. native/ contains the exact patched native source;
+skip-*/ contains the upstream sources used for JVM compilation; build/ contains
+the patch, build recipe and dependency lockfile. sources.json lists pinned
+upstream repositories and revisions. Modifications replace Foundation with
+FoundationEssentials, exclude unsupported Locale/NSNumber conversions and the
+reverse suspend bridge, and remove the obsolete Android threading fatal stub.
+
+Swift runtime, FoundationEssentials, Dispatch and Observation source is available
+from https://github.com/swiftlang at the swift-6.3.1-RELEASE tag. The SDK's license
+and Android NDK notices are included here. Runtime dependencies also include
+Kotlin/Kotlin coroutines (JetBrains, Apache-2.0), OkHttp/Okio (Square, Apache-2.0),
+AndroidX (Android Open Source Project, Apache-2.0), and commonmark-java
+(commonmark-java contributors, BSD-2-Clause). Their upstream source/license pages:
+https://github.com/JetBrains/kotlin
+https://github.com/Kotlin/kotlinx.coroutines
+https://github.com/square/okhttp
+https://github.com/square/okio
+https://android.googlesource.com/platform/frameworks/support/
+https://github.com/commonmark/commonmark-java

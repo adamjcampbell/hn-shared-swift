@@ -1,4 +1,11 @@
+#if SKIP
 import Foundation
+#endif
+#if os(Android)
+import FoundationEssentials
+#else
+import Foundation
+#endif
 
 /// Accumulated result of one or more page fetches against a paginated
 /// listing — story ids in order, the pagination cursor, and a

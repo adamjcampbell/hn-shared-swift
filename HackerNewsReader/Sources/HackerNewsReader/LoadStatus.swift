@@ -1,5 +1,3 @@
-import Foundation
-
 /// Activity status for a single in-flight operation against a
 /// surface — the initial fetch / refresh, or a load-more.
 // SKIP @bridgeMembers
