@@ -23,9 +23,7 @@ let package = Package(
         .library(name: "HackerNewsReader", type: .dynamic, targets: ["HackerNewsReader"]),
     ],
     dependencies: [
-        .package(url: "https://source.skip.tools/skip.git", from: "1.8.14"),
-        .package(url: "https://source.skip.tools/skip-fuse.git", from: "1.0.0"),
-        .package(url: "https://source.skip.tools/skip-model.git", from: "1.0.0"),
+        .package(url: "https://github.com/swiftlang/swift-java", revision: "301e3da710ede7af93e798f1ce1c7950715a5748"),
         // Test-only: deterministic time control via TestClock so the
         // 250 ms search debounce doesn't translate into 250 ms of
         // real-clock waiting per test.
@@ -33,23 +31,23 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "PlatformSupport",
+            dependencies: [.product(name: "SwiftJava", package: "swift-java", condition: .when(platforms: [.android]))],
+            swiftSettings: sharedSettings
+        ),
+        .target(
             name: "HackerNews",
-            dependencies: [
-                .product(name: "SkipFuse", package: "skip-fuse"),
-            ],
-            swiftSettings: sharedSettings,
-            plugins: [.plugin(name: "skipstone", package: "skip")]
+            dependencies: ["PlatformSupport"],
+            swiftSettings: sharedSettings
         ),
         .target(
             name: "HackerNewsReader",
             dependencies: [
                 "HackerNews",
-                .product(name: "SkipFuse", package: "skip-fuse"),
-                .product(name: "SkipModel", package: "skip-model"),
+                "PlatformSupport",
             ],
             resources: [.process("Resources")],
-            swiftSettings: sharedSettings,
-            plugins: [.plugin(name: "skipstone", package: "skip")]
+            swiftSettings: sharedSettings
         ),
         .testTarget(
             name: "HackerNewsTests",

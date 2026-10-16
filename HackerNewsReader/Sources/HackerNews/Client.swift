@@ -1,7 +1,9 @@
+#if os(Android)
+import FoundationEssentials
+#else
 import Foundation
-#if canImport(FoundationNetworking)
-import FoundationNetworking
 #endif
+import PlatformSupport
 
 /// HTTP client for the Hacker News data APIs.
 ///
@@ -10,7 +12,7 @@ import FoundationNetworking
 /// ``search`` hits the Algolia HN search API for text search. Both
 /// closures resolve to a ``Page``, so callers don't see the
 /// difference. Tests can inject closures directly; production callers
-/// use the no-argument ``init()`` to wire the live `URLSession`.
+/// use the no-argument ``init()`` to wire the platform HTTP service.
 public struct Client: Sendable {
     public var frontPage: @Sendable (_ page: Int) async throws -> Page
     public var search: @Sendable (_ query: String, _ page: Int) async throws -> Page
@@ -49,39 +51,34 @@ extension Client {
     /// Page size used for both transports.
     static let pageSize = 50
 
-    /// Builds a live client backed by a shared `URLSession`.
+    /// Builds a live client using the platform HTTP transport.
     public init() {
-        let session = Client.productionSession
-        self.init(fetch: { request in
-            try await session.data(for: request)
-        })
+        self.init(fetch: PlatformSupport.fetch)
     }
 
-    /// Builds a client over an injected HTTP transport — the test seam
-    /// for asserting on the exact `URLRequest` and returning canned
-    /// `(Data, URLResponse)` without `URLSession` or `URLProtocol`.
-    ///
     /// - Parameter fetch: The transport closure to use for both
     ///   front-page and search requests.
-    init(fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)) {
+    init(fetch transport: @escaping @Sendable (URL) async throws -> HTTPResponse) {
+        let fetch: @Sendable (URL) async throws -> Data = { url in
+            let response = try await transport(url)
+            try Task.checkCancellation()
+            guard (200..<300).contains(response.statusCode) else {
+                throw HTTPError.status(response.statusCode)
+            }
+            return response.body
+        }
         self.init(
             frontPage: { page in
                 try await Client.firebaseFrontPage(page: page, fetch: fetch)
             },
             search: { query, page in
                 let request = Client.searchRequest(query: query, page: page)
-                let (data, _) = try await fetch(request)
+                let data = try await fetch(request)
                 return try Client.decodeAlgoliaSearch(data)
             }
         )
     }
 
-    static let productionSession: URLSession = {
-        let configuration = URLSessionConfiguration.default
-        configuration.timeoutIntervalForRequest = 10
-        // `waitsForConnectivity` is read-only on swift-corelibs-Foundation; default is `false` either way.
-        return URLSession(configuration: configuration)
-    }()
 }
 
 // MARK: - Firebase front-page transport
@@ -91,12 +88,12 @@ extension Client {
 
     static let firebaseDecoder = JSONDecoder()
 
-    static func topStoriesRequest() -> URLRequest {
-        URLRequest(url: firebaseBaseURL.appendingPathComponent("topstories.json"))
+    static func topStoriesRequest() -> URL {
+        firebaseBaseURL.appendingPathComponent("topstories.json")
     }
 
-    static func firebaseItemRequest(id: Int) -> URLRequest {
-        URLRequest(url: firebaseBaseURL.appendingPathComponent("item/\(id).json"))
+    static func firebaseItemRequest(id: Int) -> URL {
+        firebaseBaseURL.appendingPathComponent("item/\(id).json")
     }
 
     /// Fetches one page of the Firebase front-page feed, dropping
@@ -118,9 +115,9 @@ extension Client {
     ///   the in-flight task group.
     static func firebaseFrontPage(
         page: Int,
-        fetch: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse)
+        fetch: @escaping @Sendable (URL) async throws -> Data
     ) async throws -> Page {
-        let (idsData, _) = try await fetch(topStoriesRequest())
+        let idsData = try await fetch(topStoriesRequest())
         let allIDs = try firebaseDecoder.decode([Int].self, from: idsData)
 
         let totalPages = (allIDs.count + pageSize - 1) / pageSize
@@ -138,13 +135,11 @@ extension Client {
             for (idx, id) in pageIDs.enumerated() {
                 group.addTask {
                     do {
-                        let (data, _) = try await fetch(firebaseItemRequest(id: id))
+                        let data = try await fetch(firebaseItemRequest(id: id))
                         let item = try firebaseDecoder.decode(FirebaseItem.self, from: data)
                         return (idx, Story(firebaseItem: item))
                     } catch is CancellationError {
                         // Re-throw or the group swallows parent-cancel and keeps fetching.
-                        throw CancellationError()
-                    } catch let urlError as URLError where urlError.code == .cancelled {
                         throw CancellationError()
                     } catch {
                         return (idx, nil)
@@ -203,7 +198,7 @@ extension Client {
         return decoder
     }()
 
-    static func searchRequest(query: String, page: Int) -> URLRequest {
+    static func searchRequest(query: String, page: Int) -> URL {
         makeAlgoliaRequest(path: "search", queryItems: [
             URLQueryItem(name: "query", value: query),
             URLQueryItem(name: "tags", value: "story"),
@@ -212,13 +207,13 @@ extension Client {
         ])
     }
 
-    private static func makeAlgoliaRequest(path: String, queryItems: [URLQueryItem]) -> URLRequest {
+    private static func makeAlgoliaRequest(path: String, queryItems: [URLQueryItem]) -> URL {
         var components = URLComponents(
             url: algoliaBaseURL.appendingPathComponent(path),
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = queryItems
-        return URLRequest(url: components.url!)
+        return components.url!
     }
 
     static func decodeAlgoliaSearch(_ data: Data) throws -> Page {

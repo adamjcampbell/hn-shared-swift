@@ -52,15 +52,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import hacker.news.reader.Command
-import hacker.news.reader.Core
-import hacker.news.reader.LoadStatus
-import hacker.news.reader.LoadedStories
-import hacker.news.reader.Message
-import hacker.news.reader.Model
-import hacker.news.reader.SendMessageAction
-import hacker.news.reader.StoryRow
-import hacker.news.reader.Strings
+import com.example.hackernewsreader.bridge.Command
+import com.example.hackernewsreader.bridge.Core
+import com.example.hackernewsreader.bridge.LoadStatus
+import com.example.hackernewsreader.bridge.LoadedStories
+import com.example.hackernewsreader.bridge.Message
+import com.example.hackernewsreader.bridge.Model
+import com.example.hackernewsreader.bridge.SendMessageAction
+import com.example.hackernewsreader.bridge.StoryRow
+import com.example.hackernewsreader.swift.Strings
 import kotlinx.coroutines.launch
 
 private val LocalSendMessage = staticCompositionLocalOf<SendMessageAction> {
@@ -80,9 +80,9 @@ fun StoryScreen(core: Core) {
     LaunchedEffect(Unit) { sendMessage.send(Message.refresh) }
 
     LaunchedEffect(Unit) {
-        core.commands.kotlin().collect { command ->
+        core.commands.collect { command ->
             when (command) {
-                is Command.PresentURLCase -> context.launchCustomTab(command.value)
+                is Command.PresentURL -> context.launchCustomTab(command.value)
             }
         }
     }
@@ -91,7 +91,7 @@ fun StoryScreen(core: Core) {
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
-                title = { Text(Strings.appTitle) },
+                title = { Text(Strings.getAppTitle()) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     scrolledContainerColor = MaterialTheme.colorScheme.surface,
                 ),
@@ -129,7 +129,7 @@ private fun StoriesContent(
                 textFieldState = textFieldState,
                 searchBarState = searchBarState,
                 onSearch = { scope.launch { searchBarState.animateToCollapsed() } },
-                placeholder = { Text(Strings.searchPlaceholder) },
+                placeholder = { Text(Strings.getSearchPlaceholder()) },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 colors = containedSearchBarColors.inputFieldColors,
             )
@@ -144,7 +144,7 @@ private fun StoriesContent(
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             FeedList(
-                stories = model.feedStories.asList(),
+                stories = model.feedStories,
                 loaded = model.feedLoaded,
                 initialStatus = model.feedInitialStatus,
                 loadMoreStatus = model.feedLoadMoreStatus,
@@ -160,7 +160,7 @@ private fun StoriesContent(
         ) {
             SearchResults(
                 query = model.searchQuery,
-                results = model.searchResults.asList(),
+                results = model.searchResults,
                 loaded = model.searchLoaded,
                 initialStatus = model.searchInitialStatus,
                 loadMoreStatus = model.searchLoadMoreStatus,
@@ -246,7 +246,7 @@ private fun FeedHeaderCard(
     ) {
         Column(Modifier.padding(16.dp)) {
             Text(
-                text = Strings.feedTitle,
+                text = Strings.getFeedTitle(),
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
@@ -375,7 +375,7 @@ private fun LoadMoreRow(status: LoadStatus) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = status.error ?: Strings.loadingMore,
+            text = status.error ?: Strings.getLoadingMore(),
             style = MaterialTheme.typography.bodySmall,
             color = if (showError) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -393,7 +393,7 @@ private fun LoadMoreRow(status: LoadStatus) {
                 enabled = showError,
                 modifier = Modifier.alpha(if (showError) 1f else 0f),
             ) {
-                Text(Strings.tryAgain)
+                Text(Strings.getTryAgain())
             }
         }
     }
@@ -415,4 +415,3 @@ private fun EmptyResultsOverlay(query: String) {
         )
     }
 }
-

@@ -1,5 +1,3 @@
-import Foundation
-
 /// One-shot imperative messages the core yields to the UI — the
 /// outbound half of the Elm-shaped pair (``Message`` is inbound).
 /// Models presentations owned by the platform (a Safari sheet on
@@ -8,9 +6,7 @@ import Foundation
 ///
 /// Delivered through ``Core/commands``. iOS consumes it with
 /// `for await` from a long-lived `.task`; Android collects via
-/// `core.commands.kotlin().collect { ... }` (SkipFuse bridges
-/// `AsyncStream<T>` to `Flow<T>`).
-// SKIP @bridge
+/// `core.commands.collect { ... }` through the Android Flow adapter.
 public enum Command: Sendable, Equatable {
     case presentURL(value: String)
 }

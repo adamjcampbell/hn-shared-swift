@@ -6,6 +6,7 @@
 .swiftpm/
 .codex-cache/
 Package.resolved
+!HackerNewsReader/Package.resolved
 *.xcworkspace
 *.xcodeproj
 xcuserdata/

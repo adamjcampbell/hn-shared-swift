@@ -27,7 +27,7 @@ the old.
 | 0010 | [Tuple-return fusion of observe + initial read](0010-tuple-return-observe-read-fusion.md)                      | 2026-05-10 | Superseded by [0013](0013-skipfuse-bridgemembers.md)                            |
 | 0011 | [Value-carrying typed `*OnChange` callbacks](0011-value-carrying-onchange-callbacks.md)                        | 2026-05-10 | Superseded by [0013](0013-skipfuse-bridgemembers.md)                            |
 | 0012 | [Extension-method bridge experiment via swift-java jextract](0012-extension-method-bridge-jextract.md)         | 2026-05-10 | Superseded by [0013](0013-skipfuse-bridgemembers.md)                            |
-| 0013 | [Adopt SkipFuse with `// SKIP @bridgeMembers` for whole-class bridging](0013-skipfuse-bridgemembers.md)         | 2026-05-10 | Accepted                                                                        |
+| 0013 | [Adopt SkipFuse with `// SKIP @bridgeMembers` for whole-class bridging](0013-skipfuse-bridgemembers.md)         | 2026-05-10 | Superseded by [0022](0022-official-swift-java-bridge.md) |
 | 0014 | [Pin the bridged `Core` to `@MainActor` on both platforms](0014-mainactor-both-platforms.md)                   | 2026-05-13 | Accepted                                                                        |
 | 0015 | [`Engine` actor borrows host executor via `isolation: any Actor`](0015-engine-borrows-host-executor.md)        | 2026-05-13 | Superseded by [0019](0019-core-free-functions-uicore-split.md)                  |
 | 0016 | [Single `Engine` actor as sole writer; `Model` is a flat mega-struct](0016-engine-actor-flat-model.md)         | 2026-05-17 | Superseded by [0019](0019-core-free-functions-uicore-split.md)                  |
@@ -35,9 +35,12 @@ the old.
 | 0018 | [Localized strings via `Localizable.xcstrings` + a generated `Strings` accessor](0018-localized-strings-catalog-generator.md) | 2026-05-21 | Accepted                                                                        |
 | 0019 | [Core from isolation-threaded free functions; vend one `Core`, compose `SendMessageAction` at the app boundary](0019-core-free-functions-uicore-split.md) | 2026-06-01 | Accepted (rev. 2026-06-02)                                                      |
 | 0020 | [Ambient `Dependencies` struct; read `date`/`client`/`clock` at the call site](0020-ambient-dependencies-struct.md) | 2026-06-01 | Accepted                                                                        |
+| 0021 | [Foundation-light Android with native platform services](0021-foundation-light-platform-services.md) | 2026-10-16 | Accepted; bridge/runtime portions superseded by [0022](0022-official-swift-java-bridge.md) |
+| 0022 | [Replace Skip with official Swift–Java and generated model adapters](0022-official-swift-java-bridge.md) | 2026-10-16 | Accepted |
 
-ADRs 0001–0003, 0005, 0006, 0013, 0014, and 0017–0020 together describe the
-design as it stands today. ADRs 0004 and 0007–0012 are the hand-written-bridge
-evolution that ended at SkipFuse adoption; ADRs 0015 and 0016 are the
-`Engine`-actor era, superseded by 0019's free-function core. All are preserved
-as the immutable record of what was tried and why each step was replaced.
+ADRs 0001–0003, 0005, 0006, 0014, and 0017–0021 retain the shared-state,
+isolation and platform-service contracts. ADR-0022 records the
+replacement of ADR-0013 and ADR-0021's Skip-specific runtime and cancellation
+limitations, with local validation and size measurements. ADRs 0004 and 0007–0012
+record the bridge evolution before SkipFuse; ADRs 0015 and 0016 record the
+`Engine`-actor era superseded by 0019. Earlier ADR bodies remain immutable.

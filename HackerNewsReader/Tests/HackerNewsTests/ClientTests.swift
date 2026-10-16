@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import PlatformSupport
 @testable import HackerNews
 
 @Suite("Client.frontPage (Firebase)")
@@ -108,7 +109,7 @@ struct FirebaseFrontPageTests {
     @Test("tolerates per-item fetch failures")
     func toleratesItemFailures() async throws {
         let client = Client(fetch: { request in
-            let url = request.url!
+            let url = request
             if url.path.hasSuffix("/topstories.json") {
                 return okResponse("[1,2,3]", for: url)
             }
@@ -150,12 +151,27 @@ struct FirebaseFrontPageTests {
 @Suite("Client.search (Algolia)")
 struct AlgoliaSearchTests {
 
+    @Test("accepts only successful HTTP statuses", arguments: [199, 200, 299, 300, 503])
+    func httpStatus(_ status: Int) async throws {
+        let client = Client(fetch: { _ in
+            HTTPResponse(body: Data(#"{"hits":[],"nbPages":17}"#.utf8), statusCode: status)
+        })
+        do {
+            let page = try await client.search("status", 0)
+            #expect((200..<300).contains(status))
+            #expect(page.totalPages == 17)
+        } catch HTTPError.status(let received) {
+            #expect(received == status)
+            #expect(!(200..<300).contains(status))
+        }
+    }
+
     @Test("hits the search endpoint with the requested query and page")
     func searchURL() async throws {
         let captured = CapturedURLs()
         let client = Client(fetch: { request in
-            await captured.record(request.url)
-            return okResponse(#"{"hits":[],"nbPages":0}"#, for: request.url!)
+            await captured.record(request)
+            return okResponse(#"{"hits":[],"nbPages":0}"#, for: request)
         })
 
         _ = try await client.search("rust async", 3)
@@ -175,7 +191,7 @@ struct AlgoliaSearchTests {
     @Test("decodes Algolia envelope into a paginated Page")
     func decodesEnvelope() async throws {
         let client = Client(fetch: { request in
-            okResponse(Self.envelopeFixture, for: request.url!)
+            okResponse(Self.envelopeFixture, for: request)
         })
 
         let result = try await client.search("anything", 0)
@@ -194,7 +210,7 @@ struct AlgoliaSearchTests {
     @Test("skips hits missing title or author")
     func skipsIncompleteHits() async throws {
         let client = Client(fetch: { request in
-            okResponse(Self.partialFixture, for: request.url!)
+            okResponse(Self.partialFixture, for: request)
         })
 
         let result = try await client.search("x", 0)
@@ -284,9 +300,9 @@ private func firebaseMock(
     topstories: [Int],
     items: [Int: String],
     recordURL: @escaping @Sendable (URL) async -> Void
-) -> @Sendable (URLRequest) async throws -> (Data, URLResponse) {
+) -> @Sendable (URL) async throws -> HTTPResponse {
     { request in
-        let url = request.url!
+        let url = request
         await recordURL(url)
         if url.path.hasSuffix("/topstories.json") {
             let json = "[\(topstories.map(String.init).joined(separator: ","))]"

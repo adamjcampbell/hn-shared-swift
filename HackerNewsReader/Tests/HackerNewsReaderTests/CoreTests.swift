@@ -253,15 +253,17 @@ struct CoreTests {
         }
     }
 
-    @Test("search-to-search cancel-and-replace through URLError(.cancelled) doesn't surface")
-    func searchCancelAndReplace_throughURLErrorCancelled_silent() async throws {
+    @Test("a replaced search cannot publish its transport error", arguments: [URLError.Code.cancelled, .cannotConnectToHost])
+    func searchCancelAndReplace_transportFailure_silent(_ code: URLError.Code) async throws {
         let clock = TestClock<Duration>()
+        let pending = OSAllocatedUnfairLock<CheckedContinuation<Page, any Error>?>(initialState: nil)
         try await withCore(
             client: .mock(
                 search: { query, _ in
                     if query == "ru" {
-                        do { try await clock.sleep(for: .seconds(Int.max)) }
-                        catch { throw URLError(.cancelled) }
+                        return try await withCheckedThrowingContinuation { continuation in
+                            pending.withLock { $0 = continuation }
+                        }
                     }
                     return page([storyA])
                 }
@@ -273,9 +275,14 @@ struct CoreTests {
             await settle(actor)
             await clock.advance(by: Core.searchDebounce)
             await settle(actor)
+            let oldRequest = try #require(pending.withLock { $0 })
 
             core.model.searchQuery = "rust"
             await settle(actor)
+            oldRequest.resume(throwing: URLError(code))
+            await settle(actor)
+            #expect(core.model.searchInitialStatus.isLoading)
+            #expect(core.model.searchInitialStatus.error == nil)
             await clock.advance(by: Core.searchDebounce)
             await settle(actor)
 

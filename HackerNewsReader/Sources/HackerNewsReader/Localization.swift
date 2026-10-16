@@ -1,41 +1,68 @@
+#if os(Android)
+import FoundationEssentials
+import PlatformSupport
+#else
 import Foundation
+#endif
 
-/// Resolves the package's localized resource bundle on each platform.
-///
-/// - On Apple platforms, returns the SwiftPM-synthesized `Bundle.module`.
-/// - On Skip Fuse's Android target, the `typealias Bundle = AndroidBundle`
-///   hides Foundation's `.module` extension at argument position. We
-///   instead construct a `Bundle(path:)` against the resource-folder
-///   path Skip stages under the application bundle. Skip's auto-
-///   generated `Bundle_Support.swift` intercepts that init shape and
-///   routes to the package's module-bundle accessor.
-extension Bundle {
-    static var hackerNewsReaderResources: Bundle {
-        #if os(Android)
-        let path = Bundle.main.bundleURL
-            .appendingPathComponent("HackerNewsReader_HackerNewsReader.resources")
-            .path
-        return Bundle(path: path) ?? .main
-        #else
-        return .module
-        #endif
-    }
+func localized(_ key: String, default value: String) -> String {
+    #if os(Android)
+    return catalogString(key, default: value, preferredLanguages: preferredLanguages(), tables: stringTables)
+    #else
+    return Bundle.module.localizedString(forKey: key, value: value, table: nil)
+    #endif
 }
 
-/// Looks up `key` in the package's localization catalog and returns
-/// the localized value, falling back to `value` when no entry matches
-/// the current locale.
-///
-/// `Bundle.localizedString(forKey:value:table:)` is used directly because
-/// `String(localized:bundle:)` and `AttributedString(localized:)` don't
-/// resolve cleanly on Skip Fuse's Android Swift target.
-///
-/// - Parameters:
-///   - key: Catalog key to look up in `Localizable.xcstrings`.
-///   - value: English source string used as the runtime fallback when
-///     no localization matches the current locale.
-/// - Returns: The localized string, or `value` if no entry matches.
-@inline(__always)
-func localized(_ key: String, default value: String) -> String {
-    Bundle.hackerNewsReaderResources.localizedString(forKey: key, value: value, table: nil)
+func catalogString(_ key: String, default value: String, preferredLanguages: [String], tables: [String: [String: String]]) -> String {
+    let normalized = Dictionary(uniqueKeysWithValues: tables.map { ($0.key.lowercased(), $0.value) })
+    for preference in preferredLanguages {
+        var language = preference.lowercased()
+        while !language.isEmpty {
+            if let table = normalized[language] { return table[key] ?? value }
+            guard let separator = language.lastIndex(of: "-") else { break }
+            language = String(language[..<separator])
+        }
+    }
+    return value
+}
+
+// Scan only the template: inserted user text must never become a format token.
+func formatLocalized(_ template: String, _ arguments: [String]) -> String {
+    var output = ""
+    var cursor = template.startIndex
+    var implicitIndex = 0
+    while cursor < template.endIndex {
+        let character = template[cursor]
+        cursor = template.index(after: cursor)
+        guard character == "%" else { output.append(character); continue }
+        precondition(cursor < template.endIndex, "Incomplete catalog format")
+        if template[cursor] == "%" {
+            output.append("%")
+            cursor = template.index(after: cursor)
+            continue
+        }
+        var digits = ""
+        while cursor < template.endIndex, template[cursor].isASCII, template[cursor].isNumber {
+            digits.append(template[cursor])
+            cursor = template.index(after: cursor)
+        }
+        let index: Int
+        if !digits.isEmpty {
+            precondition(cursor < template.endIndex && template[cursor] == "$")
+            index = (Int(digits) ?? 0) - 1
+            cursor = template.index(after: cursor)
+        } else {
+            index = implicitIndex
+            implicitIndex += 1
+        }
+        if template[cursor...].hasPrefix("lld") {
+            cursor = template.index(cursor, offsetBy: 3)
+        } else {
+            precondition(cursor < template.endIndex && (template[cursor] == "@" || template[cursor] == "d"))
+            cursor = template.index(after: cursor)
+        }
+        precondition(arguments.indices.contains(index), "Invalid catalog argument index")
+        output += arguments[index]
+    }
+    return output
 }

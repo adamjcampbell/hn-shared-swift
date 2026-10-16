@@ -1,0 +1,28 @@
+Foundation-light Swift Android runtime
+
+This app uses official Swift-Java and Swift-Java JNI Core, the Swift Android SDK
+and Android NDK. Their license and notice texts, where supplied upstream, accompany
+this file in assets/third-party/, together with the app, generator and native
+build-root Package.resolved lockfiles.
+
+Pinned upstream source:
+https://github.com/swiftlang/swift-java/tree/301e3da710ede7af93e798f1ce1c7950715a5748
+https://github.com/swiftlang/swift-java-jni-core/tree/b440a0be98381550cf189c903782e817619ffa05
+
+Official SwiftKitCore Java sources and generated Java peers form SwiftJava.jar.
+The native runtime uses official SwiftJava and SwiftRuntimeFunctions. No Skip
+runtime, patched Skip sources, old SwiftJNI runtime or kotlin-reflect is required.
+The former Skip runtime-sources.zip is not produced by this build recipe.
+
+Swift runtime, FoundationEssentials, Dispatch and Observation source is available
+from https://github.com/swiftlang at the swift-6.3.1-RELEASE tag. The SDK's license
+and Android NDK notices are included here. Runtime dependencies also include
+Kotlin/Kotlin coroutines (JetBrains, Apache-2.0), OkHttp/Okio (Square, Apache-2.0),
+AndroidX (Android Open Source Project, Apache-2.0), and commonmark-java
+(commonmark-java contributors, BSD-2-Clause). Their upstream source/license pages:
+https://github.com/JetBrains/kotlin
+https://github.com/Kotlin/kotlinx.coroutines
+https://github.com/square/okhttp
+https://github.com/square/okio
+https://android.googlesource.com/platform/frameworks/support/
+https://github.com/commonmark/commonmark-java

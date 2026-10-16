@@ -1,5 +1,3 @@
-import Foundation
-
 /// Capability action for sending ``Message``s — installed into the
 /// SwiftUI environment as `\.sendMessage` and mirroring the
 /// ergonomic of `DismissAction`.
@@ -15,7 +13,6 @@ import Foundation
 /// action from the previews/defaults no-op, not to distinguish two live
 /// actions. Android never consults this; the bridge compares the peer
 /// object by identity.
-// SKIP @bridgeMembers
 public struct SendMessageAction: Sendable, Equatable {
     /// Which initializer produced this action.
     private enum Kind: Sendable { case noop, live }
@@ -47,7 +44,6 @@ public struct SendMessageAction: Sendable, Equatable {
     /// SwiftUI ergonomic equivalent of ``send(_:)``.
     ///
     /// - Parameter message: The message to dispatch.
-    // SKIP @nobridge
     @MainActor public func callAsFunction(_ message: Message) { send(message) }
 
     /// Dispatches a message fire-and-forget on an unstructured `Task`.

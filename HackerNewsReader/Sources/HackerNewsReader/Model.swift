@@ -1,7 +1,11 @@
+#if os(Android)
+import FoundationEssentials
+#else
 import Foundation
+#endif
 import Observation
 import HackerNews
-import SkipFuse
+import PlatformSupport
 
 /// Source of truth for the app — observable state for the feed,
 /// search, and read-tracking surfaces.
@@ -11,14 +15,13 @@ import SkipFuse
 /// id lists, so a story shared by both surfaces is stored once and a
 /// toggle of `readIds` reaches both projections without sync. The
 /// `@Observable` conformance gives SwiftUI fine-grained per-property
-/// tracking on iOS; SkipFuse routes the same tracking through
-/// Compose's snapshot system on Android.
+/// tracking on iOS; the generated Android adapter invalidates
+/// Compose readers through the same Observation dependencies.
 ///
 /// Setter visibility encodes data-flow direction: `public var` is a
 /// two-way field that the UI binds and writes back (currently only
 /// ``searchQuery``); `public internal(set) var` is one-way, written
 /// by the core's message handler and read by the UI.
-// SKIP @bridgeMembers
 @Observable
 public final class Model {
 
@@ -82,7 +85,7 @@ public final class Model {
     /// change to ``feedLoaded``, the entity store, or ``readIds``.
     public var feedHeaderSubtitle: String {
         let stamp: String = (feedLoaded?.loadedAt).map {
-            $0.formatted(date: .omitted, time: .standard)
+            formatTime($0)
         } ?? Strings.feedHeaderLastRefreshedNever
 
         let rows = feedStories

@@ -1,8 +1,5 @@
-import Foundation
-
 /// Activity status for a single in-flight operation against a
 /// surface — the initial fetch / refresh, or a load-more.
-// SKIP @bridgeMembers
 public struct LoadStatus: Sendable, Equatable {
     public var isLoading: Bool
     public var error: String?
