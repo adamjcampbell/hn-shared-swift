@@ -21,8 +21,7 @@ enum TaskID { case feed, feedMore, search, searchMore, searchListener }
 /// actor owns every mutation. ``Model`` is non-`Sendable` and never leaves
 /// that region. Production wraps ``sendMessage`` in a `@MainActor`
 /// ``SendMessageAction`` at the app boundary (`SendMessageAction(core)`);
-/// only ``model`` and ``commands`` cross JNI.
-// SKIP @bridgeMembers
+/// Android consumes those surfaces through ``AndroidReader``.
 public struct Core {
     public let model: Model
 
@@ -42,18 +41,15 @@ public struct Core {
     /// `@MainActor` boundary; the synchronous
     /// ``apply(_:to:commands:tasks:isolation:)`` keeps each handler's
     /// read-modify-write atomic against actor reentrancy.
-    // SKIP @nobridge
     let sendMessage: (Message) async -> Void
 
     /// Cancels the listener and any in-flight fetch. Production is
     /// process-lifetime and never calls this; tests call it on fixture
     /// exit so the `Task → Model` references release.
-    // SKIP @nobridge
     let cancelAll: () -> Void
 
     /// Debounce window between a `model.searchQuery` write and the
     /// resulting search fetch.
-    // SKIP @nobridge
     static let searchDebounce: Duration = .milliseconds(250)
 }
 
@@ -102,18 +98,40 @@ func makeCore(
             // that dropped this would pass `nil` to its isolated parameter.
             _ = isolation
 
-            await apply(
+            guard let task = apply(
                 message,
                 to: state,
                 commands: commandsContinuation,
                 tasks: &tasks
-            )?.value
+            ) else { return }
+            await withTaskCancellationHandler {
+                await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            if task.isCancelled {
+                applyCancellation(of: task, to: state, tasks: tasks)
+            }
         },
         cancelAll: { tasks.cancelAll() }
     )
 }
 
 // MARK: - Message handling
+
+func applyCancellation(
+    of task: Task<Void, Never>,
+    to state: Model,
+    tasks: TaskRegistry<TaskID>
+) {
+    let statuses: [(TaskID, ReferenceWritableKeyPath<Model, LoadStatus>)] = [
+        (.feed, \.feedInitialStatus), (.feedMore, \.feedLoadMoreStatus),
+        (.searchMore, \.searchLoadMoreStatus)
+    ]
+    for (id, status) in statuses where (tasks[id] as? Task<Void, Never>) == task {
+        state[keyPath: status].isLoading = false
+    }
+}
 
 /// Applies a user-driven ``Message`` to `state`: mutates the model in
 /// place, yields any ``Command``, and registers in-flight fetch work.
@@ -292,8 +310,8 @@ func fetch(
 /// Spawns the load `Task` every fetch arm shares: fetch the page (with
 /// an optional debounce), merge its stories into the entity store, hand
 /// the page to `commit`, and mark `status` succeeded. Cancellation is
-/// silent (a newer fetch clears loading when it commits); any other
-/// error lands on `status`.
+/// silent here; the awaiter clears loading only for its own registry slot.
+/// Any other error lands on `status`.
 ///
 /// - Parameters:
 ///   - state: The model to mutate.
@@ -337,9 +355,8 @@ func loadTask(
 // MARK: - Production entry (@MainActor, bridged)
 
 /// Builds the core on `MainActor` and returns the ``Core`` handle for the
-/// UI to consume. The bridged production entry point: pins `#isolation` to
-/// `MainActor`, so the returned handle's `sendMessage` and fetch work run
-/// there, and is the only function that crosses JNI.
+/// UI to consume. Pins `#isolation` to `MainActor`, so the returned
+/// handle's `sendMessage` and fetch work run there.
 ///
 /// Call once at app scope and keep the handle for the process lifetime:
 /// iOS holds it as `@State` on the `App`, Android stashes it on
@@ -347,7 +364,6 @@ func loadTask(
 /// the handle with `SendMessageAction(core)`.
 ///
 /// - Returns: The ``Core`` handle.
-// SKIP @bridge
 @MainActor public func makeAppCore() -> Core {
     makeCore()
 }

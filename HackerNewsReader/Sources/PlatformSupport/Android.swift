@@ -1,13 +1,25 @@
 #if os(Android)
 import FoundationEssentials
-import SwiftJNI
+import SwiftJava
 import Synchronization
 
-private let services = try! JClass(name: "com/example/hackernewsreader/PlatformServices")
-private let startMethod = services.getStaticMethodID(name: "start", sig: "(JLjava/lang/String;)V")!
-private let cancelMethod = services.getStaticMethodID(name: "cancel", sig: "(J)V")!
-private let languagesMethod = services.getStaticMethodID(name: "languages", sig: "()Ljava/lang/String;")!
-private let timeMethod = services.getStaticMethodID(name: "formatTime", sig: "(D)Ljava/lang/String;")!
+private let services = Mutex<Int?>(nil)
+
+@_cdecl("Java_com_example_hackernewsreader_PlatformServices_initialize")
+public func initialize(_ env: JNIEnvironment, _ target: jobject, _ type: jclass) {
+    services.withLock {
+        precondition($0 == nil)
+        $0 = Int(bitPattern: env.interface.NewGlobalRef(env, type)!)
+    }
+}
+
+private func withServices<Result>(_ body: (JavaClass<JavaObject>) throws -> Result) throws -> Result {
+    let address = services.withLock { $0! }
+    let environment = try JavaVirtualMachine.shared().environment()
+    // Only the class reference is global; JNIEnv and its wrappers belong to this thread.
+    let local = environment.interface.NewLocalRef(environment, jobject(bitPattern: address)!)!
+    return try body(JavaClass<JavaObject>(javaThis: local, environment: environment))
+}
 
 private struct Pending {
     var next: Int64 = 0
@@ -24,12 +36,8 @@ public func fetch(_ url: URL) async throws -> HTTPResponse {
                 if Task.isCancelled { return CancellationError() }
                 state.continuations[id] = continuation
                 do {
-                    try jniContext {
-                        let address = url.absoluteString.toJavaObject(options: [])!
-                        defer { JNI.jni.deleteLocalRef(address) }
-                        try services.callStatic(method: startMethod, options: [], args: [
-                            id.toJavaParameter(options: []), address.toJavaParameter(options: [])
-                        ])
+                    try withServices {
+                        try $0.dynamicJavaStaticMethodCall(methodName: "start", arguments: id, url.absoluteString)
                     }
                     return nil
                 } catch {
@@ -42,8 +50,8 @@ public func fetch(_ url: URL) async throws -> HTTPResponse {
     } onCancel: {
         let continuation = pending.withLock { state in
             guard let continuation = state.continuations.removeValue(forKey: id) else { return nil as CheckedContinuation<HTTPResponse, any Error>? }
-            jniContext {
-                try! services.callStatic(method: cancelMethod, options: [], args: [id.toJavaParameter(options: [])])
+            try! withServices {
+                try $0.dynamicJavaStaticMethodCall(methodName: "cancel", arguments: id)
             }
             return continuation
         }
@@ -52,15 +60,13 @@ public func fetch(_ url: URL) async throws -> HTTPResponse {
 }
 
 @_cdecl("Java_com_example_hackernewsreader_PlatformServices_complete")
-public func complete(_ env: JNIEnvPointer, _ target: JavaObjectPointer, _ id: Int64,
-                     _ status: Int32, _ bytes: JavaByteArray?, _ error: JavaString?) {
+public func complete(_ env: JNIEnvironment, _ target: jobject, _ id: Int64,
+                     _ status: Int32, _ bytes: jbyteArray?, _ error: jstring?) {
     guard let continuation = pending.withLock({ $0.continuations.removeValue(forKey: id) }) else { return }
     if let error {
-        continuation.resume(throwing: HTTPError.transport(String.fromJavaObject(error, options: [])))
+        continuation.resume(throwing: HTTPError.transport(String(fromJNI: error, in: env)))
     } else if let bytes {
-        let (pointer, count) = JNI.jni.getByteArrayElements(bytes)
-        let body = pointer.map { Data(bytes: $0, count: Int(count)) } ?? Data()
-        JNI.jni.releaseByteArrayElements(bytes, elements: pointer, mode: .abort)
+        let body = Data([UInt8](fromJNI: bytes, in: env))
         continuation.resume(returning: HTTPResponse(body: body, statusCode: Int(status)))
     } else {
         continuation.resume(throwing: HTTPError.transport("Missing HTTP response body"))
@@ -68,18 +74,16 @@ public func complete(_ env: JNIEnvPointer, _ target: JavaObjectPointer, _ id: In
 }
 
 public func preferredLanguages() -> [String] {
-    jniContext {
-        let result: JavaString? = try! services.callStatic(method: languagesMethod, options: [], args: [])
-        defer { if let result { JNI.jni.deleteLocalRef(result) } }
-        return String.fromJavaObject(result, options: []).split(separator: ",").map(String.init)
+    try! withServices {
+        let result = try $0.dynamicJavaStaticMethodCall(methodName: "languages", resultType: String.self)
+        return result.split(separator: ",").map(String.init)
     }
 }
 
 public func formatTime(_ date: Date) -> String {
-    jniContext {
-        let result: JavaString? = try! services.callStatic(method: timeMethod, options: [], args: [date.timeIntervalSince1970.toJavaParameter(options: [])])
-        defer { if let result { JNI.jni.deleteLocalRef(result) } }
-        return String.fromJavaObject(result, options: [])
+    try! withServices {
+        try $0.dynamicJavaStaticMethodCall(methodName: "formatTime", arguments: date.timeIntervalSince1970,
+                                          resultType: String.self)
     }
 }
 #endif

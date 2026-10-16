@@ -1,6 +1,3 @@
-#if SKIP
-import Foundation
-#endif
 #if os(Android)
 import FoundationEssentials
 #else
@@ -9,7 +6,6 @@ import Foundation
 
 /// A Hacker News story — the canonical entity normalised from both
 /// the Firebase front-page feed and the Algolia search results.
-// SKIP @bridgeMembers
 public struct Story: Sendable, Identifiable, Codable, Equatable {
     public let id: String
     public let title: String

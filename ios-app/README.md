@@ -16,13 +16,10 @@ xcodebuild \
   -project HackerNewsReader.xcodeproj \
   -scheme HackerNewsReader \
   -destination 'platform=iOS Simulator,name=iPhone 17' \
-  -skipPackagePluginValidation \
   build
 ```
 
-`-skipPackagePluginValidation` is required because SwiftPM resolution
-pulls in SkipFuse's `skipstone` plugin (the same plugin used for the
-Android build); Xcode prompts for plugin approval otherwise.
+The iOS product does not depend on the Android JNI bridge or its build plugins.
 
 ## What's wired
 

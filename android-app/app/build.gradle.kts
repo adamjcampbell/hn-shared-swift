@@ -9,13 +9,14 @@ kotlin {
 
 val swiftOutput = rootProject.layout.buildDirectory.dir("swift")
 val buildSwift = tasks.register<Exec>("buildSwift") {
-    description = "Generate Skip peers and build the Foundation-light Android runtime."
+    description = "Generate observable peers and build the official Swift–Java Android runtime."
     group = "build"
     workingDir(rootProject.projectDir.parentFile)
     commandLine("python3", "android-app/runtime/build.py")
     inputs.dir("../../HackerNewsReader/Sources")
     inputs.file("../../HackerNewsReader/Package.swift")
     inputs.file("../../HackerNewsReader/Package.resolved")
+    inputs.file("../../scripts/generate-android.swift")
     inputs.dir("../runtime")
     outputs.dir(swiftOutput)
 }
@@ -42,8 +43,7 @@ android {
     sourceSets.getByName("main") {
         jniLibs.srcDir(swiftOutput.get().dir("jniLibs").asFile)
         assets.srcDir(swiftOutput.get().dir("assets").asFile)
-        kotlin.srcDir(swiftOutput.get().dir("generated/HackerNews/kotlin/src/main/kotlin").asFile)
-        kotlin.srcDir(swiftOutput.get().dir("generated/HackerNewsReader/kotlin/src/main/kotlin").asFile)
+        kotlin.srcDir(swiftOutput.get().dir("kotlin").asFile)
     }
     packaging { jniLibs { useLegacyPackaging = true } }
     buildTypes {
@@ -56,7 +56,6 @@ android {
 
 dependencies {
     implementation(fileTree(swiftOutput.map { it.dir("libs") }) { include("*.jar") })
-    implementation("org.jetbrains.kotlin:kotlin-reflect:2.3.0")
     implementation("com.squareup.okhttp3:okhttp:5.3.2")
     implementation("org.commonmark:commonmark:0.28.0")
     implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.28.0")

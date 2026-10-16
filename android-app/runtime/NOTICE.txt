@@ -1,19 +1,18 @@
 Foundation-light Swift Android runtime
 
-This app includes software from Skip (SkipBridge, SkipAndroidBridge, SkipLib,
-SkipModel and SkipFoundation), SwiftJNI, the Swift Android SDK and Android NDK.
-Their license and notice texts accompany this file in assets/third-party/.
-Skip component source files carry their original copyright notices.
+This app uses official Swift-Java and Swift-Java JNI Core, the Swift Android SDK
+and Android NDK. Their license and notice texts, where supplied upstream, accompany
+this file in assets/third-party/, together with the app, generator and native
+build-root Package.resolved lockfiles.
 
-The MPL-covered Skip source, including the modified native runtime files, is
-provided inside this APK at assets/third-party/runtime-sources.zip, at no charge.
-An APK is a ZIP archive: extract that entry with any ZIP reader, then extract
-runtime-sources.zip. native/ contains the exact patched native source;
-skip-*/ contains the upstream sources used for JVM compilation; build/ contains
-the patch, build recipe and dependency lockfile. sources.json lists pinned
-upstream repositories and revisions. Modifications replace Foundation with
-FoundationEssentials, exclude unsupported Locale/NSNumber conversions and the
-reverse suspend bridge, and remove the obsolete Android threading fatal stub.
+Pinned upstream source:
+https://github.com/swiftlang/swift-java/tree/301e3da710ede7af93e798f1ce1c7950715a5748
+https://github.com/swiftlang/swift-java-jni-core/tree/b440a0be98381550cf189c903782e817619ffa05
+
+Official SwiftKitCore Java sources and generated Java peers form SwiftJava.jar.
+The native runtime uses official SwiftJava and SwiftRuntimeFunctions. No Skip
+runtime, patched Skip sources, old SwiftJNI runtime or kotlin-reflect is required.
+The former Skip runtime-sources.zip is not produced by this build recipe.
 
 Swift runtime, FoundationEssentials, Dispatch and Observation source is available
 from https://github.com/swiftlang at the swift-6.3.1-RELEASE tag. The SDK's license

@@ -13,6 +13,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 object PlatformServices {
+    private external fun initialize(type: Class<*>)
+    init { initialize(PlatformServices::class.java) }
+
     private val client = OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build()
     private val requests = ConcurrentHashMap<Long, Call>()
     private external fun complete(id: Long, status: Int, bytes: ByteArray?, error: String?)

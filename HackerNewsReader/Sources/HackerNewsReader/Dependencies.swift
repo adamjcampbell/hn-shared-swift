@@ -8,8 +8,7 @@ import HackerNews
 /// Package-wide ambient dependencies, propagated via one `@TaskLocal`.
 ///
 /// Modelled on `pointfreeco/swift-dependencies` (values read at the call
-/// site rather than threaded through signatures) without adopting the
-/// library — its macros and runtime don't fit Skip's Android target.
+/// site rather than threaded through signatures) without adopting the library.
 /// Three fixed, single-module injectables, so a plain struct in one
 /// `@TaskLocal` beats a keyed `DependencyValues` dictionary: typed reads,
 /// no erasure, no per-key boilerplate.

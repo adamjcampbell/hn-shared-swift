@@ -21,7 +21,6 @@ let stringTables: [String: [String: String]] = [
 /// User-visible strings backed by `Localizable.xcstrings`. Each
 /// accessor routes through ``localized(_:default:)`` for catalog
 /// lookup with the English source as the runtime fallback.
-// SKIP @bridgeMembers
 public enum Strings {
 
     /// Navigation title for the app's root screen.

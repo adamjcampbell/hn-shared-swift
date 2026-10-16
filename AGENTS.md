@@ -21,6 +21,10 @@ that supersedes the old.
 # Swift unit tests (macOS host).
 cd HackerNewsReader && swift test
 
+# Generator contract, from repository root after building the pinned tool.
+# Requires JDK and cached Kotlin 2.2.21 compiler jars or kotlinc + that stdlib.
+python3 scripts/test-generate-android.py
+
 # iOS app.
 cd ios-app && \
   xcodebuild -project HackerNewsReader.xcodeproj \
@@ -53,8 +57,8 @@ Swift/Android SDK 6.3.1 and NDK 27.3.13750724; see the Android README.
   `SendMessageAction`, `Message`, `Command`, plus `StoryRow`,
   `LoadStatus`, `LoadedStories`, and the free functions that build and
   mutate the core (`makeCore` / `makeAppCore`, `apply`, `applySearchQuery`).
-- `apply` and `applySearchQuery` are the only writers of `Model`. Don't
-  add mutators on `Model`.
+- `apply`, `applySearchQuery` and `applyCancellation` own core writes to
+  `Model`. Don't add mutators on `Model`.
 - `Message` is UI → core; `Command` is core → UI. Don't name a new type
   `Effect` — reserved for a possible future TCA-style reducer.
 - Drop type prefixes in namespaced modules: `HackerNews.Story`, not
@@ -66,30 +70,32 @@ Swift/Android SDK 6.3.1 and NDK 27.3.13750724; see the Android README.
   platforms render the same caption for the same input. See
   [ADR-0017](docs/adr/0017-presenter-rows-in-model.md).
 
-## Bridge (SkipFuse)
+## Bridge (official Swift–Java)
 
-- Adding an `@Observable` property: add the field on `Model`. `// SKIP
-  @bridgeMembers` (already on the class) bridges every public member —
-  no per-field marker, no Kotlin holder.
-- Use `// SKIP @bridgeMembers` (type-level) for whole-type bridging.
-  `// SKIP @bridge` at the type level alone drops field accessors —
-  don't reach for it. Use `// SKIP @nobridge` for per-member opt-out.
-- `Core.sendMessage` and `cancelAll` are intentionally `internal` and
-  `// SKIP @nobridge`. The bridged Kotlin surface is the `Core` returned
-  from `makeAppCore()`: its `model` and `commands`.
-- `AsyncStream<T>` → `Flow<T>` via `.kotlin()` on the Kotlin side.
-- Keep Kotlin aligned with generated peers and JVM runtime jars
-  (currently 2.3.0). `kotlin-reflect` is required at runtime.
-- Android uses stock generated peers with a patched native runtime, not
-  upstream native AAR payloads. The UI Looper bootstrap uses private
-  libdispatch SPI pinned to Swift Android SDK 6.3.1. Keep MainActor checks;
-  do not substitute another UI actor. Upgrades require device tests. See
-  [ADR-0021](docs/adr/0021-foundation-light-platform-services.md).
-- `suspend fun` uses `suspendCoroutine`, not
-  `suspendCancellableCoroutine` — Kotlin cancellation does not
-  propagate to the Swift Task.
-- SkipFuse adoption rationale and gotchas:
-  [ADR-0013](docs/adr/0013-skipfuse-bridgemembers.md).
+- Keep swift-java pinned to `301e3da710ede7af93e798f1ce1c7950715a5748`
+  and JNI core locked to `b440a0be98381550cf189c903782e817619ffa05`.
+  No Skip dependencies, CLI, patches, old SwiftJNI, or kotlin-reflect are needed.
+- `scripts/generate-android.swift` uses SwiftParser to discover public
+  `Model` fields and generate checked MainActor accessors, per-property
+  Observation invalidation subscriptions, and value projections. Do not
+  hand-edit `AndroidReader.generated.swift` or generated Kotlin `Model.kt`.
+  Properties require explicit types; unsupported bridge types fail generation.
+  Writable fields support String/Int/Int64/Bool/Double. Read-only fields also
+  support Date, String?, [String] and the three value projections as plain,
+  optional or array values. See ADR-0022 before extending the type boundary.
+- App, Observation, and core code remain Swift 6. Only generated synchronous
+  JNI thunks compile in Swift 5 mode. Copy `Message` into Swift before any
+  suspension; do not add a raw-peer async future path.
+- Kotlin `suspendCancellableCoroutine` cancels native task handles, which
+  propagate cancellation through Swift to the underlying fetch.
+- Commands use official typed Java peers and a Kotlin Flow adapter. The
+  native pump survives Activity recollection until `Core.close()`; cancelling
+  a collector removes its subscription, not the pump. Only one consumer is supported.
+- Close subscriptions, tasks, native peers and arenas explicitly. Production
+  `Core` has Application lifetime, not Activity lifetime.
+- The UI Looper bootstrap still uses private libdispatch SPI pinned to Swift
+  Android SDK 6.3.1. Keep MainActor checks; do not substitute another UI actor.
+  Upgrades require device tests. See [ADR-0022](docs/adr/0022-official-swift-java-bridge.md).
 
 ## iOS view layer
 
@@ -120,13 +126,12 @@ Swift/Android SDK 6.3.1 and NDK 27.3.13750724; see the Android README.
 
 ## Android / Compose
 
-- Bridged primitives become `MutableState` via `BridgedSource` +
-  `MutableStateAdapter` (e.g. `model::searchQuery`.asMutableState).
-  Local `set` must update `current` and notify listeners synchronously
-  — the bridge dedup absorbs the echo.
-- `BridgedSource`, `asMutableState`, `readThrough`, and the
-  `appcoreGet*` accessors are intentional public API even when only
-  one consumer exists today. Don't propose deleting as unused.
+- Kotlin holds Compose revision counters and immutable value copies, not
+  authoritative mutable app state. Getters read Swift's latest state; they
+  are not snapshot-versioned reads tied to a Compose revision.
+- Copy native values inside confined `SwiftArena` scopes and dispose them
+  before leaving those scopes. Do not retain native value peers in the UI.
+  `Date` projects to epoch-seconds `Double`.
 
 ## Networking
 

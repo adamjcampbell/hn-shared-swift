@@ -1,12 +1,13 @@
 # Hacker News Reader Example
 
 An example of cross-platform `@Observable` ↔ Compose via
-[SkipFuse](https://skip.dev): one Swift `@Observable` model drives
+[official Swift–Java](https://github.com/swiftlang/swift-java): one Swift `@Observable` model drives
 native SwiftUI on iOS and native Jetpack Compose on Android. The Swift
 core is compiled natively to `.so` for Android and bridged to Kotlin.
-Compose reads `@Observable` properties inside `@Composable`s, mutations
-recompose, `async` functions become `suspend`, `AsyncStream` becomes
-`Flow`.
+Generated accessors connect Swift Observation invalidations to Compose.
+Kotlin adapters expose cancellable suspend operations and a command `Flow`.
+The migration is validated locally on iOS Simulator and an arm64 Android emulator;
+see [ADR-0022](docs/adr/0022-official-swift-java-bridge.md) for checks and limits.
 
 The app fetches front-page stories from the
 [official Firebase API](https://github.com/HackerNews/API), search from
@@ -15,10 +16,9 @@ read indicator. Shared Swift owns URL construction and JSON decoding;
 `PlatformSupport` uses `URLSession` on Apple platforms and OkHttp via JNI
 on Android, through an async `@Sendable (URL) -> HTTPResponse` GET seam.
 
-## How Skip is used
+## Shared core, native UIs
 
-Skip's tagline is **One Swift Codebase. Two Native Platforms.** This
-approach differs: only the model and its mutation logic ship as Swift
+Only the model and its mutation logic ship as Swift
 on both platforms. The UIs are written per platform: SwiftUI on iOS,
 Jetpack Compose on Android.
 
@@ -41,9 +41,10 @@ serialise onto the host actor, and nothing crosses an isolation boundary.
 
 ## Consuming the `Core`
 
-`Core` is a plain struct holding the surfaces the UI consumes. `model`
-and `commands` are the two surfaces that cross the Swift-to-Kotlin
-bridge; the send entry and the teardown hook stay internal.
+Swift `Core` is a plain struct holding the surfaces the UI consumes.
+Android's Kotlin `Core` owns an official Java `AndroidReader` peer that
+adapts the model, message operations and command stream; Swift's internal
+send entry and teardown hook are not exported directly.
 
 `makeAppCore()` runs once per process on `MainActor` and returns a
 `Core`. The UI reads two surfaces directly:
@@ -53,8 +54,8 @@ bridge; the send entry and the teardown hook stay internal.
 
 For dispatching `Message`s, the send capability is composed at the app
 boundary from the handle: `SendMessageAction(core)` wraps `Core`'s
-internal send entry in an `Equatable` action. Both UIs consume the same
-`Core`.
+internal send entry in an `Equatable` action. Android uses a Kotlin action
+over native task handles for the same shared core.
 
 ```swift
 // iOS — HackerNewsReaderApp.swift
@@ -70,11 +71,11 @@ class App : Application() {
     lateinit var core: Core; private set
     override fun onCreate() {
         super.onCreate()
-        System.loadLibrary("SkipBridge")
+        System.loadLibrary("SwiftJava")
         System.loadLibrary("HackerNewsReader")
         System.loadLibrary("MainLooper")
         PlatformServices.setupMainLooper()
-        core = makeAppCore()
+        core = Core()
     }
 }
 ```
@@ -83,8 +84,12 @@ class App : Application() {
 
 Descendants pull the `Model` from the environment on iOS, or read
 `core.model` directly inside `@Composable`s on Android. Both sides
-observe property-level changes; writes go through the synthesised
-setter and invalidate readers.
+observe property-level changes; writes go through the Swift setter and
+invalidate readers. Kotlin stores revision counters and immutable value
+copies, not authoritative mutable app state. Getters read the latest Swift
+state, not snapshot-versioned state associated with a Compose revision.
+Native values are copied within confined arenas and disposed; `Date`
+projects to epoch-seconds `Double`.
 
 ```swift
 // iOS — @Bindable + $model.foo for two-way writes.
@@ -104,7 +109,7 @@ TextField(
     value = model.searchQuery,
     onValueChange = { model.searchQuery = it },
 )
-LazyColumn { items(model.feedStories.kotlin() as List<StoryRow>) { StoryRowView(it) } }
+LazyColumn { items(model.feedStories) { StoryRowView(it) } }
 ```
 
 ### Row projections
@@ -136,6 +141,11 @@ LaunchedEffect(Unit) { sendMessage.send(Message.refresh) }
 PullToRefreshBox(onRefresh = { scope.launch { sendMessage.run(Message.refresh) } }) { … }
 ```
 
+The synchronous JNI thunk copies each `Message` before Swift suspends.
+`suspendCancellableCoroutine` cancels its native task handle, propagating
+cancellation through the Swift core to the underlying fetch. No raw-peer
+async future path is used.
+
 ### Receiving `Command`s
 
 One-shot imperatives from the core to the UI — typically platform
@@ -158,21 +168,26 @@ the `Command` channel keeps the same shape on both platforms.
 ```
 
 ```kotlin
-// Android — AsyncStream surfaced as a Kotlin Flow via .kotlin().
+// Android — typed official Java peers adapted to a Kotlin Flow.
 LaunchedEffect(Unit) {
-    core.commands.kotlin().collect { command ->
+    core.commands.collect { command ->
         when (command) {
-            is Command.PresentURLCase -> context.launchCustomTab(command.value)
+            is Command.PresentURL -> context.launchCustomTab(command.value)
         }
     }
 }
 ```
 
+The native command pump survives Activity collector cancellation and
+recollection until `Core.close()`. Only one consumer is supported; commands
+without a subscriber are dropped. Core explicitly closes observations,
+tasks and native resources, but production uses Application lifetime.
+
 ### Localized strings
 
 The app's strings come from a single `Localizable.xcstrings` catalog.
 A generated `Strings` enum exposes typed accessors that bridge across
-SkipFuse, so Compose reads the same source as SwiftUI without a
+the official Java peers, so Compose reads the same source as SwiftUI without a
 separate Android string store.
 Apple uses its compiled resource bundle; Android uses generated catalog
 tables selected by platform language preferences. PlatformSupport also
@@ -261,7 +276,7 @@ Outside that overhead, app complexity could be much lower.
   - `HackerNews` — API client and entity types: `Client`, `Story`,
     `Page`. Self-contained Hacker News SDK.
   - `HackerNewsReader` — `Model` plus the free-function core (`makeCore`
-    and the bridged `makeAppCore() -> Core` production entry), plus
+    and the `makeAppCore() -> Core` production entry behind AndroidReader), plus
     `Message`, `Command`, `SendMessageAction`, `StoryRow`, `LoadStatus`,
     `LoadedStories`, `Dependencies` (the ambient `@TaskLocal` for
     `date` / `client` / `clock`), and the bridged `Strings` enum
@@ -274,16 +289,27 @@ Outside that overhead, app complexity could be much lower.
   [`xcodegen`](https://github.com/yonaskolb/XcodeGen).
 - `android-app/` — Gradle project whose `preBuild` runs `buildSwift`
   (`runtime/build.py`) when its declared inputs change. It consumes
-  generated Kotlin peers, JVM runtime jars, and a custom native Swift
-  runtime from `build/swift/`, not exported native AARs.
+  generated Java peers, Kotlin model adapters, a `SwiftJava.jar`, and native
+  libraries from `build/swift/`, not exported native AARs.
+
+`scripts/generate-android.swift` uses SwiftParser to discover public `Model`
+fields and generate MainActor-checked accessors, Observation subscriptions,
+and value projections. Official `swift-java jextract --mode jni` then emits
+synchronous JNI thunks and Java peers. App, Observation and core code use
+Swift 6; only generated JNI thunks use Swift 5 mode. No Skip CLI, dependencies,
+patches, old SwiftJNI or kotlin-reflect are needed. See
+[ADR-0022](docs/adr/0022-official-swift-java-bridge.md).
 
 The Foundation-light runtime preserves Observation, MainActor and TaskLocal
 contracts. Its Android UI Looper integration uses private libdispatch SPI;
 toolchain upgrades require device tests. See
 [ADR-0021](docs/adr/0021-foundation-light-platform-services.md) and the
-[runtime notes](android-app/runtime/README.md). Build and device validation
-are separate from these implementation notes; no app-size or runtime-success
-claim is made here.
+[runtime notes](android-app/runtime/README.md). The arm64 R8 APK measures
+9.85 MB versus 13.49 MB for the saved Foundation-light Skip APK, both signed
+with the same local key. Packaged
+native code is slightly larger (19.78 MB versus 19.42 MB); this migration
+removes Skip dependencies, not the Swift runtime. Full measurement details
+and local validation are in ADR-0022.
 
 Architecture, concurrency rules, and the SwiftUI view-layer
 conventions are in [`AGENTS.md`](AGENTS.md).
@@ -299,10 +325,11 @@ conventions are in [`AGENTS.md`](AGENTS.md).
 | Component | Version |
 |---|---|
 | Swift | 6.3.1 |
-| Skip CLI | 1.8.14 |
+| swift-java | `301e3da710ede7af93e798f1ce1c7950715a5748` |
+| swift-java-jni-core | `b440a0be98381550cf189c903782e817619ffa05` (lockfile) |
 | Swift Android SDK | 6.3.1-RELEASE (pinned runtime compatibility boundary) |
 | Android build host | macOS only in the current script |
-| Kotlin | 2.3.0 — aligned with the generated peers and JVM runtime |
+| Kotlin | 2.3.0 |
 | Android NDK | 27.3.13750724 |
 | JDK | 21 — Android Studio's bundled JBR works |
 | Xcode | 26.0+ |

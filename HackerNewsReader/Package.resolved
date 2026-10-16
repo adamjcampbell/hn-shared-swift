@@ -1,85 +1,13 @@
 {
-  "originHash" : "485b41d9e9591f5b0d580003d2ad51f6df4a909385e09fa27c64be7cfebe65fb",
+  "originHash" : "efded286c3c6d07651515ea8f12ccc47490c146dc93feec7e619451c905b730b",
   "pins" : [
     {
-      "identity" : "skip",
+      "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",
-      "location" : "https://source.skip.tools/skip.git",
+      "location" : "https://github.com/apple/swift-argument-parser",
       "state" : {
-        "revision" : "2d1573ab56761bc334272d8ef4f16566c49970d8",
-        "version" : "1.9.16"
-      }
-    },
-    {
-      "identity" : "skip-android-bridge",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/skiptools/skip-android-bridge.git",
-      "state" : {
-        "revision" : "19e85888165f952421b11d90f11793b33d2d75a4",
-        "version" : "0.7.4"
-      }
-    },
-    {
-      "identity" : "skip-bridge",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/skiptools/skip-bridge.git",
-      "state" : {
-        "revision" : "83866d718c09ca508f499744fc8896a891074a3f",
-        "version" : "0.18.0"
-      }
-    },
-    {
-      "identity" : "skip-foundation",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/skiptools/skip-foundation.git",
-      "state" : {
-        "revision" : "c5d74ef694ba21a0d42542ef58b598b638f2b7fc",
-        "version" : "1.4.7"
-      }
-    },
-    {
-      "identity" : "skip-fuse",
-      "kind" : "remoteSourceControl",
-      "location" : "https://source.skip.tools/skip-fuse.git",
-      "state" : {
-        "revision" : "8b69bb0b5be7df880b8f9b3d2eb6659909a5b5c5",
-        "version" : "1.0.3"
-      }
-    },
-    {
-      "identity" : "skip-lib",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/skiptools/skip-lib.git",
-      "state" : {
-        "revision" : "21a1c7c8f97730b3a3d88058daf8c9d78a9c7c43",
-        "version" : "1.4.3"
-      }
-    },
-    {
-      "identity" : "skip-model",
-      "kind" : "remoteSourceControl",
-      "location" : "https://source.skip.tools/skip-model.git",
-      "state" : {
-        "revision" : "3de7c8315f35035a905225b9057d4272772aa0ef",
-        "version" : "1.8.0"
-      }
-    },
-    {
-      "identity" : "skip-unit",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/skiptools/skip-unit.git",
-      "state" : {
-        "revision" : "fc58e058f3d25675e047a758281c39dba5d52570",
-        "version" : "1.7.2"
-      }
-    },
-    {
-      "identity" : "swift-android-native",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/skiptools/swift-android-native.git",
-      "state" : {
-        "revision" : "d757c18d7126dea382534e6e4f484b29240f3545",
-        "version" : "1.5.3"
+        "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
+        "version" : "1.8.2"
       }
     },
     {
@@ -92,6 +20,15 @@
       }
     },
     {
+      "identity" : "swift-collections",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-collections",
+      "state" : {
+        "revision" : "35a1edcb8ebd2bfe251d587f0b69e62af28f508c",
+        "version" : "1.7.3"
+      }
+    },
+    {
       "identity" : "swift-concurrency-extras",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/swift-concurrency-extras",
@@ -101,12 +38,56 @@
       }
     },
     {
-      "identity" : "swift-jni",
+      "identity" : "swift-java",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/skiptools/swift-jni.git",
+      "location" : "https://github.com/swiftlang/swift-java",
       "state" : {
-        "revision" : "71385f88cfff14409fe105e27fcad3ebd44348d0",
-        "version" : "0.5.1"
+        "revision" : "301e3da710ede7af93e798f1ce1c7950715a5748"
+      }
+    },
+    {
+      "identity" : "swift-java-jni-core",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-java-jni-core",
+      "state" : {
+        "branch" : "main",
+        "revision" : "b440a0be98381550cf189c903782e817619ffa05"
+      }
+    },
+    {
+      "identity" : "swift-log",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-log",
+      "state" : {
+        "revision" : "4038b6a4f74a1426f47eb1dd5b4bb5628a15d597",
+        "version" : "1.16.1"
+      }
+    },
+    {
+      "identity" : "swift-subprocess",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-subprocess.git",
+      "state" : {
+        "revision" : "13d087685b95d64d6aac9b94500d347bbe84c39b",
+        "version" : "0.4.0"
+      }
+    },
+    {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-syntax",
+      "state" : {
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
+      }
+    },
+    {
+      "identity" : "swift-system",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-system",
+      "state" : {
+        "revision" : "869129b7bf4ecc57b97d0193ad29690ca2134750",
+        "version" : "1.8.1"
       }
     },
     {

@@ -1,6 +1,3 @@
-#if SKIP
-import Foundation
-#endif
 #if os(Android)
 import FoundationEssentials
 #else
@@ -10,7 +7,6 @@ import Foundation
 /// Accumulated result of one or more page fetches against a paginated
 /// listing — story ids in order, the pagination cursor, and a
 /// freshness timestamp.
-// SKIP @bridgeMembers
 public struct LoadedStories: Sendable, Equatable {
     public var ids: [String]
     /// Timestamp of the most recent *initial* load.

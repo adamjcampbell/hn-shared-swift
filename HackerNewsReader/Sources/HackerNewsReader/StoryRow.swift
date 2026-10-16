@@ -1,6 +1,3 @@
-#if SKIP
-import Foundation
-#endif
 #if os(Android)
 import FoundationEssentials
 #else
@@ -11,7 +8,6 @@ import HackerNews
 /// View row — `Story` fields plus the per-user `isRead` flag projected
 /// from `Model.readIds`, with presentation strings precomputed against
 /// a `now` snapshot supplied by the projection.
-// SKIP @bridgeMembers
 public struct StoryRow: Sendable, Identifiable, Equatable {
     public let id: String
     public let title: String
@@ -43,8 +39,6 @@ public struct StoryRow: Sendable, Identifiable, Equatable {
     ///   - story: Source story.
     ///   - isRead: Whether the user has opened this story.
     ///   - now: Reference time for the relative-age component.
-    // SKIP @nobridge — constructed on the Swift side; Kotlin reads
-    // the materialised values.
     public init(story: Story, isRead: Bool, now: Date) {
         self.id = story.id
         self.title = story.title
@@ -65,9 +59,7 @@ public struct StoryRow: Sendable, Identifiable, Equatable {
         self.metaLine = "by \(story.author) · \(scorePart) · \(commentPart) · \(host) · \(age)"
     }
 
-    /// Pure-Swift relative-age bucket — `Foundation.RelativeDateTimeFormatter`
-    /// isn't bridged through skip-foundation, so the wall-time delta
-    /// is bucketed manually to keep both platforms in lockstep.
+    /// Shared relative-age buckets keep both platforms in lockstep.
     private static func relativeAge(from past: Date, to now: Date) -> String {
         let seconds = Int(now.timeIntervalSince(past))
         if seconds < 60 { return "just now" }
